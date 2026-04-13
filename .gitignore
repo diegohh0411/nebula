@@ -2,6 +2,7 @@
 
 # AI
 .claude/
+.superpowers/
 
 # Compiled output
 /dist
