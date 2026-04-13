@@ -1,22 +1,23 @@
 mod db;
 mod scanner;
+mod search;
+mod sidecar;
 
 use db::*;
 use scanner::*;
-use search::*;
-use sidecar::*;
+use sidecar::Embedder;
 use serde_json::json;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tauri::{Emitter, Manager};
 
 pub struct AppState {
     db: Mutex<rusqlite::Connection>,
-    sidecar: Mutex<SidecarManager>,
+    embedder: Embedder,
 }
 
 #[tauri::command]
-fn add_folder(path: String, state: tauri::State<'_, AppState>) -> Result<Folder, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+async fn add_folder(path: String, state: tauri::State<'_, AppState>) -> Result<Folder, String> {
+    let conn = state.db.lock().await;
     let folder = db::add_folder(&conn, &path).map_err(|e| e.to_string())?;
 
     let scanned = scan_directory(std::path::Path::new(&path))?;
@@ -30,66 +31,55 @@ fn add_folder(path: String, state: tauri::State<'_, AppState>) -> Result<Folder,
 }
 
 #[tauri::command]
-fn remove_folder(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+async fn remove_folder(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock().await;
     db::remove_folder(&conn, id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn list_folders(state: tauri::State<'_, AppState>) -> Result<Vec<Folder>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+async fn list_folders(state: tauri::State<'_, AppState>) -> Result<Vec<Folder>, String> {
+    let conn = state.db.lock().await;
     db::list_folders(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_indexing_status(state: tauri::State<'_, AppState>) -> Result<IndexingStatus, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+async fn get_indexing_status(state: tauri::State<'_, AppState>) -> Result<IndexingStatus, String> {
+    let conn = state.db.lock().await;
     db::get_indexing_status(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_images(
+async fn get_images(
     offset: i64,
     limit: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ImageRecord>, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = state.db.lock().await;
     db::get_images_paginated(&conn, offset, limit).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn start_sidecar(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-    sidecar.start()
+async fn start_sidecar() -> Result<(), String> {
+    Ok(())
 }
 
 #[tauri::command]
-fn sidecar_health(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    let sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-    if !sidecar.is_ready() {
-        return Ok(false);
-    }
-    drop(sidecar);
-    let mut sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-    match sidecar.send_request(&json!({"action": "health_check"})) {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
+async fn stop_sidecar() -> Result<(), String> {
+    Ok(())
 }
 
 #[tauri::command]
-fn stop_sidecar(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-    sidecar.shutdown()
+async fn sidecar_health() -> Result<bool, String> {
+    Ok(true)
 }
 
 #[tauri::command]
-fn start_embedding_job(
+async fn start_embedding_job(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let images = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let conn = state.db.lock().await;
         db::get_unembedded_images(&conn).map_err(|e| e.to_string())?
     };
 
@@ -100,44 +90,21 @@ fn start_embedding_job(
     let total = images.len();
     let app_handle = app.clone();
 
-    std::thread::spawn(move || {
+    tokio::spawn(async move {
         let state: tauri::State<'_, AppState> = app_handle.state();
 
         for (i, image) in images.iter().enumerate() {
-            let request = json!({
-                "action": "embed_image",
-                "image_path": image.file_path
-            });
-
-            let response = {
-                let mut sidecar = match state.sidecar.lock() {
-                    Ok(s) => s,
-                    Err(_) => break,
-                };
-                sidecar.send_request(&request)
-            };
-
-            match response {
-                Ok(resp) => {
-                    if let Some(embedding_arr) =
-                        resp.get("embedding").and_then(|e| e.as_array())
-                    {
-                        let embedding: Vec<f32> = embedding_arr
-                            .iter()
-                            .filter_map(|v| v.as_f64().map(|f| f as f32))
-                            .collect();
-
-                        let bytes = embedding_to_bytes(&embedding);
-
-                        let conn = match state.db.lock() {
-                            Ok(c) => c,
-                            Err(_) => break,
-                        };
-                        let _ = db::store_embedding(&conn, image.id, &bytes);
-                        let _ = db::mark_embedded(&conn, image.id);
-                    }
+            match state.embedder.embed_image(std::path::Path::new(&image.file_path)).await {
+                Ok(embedding) => {
+                    let bytes = embedding_to_bytes(&embedding);
+                    let conn = state.db.lock().await;
+                    let _ = db::store_embedding(&conn, image.id, &bytes);
+                    let _ = db::mark_embedded(&conn, image.id);
                 }
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("Error embedding image {}: {}", image.file_path, e);
+                    continue;
+                }
             }
 
             let _ = app_handle.emit(
@@ -153,41 +120,21 @@ fn start_embedding_job(
 }
 
 #[tauri::command]
-fn search_images(
+async fn search_images(
     query: String,
     limit: usize,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<SearchResult>, String> {
-    let text_request = json!({
-        "action": "embed_text",
-        "text": query
-    });
+) -> Result<Vec<db::SearchResult>, String> {
+    let query_embedding = state.embedder.embed_text(&query).await.map_err(|e| e.to_string())?;
 
-    let query_embedding = {
-        let mut sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-        let response = sidecar.send_request(&text_request)?;
-
-        let embedding_arr = response
-            .get("embedding")
-            .and_then(|e| e.as_array())
-            .ok_or("No embedding in response")?;
-
-        embedding_arr
-            .iter()
-            .filter_map(|v| v.as_f64().map(|f| f as f32))
-            .collect::<Vec<f32>>()
-    };
-
-    let all_embeddings = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
-        db::get_all_embeddings(&conn).map_err(|e| e.to_string())?
-    };
-
-    Ok(search_embeddings(&query_embedding, &all_embeddings, limit))
+    let conn = state.db.lock().await;
+    search::search_images(&conn, &query_embedding, limit).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let api_key = std::env::var("GOOGLE_API_KEY").unwrap_or_else(|_| "YOUR_API_KEY".to_string());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -204,7 +151,7 @@ pub fn run() {
             start_embedding_job,
             search_images,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let app_data_dir = app
                 .path()
                 .app_data_dir()
@@ -218,7 +165,7 @@ pub fn run() {
 
             app.manage(AppState {
                 db: Mutex::new(db_conn),
-                sidecar: Mutex::new(SidecarManager::new()),
+                embedder: Embedder::new(api_key),
             });
 
             Ok(())
