@@ -1,7 +1,5 @@
 mod db;
 mod scanner;
-mod search;
-mod sidecar;
 
 use db::*;
 use scanner::*;
