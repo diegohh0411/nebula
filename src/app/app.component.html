@@ -1,21 +1,27 @@
-<main class="container">
-  <h1>Welcome to Tauri + Angular!</h1>
+<div class="flex h-screen">
+  <!-- Sidebar -->
+  <aside class="w-64 flex-shrink-0 border-r border-border bg-card flex flex-col">
+    <div class="p-4 border-b border-border">
+      <h1 class="text-lg font-bold text-foreground">Nebula</h1>
+      <p class="text-xs text-muted-foreground">Semantic Image Search</p>
+    </div>
+    <div class="flex-1 overflow-y-auto">
+      <app-folder-manager />
+    </div>
+    <app-embedding-status />
+  </aside>
 
-  <div class="row">
-    <a href="https://tauri.app" target="_blank">
-      <img src="/assets/tauri.svg" class="logo tauri" alt="Tauri logo" />
-    </a>
-    <a href="https://angular.io" target="_blank">
-      <img src="/assets/angular.svg" class="logo angular" alt="Angular logo" />
-    </a>
-  </div>
-  <p>Click on the logos to learn more about the frameworks</p>
-
-  <form class="row" (submit)="greet($event, greetInput.value)">
-    <input #greetInput id="greet-input" placeholder="Enter a name..." />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{{ greetingMessage }}</p>
-
-  <router-outlet />
-</main>
+  <!-- Main Content -->
+  <main class="flex-1 flex flex-col min-w-0">
+    <div class="p-4 border-b border-border">
+      <app-search-bar (searchQuery)="onSearch($event)" />
+    </div>
+    <div class="flex-1 overflow-y-auto">
+      <app-image-grid
+        [results]="searchResults"
+        [loading]="searchLoading"
+        [query]="currentQuery"
+      />
+    </div>
+  </main>
+</div>

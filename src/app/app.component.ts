@@ -1,22 +1,48 @@
-import { Component } from "@angular/core";
-import { RouterOutlet } from "@angular/router";
-import { invoke } from "@tauri-apps/api/core";
+import { Component, OnInit } from '@angular/core';
+import { FolderManagerComponent } from './components/folder-manager/folder-manager.component';
+import { EmbeddingStatusComponent } from './components/embedding-status/embedding-status.component';
+import { SearchBarComponent } from './components/search-bar/search-bar.component';
+import { ImageGridComponent } from './components/image-grid/image-grid.component';
+import { TauriService, SearchResult } from './services/tauri.service';
 
 @Component({
-  selector: "app-root",
-  imports: [RouterOutlet],
-  templateUrl: "./app.component.html",
-  styleUrl: "./app.component.css",
+  selector: 'app-root',
+  standalone: true,
+  imports: [
+    FolderManagerComponent,
+    EmbeddingStatusComponent,
+    SearchBarComponent,
+    ImageGridComponent,
+  ],
+  templateUrl: './app.component.html',
+  styleUrl: './app.component.css',
 })
-export class AppComponent {
-  greetingMessage = "";
+export class AppComponent implements OnInit {
+  searchResults: SearchResult[] = [];
+  searchLoading = false;
+  currentQuery = '';
 
-  greet(event: SubmitEvent, name: string): void {
-    event.preventDefault();
+  constructor(private tauri: TauriService) {}
 
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    invoke<string>("greet", { name }).then((text) => {
-      this.greetingMessage = text;
-    });
+  ngOnInit(): void {
+    this.tauri.startSidecar().catch(() => {});
+  }
+
+  async onSearch(query: string): Promise<void> {
+    if (!query) {
+      this.searchResults = [];
+      this.currentQuery = '';
+      return;
+    }
+    this.currentQuery = query;
+    this.searchLoading = true;
+    try {
+      this.searchResults = await this.tauri.searchImages(query, 50);
+    } catch (e) {
+      console.error('Search failed:', e);
+      this.searchResults = [];
+    } finally {
+      this.searchLoading = false;
+    }
   }
 }

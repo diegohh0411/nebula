@@ -1,0 +1,39 @@
+<div class="p-4">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Folders</h2>
+    <button
+      class="px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+      (click)="addFolder()"
+      [disabled]="loading"
+    >
+      {{ loading ? 'Scanning...' : '+ Add Folder' }}
+    </button>
+  </div>
+
+  <div class="space-y-1">
+    @for (folder of folders; track folder.id) {
+      <div class="group flex items-center justify-between p-2 rounded-md hover:bg-accent transition-colors">
+        <span class="text-sm truncate pr-2" [title]="folder.path">{{ folder.path }}</span>
+        <button
+          class="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all text-xs px-1"
+          (click)="removeFolder(folder.id)"
+          title="Remove folder"
+        >
+          &#10005;
+        </button>
+      </div>
+    } @empty {
+      <p class="text-xs text-muted-foreground text-center py-4">
+        No folders added yet
+      </p>
+    }
+  </div>
+
+  @if (status) {
+    <div class="mt-4 pt-4 border-t border-border">
+      <p class="text-xs text-muted-foreground">
+        {{ status.total }} images found &middot; {{ status.embedded }} embedded
+      </p>
+    </div>
+  }
+</div>

@@ -1,0 +1,44 @@
+@if (loading) {
+  <div class="flex items-center justify-center py-20">
+    <div class="text-muted-foreground text-sm">Searching...</div>
+  </div>
+}
+
+@else if (query && results.length === 0) {
+  <div class="flex items-center justify-center py-20">
+    <div class="text-center">
+      <p class="text-muted-foreground text-sm">No images found for "{{ query }}"</p>
+    </div>
+  </div>
+}
+
+@else if (results.length > 0) {
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 p-4">
+    @for (result of results; track result.id) {
+      <div
+        class="group relative rounded-lg overflow-hidden bg-secondary cursor-pointer hover:ring-2 hover:ring-ring transition-all"
+        (click)="openImage(result.file_path)"
+      >
+        <img
+          [src]="getAssetUrl(result.file_path)"
+          [alt]="result.file_name"
+          class="w-full aspect-square object-cover"
+          loading="lazy"
+        />
+        <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <p class="text-xs text-white truncate">{{ result.file_name }}</p>
+          <span class="text-[10px] text-white/70">{{ getSimilarityLabel(result.similarity) }}</span>
+        </div>
+      </div>
+    }
+  </div>
+}
+
+@else {
+  <div class="flex items-center justify-center py-20">
+    <div class="text-center">
+      <p class="text-muted-foreground text-sm">Search for images using natural language</p>
+      <p class="text-muted-foreground/70 text-xs mt-1">e.g. "sunset at the beach", "kids playing soccer"</p>
+    </div>
+  </div>
+}
