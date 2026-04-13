@@ -1,79 +1,63 @@
-@layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css';
 
 @import "@angular/cdk/overlay-prebuilt.css";
 
-/* You can add global styles to this file, and also import other style files */
-
-
-
-:root {
-color-scheme: light;
-
---font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-
---background: 0deg 0% 100%;
---foreground: 344.17deg 10.1% 4.29%;
---card: 0deg 0% 100%;
---card-foreground: 344.17deg 10.1% 4.29%;
---popover: 0deg 0% 100%;
---popover-foreground: 344.17deg 10.1% 4.29%;
---primary: 344.37deg 6.88% 10.34%;
---primary-foreground: 344deg 8.87% 98.11%;
---secondary: 344.02deg 4.34% 96.14%;
---secondary-foreground: 344.37deg 6.88% 10.34%;
---muted: 344.02deg 4.34% 96.14%;
---muted-foreground: 25.05deg 5.89% 44.64%;
---accent: 344.02deg 4.34% 96.14%;
---accent-foreground: 344.37deg 6.88% 10.34%;
---destructive: 351.72deg 100% 40.53%;
---border: 344.71deg 5.22% 90.18%;
---input: 344.71deg 5.22% 90.18%;
---ring: 24.07deg 5.83% 63.06%;
---radius: 0.625rem;
---sidebar: 40, 10%, 98%;
---sidebar-foreground: 30, 6%, 16%;
---sidebar-accent: 40, 8%, 96%;
---sidebar-accent-foreground: 40, 5%, 22%;
---sidebar-border: 40, 8%, 90%;
---sidebar-ring: 40, 8%, 70%);
-}
-
-:root.dark {
-color-scheme: dark;
-
---background: 344.17deg 10.1% 4.29%;
---foreground: 344deg 8.87% 98.11%;
---card: 344.37deg 6.88% 10.34%;
---card-foreground: 344deg 8.87% 98.11%;
---popover: 344.37deg 6.88% 10.34%;
---popover-foreground: 344deg 8.87% 98.11%;
---primary: 344.71deg 5.22% 90.18%;
---primary-foreground: 344.37deg 6.88% 10.34%;
---secondary: 344.41deg 5.76% 15.22%;
---secondary-foreground: 344deg 8.87% 98.11%;
---muted: 344.41deg 5.76% 15.22%;
---muted-foreground: 24.07deg 5.83% 63.06%;
---accent: 344.41deg 5.76% 15.22%;
---accent-foreground: 344deg 8.87% 98.11%;
---destructive: 358.76deg 100% 69.84%;
---border: 0deg 0% 13.73%;
---input: 0deg 0% 18.43%;
---sidebar: 40, 5%, 22%;
---sidebar-foreground: 40, 10%, 98%;
---sidebar-accent: 40, 5%, 26%;
---sidebar-accent-foreground: 40, 10%, 98%;
---sidebar-border: 0, 0%, 10%;
---sidebar-ring: 40, 8%, 65%);
-}
-
 @layer base {
-* {
-@apply border-border outline-ring/50;
-}
-body {
-@apply bg-background text-foreground;
-}
+  :root {
+    color-scheme: dark;
+
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --radius: 0.5rem;
+
+    --color-background: hsl(var(--background));
+    --color-foreground: hsl(var(--foreground));
+    --color-card: hsl(var(--card));
+    --color-card-foreground: hsl(var(--card-foreground));
+    --color-primary: hsl(var(--primary));
+    --color-primary-foreground: hsl(var(--primary-foreground));
+    --color-secondary: hsl(var(--secondary));
+    --color-secondary-foreground: hsl(var(--secondary-foreground));
+    --color-muted: hsl(var(--muted));
+    --color-muted-foreground: hsl(var(--muted-foreground));
+    --color-accent: hsl(var(--accent));
+    --color-accent-foreground: hsl(var(--accent-foreground));
+    --color-destructive: hsl(var(--destructive));
+    --color-destructive-foreground: hsl(var(--destructive-foreground));
+    --color-border: hsl(var(--border));
+    --color-input: hsl(var(--input));
+    --color-ring: hsl(var(--ring));
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+    margin: 0;
+    overflow: hidden;
+    height: 100vh;
+  }
 }
