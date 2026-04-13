@@ -68,7 +68,15 @@ fn start_sidecar(state: tauri::State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn sidecar_health(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     let sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-    Ok(sidecar.is_ready())
+    if !sidecar.is_ready() {
+        return Ok(false);
+    }
+    drop(sidecar);
+    let mut sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
+    match sidecar.send_request(&json!({"action": "health_check"})) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
 }
 
 #[tauri::command]
@@ -98,23 +106,38 @@ fn start_embedding_job(
         let state: tauri::State<'_, AppState> = app_handle.state();
 
         for (i, image) in images.iter().enumerate() {
-            let embedding_res = {
-                let sidecar = match state.sidecar.lock() {
+            let request = json!({
+                "action": "embed_image",
+                "image_path": image.file_path
+            });
+
+            let response = {
+                let mut sidecar = match state.sidecar.lock() {
                     Ok(s) => s,
                     Err(_) => break,
                 };
-                sidecar.embed_image(&image.file_path)
+                sidecar.send_request(&request)
             };
 
-            match embedding_res {
-                Ok(embedding) => {
-                    let bytes = embedding_to_bytes(&embedding);
-                    let conn = match state.db.lock() {
-                        Ok(c) => c,
-                        Err(_) => break,
-                    };
-                    let _ = db::store_embedding(&conn, image.id, &bytes);
-                    let _ = db::mark_embedded(&conn, image.id);
+            match response {
+                Ok(resp) => {
+                    if let Some(embedding_arr) =
+                        resp.get("embedding").and_then(|e| e.as_array())
+                    {
+                        let embedding: Vec<f32> = embedding_arr
+                            .iter()
+                            .filter_map(|v| v.as_f64().map(|f| f as f32))
+                            .collect();
+
+                        let bytes = embedding_to_bytes(&embedding);
+
+                        let conn = match state.db.lock() {
+                            Ok(c) => c,
+                            Err(_) => break,
+                        };
+                        let _ = db::store_embedding(&conn, image.id, &bytes);
+                        let _ = db::mark_embedded(&conn, image.id);
+                    }
                 }
                 Err(_) => continue,
             }
@@ -137,9 +160,24 @@ fn search_images(
     limit: usize,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SearchResult>, String> {
+    let text_request = json!({
+        "action": "embed_text",
+        "text": query
+    });
+
     let query_embedding = {
-        let sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
-        sidecar.embed_text(&query)?
+        let mut sidecar = state.sidecar.lock().map_err(|e| e.to_string())?;
+        let response = sidecar.send_request(&text_request)?;
+
+        let embedding_arr = response
+            .get("embedding")
+            .and_then(|e| e.as_array())
+            .ok_or("No embedding in response")?;
+
+        embedding_arr
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect::<Vec<f32>>()
     };
 
     let all_embeddings = {
