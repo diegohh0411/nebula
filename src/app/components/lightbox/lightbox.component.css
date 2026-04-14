@@ -40,7 +40,13 @@
 /* Info Sidebar */
 .info-sidebar {
   @apply fixed top-0 right-0 bottom-0 w-80 bg-background border-l border-border
-         shadow-2xl flex flex-col z-50 animate-in slide-in-from-right duration-300;
+         shadow-2xl flex flex-col z-50;
+  animation: slide-in 0.3s ease-out;
+}
+
+@keyframes slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 .sidebar-header {

@@ -14,6 +14,7 @@ import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { TimelineScrubberComponent } from '../timeline-scrubber/timeline-scrubber.component';
 import { VirtualRow } from '../../models/models';
+import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
 
 @Component({
   selector: 'app-gallery',

@@ -120,7 +120,9 @@ pub async fn search_similar_images(
         .map_err(map_err)?
         .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
 
-    let scored = search::search_images(pool, embedding, 50)
+    let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding);
+
+    let scored = search::search_images(pool, embedding_f32, 50)
         .await
         .map_err(map_err)?;
 
