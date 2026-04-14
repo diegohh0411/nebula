@@ -22,6 +22,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "autoprefixer": "^10.5.0",
+    "lucide-angular": "^1.0.0",
     "rxjs": "~7.8.2",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^3.4.19",
