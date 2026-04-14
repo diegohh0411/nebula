@@ -21,11 +21,7 @@
       }
     ],
     "security": {
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": ["$APP_DATA/thumbnails/**"]
-      }
+      "csp": null
     }
   },
   "bundle": {

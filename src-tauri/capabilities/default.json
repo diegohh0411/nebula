@@ -6,6 +6,19 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "core:path:allow-app-data-recursive",
+    "core:path:allow-all",
+    {
+      "identifier": "core:protocol-asset",
+      "allow": [
+        {
+          "path": "$APP_DATA/thumbnails/**"
+        },
+        {
+          "path": "**"
+        }
+      ]
+    }
   ]
 }
