@@ -216,6 +216,11 @@ export class PhotoService {
     this.apiKey.set(key);
   }
 
+  async regenerateThumbnails(): Promise<void> {
+    await invoke('regenerate_all_thumbnails');
+    // The image_updated events from Rust will trigger refreshing the grid automatically
+  }
+
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
   thumbnailUrl(thumbPath: string | null): string | null {
     if (!thumbPath) return null;

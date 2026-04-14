@@ -103,7 +103,7 @@ pub fn run() {
             commands::get_embed_status,
             commands::set_api_key,
             commands::get_api_key,
-            commands::generate_thumbnails_for_folder,
+            commands::regenerate_all_thumbnails,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

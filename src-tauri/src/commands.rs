@@ -1,5 +1,5 @@
 use reqwest::Client;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::{
     config, db,
@@ -164,23 +164,41 @@ pub async fn get_api_key(
 }
 
 #[tauri::command]
-pub async fn generate_thumbnails_for_folder(
-    folder_id: i64,
+pub async fn regenerate_all_thumbnails(
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let images = db::list_images(&state.pool, Some(folder_id))
+    // 1. Clear database paths
+    sqlx::query("UPDATE images SET thumbnail_path = NULL")
+        .execute(&state.pool)
         .await
         .map_err(map_err)?;
 
+    // 2. Clear disk cache
+    let cache_dir = thumbnail::thumbnail_cache_dir(&state.data_dir);
+    if cache_dir.exists() {
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let _ = std::fs::create_dir_all(&cache_dir);
+    }
+
+    // 3. Trigger background generation for all images
     let pool = state.pool.clone();
     let data_dir = state.data_dir.clone();
+    let images = db::list_images(&pool, None).await.map_err(map_err)?;
+
     tokio::spawn(async move {
-        for image in images.iter().filter(|i| i.thumbnail_path.is_none()) {
+        for image in images {
             let thumb_path = thumbnail::thumbnail_path_for(&data_dir, image.id);
             let thumb_str = thumb_path.to_string_lossy().to_string();
             let src = std::path::PathBuf::from(&image.path);
+            
             if let Ok(()) = thumbnail::generate_thumbnail(src, thumb_path).await {
-                let _ = db::update_thumbnail_path(&pool, image.id, &thumb_str).await;
+                if db::update_thumbnail_path(&pool, image.id, &thumb_str).await.is_ok() {
+                    let _ = app.emit(
+                        "image_updated",
+                        crate::models::ImageUpdatedPayload { image_id: image.id },
+                    );
+                }
             }
         }
     });
