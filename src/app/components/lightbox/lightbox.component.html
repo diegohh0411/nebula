@@ -1,41 +1,43 @@
 @if (image) {
   <div class="lightbox-overlay" (click)="close()">
-    <!-- Top Toolbar -->
-    <div class="lightbox-toolbar" (click)="$event.stopPropagation()">
-      <div class="filename">{{ filename(image) }}</div>
-      <div class="actions">
-        <button class="icon-btn" (click)="findSimilar()" title="Find Similar">
-          <lucide-icon name="search" size="20"></lucide-icon>
-        </button>
-        <button class="icon-btn" (click)="toggleSidebar()" title="Info">
-          <lucide-icon name="info" size="20"></lucide-icon>
-        </button>
-        <button class="icon-btn" (click)="close()" title="Close">
-          <lucide-icon name="x" size="24"></lucide-icon>
-        </button>
-      </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="lightbox-content" (click)="$event.stopPropagation()">
-      <button class="nav-btn prev" (click)="prev()" title="Previous">
-        <lucide-icon name="chevron-left" size="32"></lucide-icon>
-      </button>
-
-      <div class="image-container">
-        <img
-          [src]="originalUrl(image)"
-          [alt]="filename(image)"
-          class="main-image"
-          [style.view-transition-name]="'photo-' + ('id' in image ? image.id : image.image_id)"
-          [style.background-image]="'url(' + thumbUrl(image) + ')'"
-          style="background-size: contain; background-repeat: no-repeat; background-position: center;"
-        />
+    <!-- Main View Area (Image + Toolbar) -->
+    <div class="main-view">
+      <div class="lightbox-toolbar" (click)="$event.stopPropagation()">
+        <div class="filename">{{ filename(image) }}</div>
+        <div class="actions">
+          <button class="icon-btn" (click)="findSimilar()" title="Find Similar">
+            <lucide-icon name="search" size="20"></lucide-icon>
+          </button>
+          <button class="icon-btn" (click)="toggleSidebar()" title="Info">
+            <lucide-icon name="info" size="20"></lucide-icon>
+          </button>
+          <button class="icon-btn" (click)="close()" title="Close">
+            <lucide-icon name="x" size="24"></lucide-icon>
+          </button>
+        </div>
       </div>
 
-      <button class="nav-btn next" (click)="next()" title="Next">
-        <lucide-icon name="chevron-right" size="32"></lucide-icon>
-      </button>
+      <!-- Main Content -->
+      <div class="lightbox-content" (click)="$event.stopPropagation()">
+        <button class="nav-btn prev" (click)="prev()" title="Previous">
+          <lucide-icon name="chevron-left" size="32"></lucide-icon>
+        </button>
+
+        <div class="image-container">
+          <img
+            [src]="originalUrl(image)"
+            [alt]="filename(image)"
+            class="main-image"
+            [style.view-transition-name]="'photo-' + ('id' in image ? image.id : image.image_id)"
+            [style.background-image]="'url(' + thumbUrl(image) + ')'"
+            style="background-size: contain; background-repeat: no-repeat; background-position: center;"
+          />
+        </div>
+
+        <button class="nav-btn next" (click)="next()" title="Next">
+          <lucide-icon name="chevron-right" size="32"></lucide-icon>
+        </button>
+      </div>
     </div>
 
     <!-- Info Sidebar -->
