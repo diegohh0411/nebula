@@ -3,7 +3,6 @@ import {
   ChangeDetectionStrategy,
   inject,
 } from '@angular/core';
-import { ScrollingModule } from '@angular/cdk/scrolling';
 import { PhotoService } from '../../services/photo.service';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { VirtualRow } from '../../models/models';
@@ -12,7 +11,7 @@ import { VirtualRow } from '../../models/models';
   selector: 'app-gallery',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ScrollingModule, PhotoGridComponent],
+  imports: [PhotoGridComponent],
   templateUrl: './gallery.component.html',
   styleUrl: './gallery.component.css',
 })

@@ -54,6 +54,11 @@ pub struct ImageUpdatedPayload {
     pub image_id: i64,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct ImageRemovedPayload {
+    pub path: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SearchResult {
     pub image_id: i64,

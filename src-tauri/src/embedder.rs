@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 use tauri::Emitter;
 
-use crate::{db, models::EmbedProgressPayload};
+use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}};
 
 const CONCURRENT_WORKERS: usize = 3;
 const GEMINI_EMBED_URL: &str =
@@ -116,12 +116,16 @@ async fn process_one(
     match embed_image(client, api_key, &image.path).await {
         Ok(values) => {
             let blob = f32_slice_to_bytes(&values);
-            let _ = db::mark_embedded(pool, image_id, &blob).await;
+            if db::mark_embedded(pool, image_id, &blob).await.is_ok() {
+                let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
+            }
         }
         Err(e) => {
             let err_str = e.to_string();
             eprintln!("Embedding failed for image {}: {}", image_id, err_str);
-            let _ = db::mark_failed(pool, queue_id, attempts, &err_str).await;
+            if db::mark_failed(pool, queue_id, attempts, &err_str).await.is_ok() {
+                let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
+            }
         }
     }
 

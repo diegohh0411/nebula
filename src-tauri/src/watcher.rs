@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use tauri::Emitter;
 
-use crate::{db, models::ImageAddedPayload, thumbnail};
+use crate::{db, models::{ImageAddedPayload, ImageRemovedPayload}, thumbnail};
 
 pub struct FolderWatcher {
     inner: RecommendedWatcher,
@@ -16,18 +16,13 @@ pub struct FolderWatcher {
 }
 
 impl FolderWatcher {
-    pub fn new(event_tx: mpsc::UnboundedSender<(Event, i64)>) -> Result<Self> {
+    pub fn new(event_tx: mpsc::UnboundedSender<Event>) -> Result<Self> {
         let tx = event_tx;
-        // Build a watched map clone tracker — notify sends paths, we need folder_id
-        // We'll use a shared map via a channel approach: forward raw events and let the consumer look up the folder_id
         let watched: HashMap<PathBuf, i64> = HashMap::new();
-        // We need to map paths back to folder_ids in the event handler.
-        // Since the closure can't borrow `watched`, we pass a clone at watch time using a secondary channel.
-        // Simplest: send (Event, dummy_0) and let consumer do a DB lookup to find folder_id.
         let inner = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            if let Ok(event) = res {
-                // folder_id 0 = unknown; consumer will resolve from DB
-                let _ = tx.send((event, 0));
+            match res {
+                Ok(event) => { let _ = tx.send(event); }
+                Err(e) => eprintln!("file watcher backend error: {e}"),
             }
         })?;
         Ok(Self { inner, watched })
@@ -45,9 +40,7 @@ impl FolderWatcher {
         Ok(())
     }
 
-    pub fn watched_paths(&self) -> Vec<(PathBuf, i64)> {
-        self.watched.iter().map(|(p, id)| (p.clone(), *id)).collect()
-    }
+
 }
 
 fn is_image(path: &Path) -> bool {
@@ -123,6 +116,7 @@ async fn handle_new_file(
         let thumb_path = thumbnail::thumbnail_path_for(data_dir, image_id);
         let thumb_path_str = thumb_path.to_string_lossy().to_string();
         let pool_clone = pool.clone();
+        let app_clone = app.clone();
         let src = path.clone();
         let dest = thumb_path.clone();
         tokio::spawn(async move {
@@ -130,7 +124,12 @@ async fn handle_new_file(
                 eprintln!("Thumbnail generation failed: {}", e);
                 return;
             }
-            let _ = db::update_thumbnail_path(&pool_clone, image_id, &thumb_path_str).await;
+            if db::update_thumbnail_path(&pool_clone, image_id, &thumb_path_str).await.is_ok() {
+                let _ = app_clone.emit(
+                    "image_updated",
+                    crate::models::ImageUpdatedPayload { image_id },
+                );
+            }
         });
 
         // Emit image_added event
@@ -180,12 +179,18 @@ async fn handle_modified_file(
             let thumb_path = thumbnail::thumbnail_path_for(data_dir, image_id);
             let thumb_path_str = thumb_path.to_string_lossy().to_string();
             let pool_clone = pool.clone();
+            let app_clone = app.clone();
             tokio::spawn(async move {
                 if let Err(e) = thumbnail::generate_thumbnail(path, thumb_path).await {
                     eprintln!("Thumbnail regeneration failed: {}", e);
                     return;
                 }
-                let _ = db::update_thumbnail_path(&pool_clone, image_id, &thumb_path_str).await;
+                if db::update_thumbnail_path(&pool_clone, image_id, &thumb_path_str).await.is_ok() {
+                    let _ = app_clone.emit(
+                        "image_updated",
+                        crate::models::ImageUpdatedPayload { image_id },
+                    );
+                }
             });
 
             let _ = app.emit(
@@ -198,12 +203,12 @@ async fn handle_modified_file(
 
 /// Background task that consumes filesystem events from the watcher channel.
 pub async fn run_event_consumer(
-    mut rx: mpsc::UnboundedReceiver<(Event, i64)>,
+    mut rx: mpsc::UnboundedReceiver<Event>,
     pool: SqlitePool,
     app: AppHandle,
     data_dir: PathBuf,
 ) {
-    while let Some((event, _)) = rx.recv().await {
+    while let Some(event) = rx.recv().await {
         // Look up the folder_id for the first affected path
         let folder_id = if let Some(p) = event.paths.first() {
             db::get_image_by_path(&pool, &p.to_string_lossy())
@@ -240,7 +245,12 @@ pub async fn run_event_consumer(
             EventKind::Remove(_) => {
                 for path in event.paths {
                     let path_str = path.to_string_lossy().to_string();
-                    let _ = db::soft_delete_image(&pool, &path_str).await;
+                    if db::soft_delete_image(&pool, &path_str).await.is_ok() {
+                        let _ = app.emit(
+                            "image_removed",
+                            ImageRemovedPayload { path: path_str },
+                        );
+                    }
                 }
             }
             _ => {}
@@ -267,7 +277,9 @@ pub async fn scan_folder(
     folder_path: &Path,
     data_dir: &Path,
 ) -> Result<()> {
-    let entries = collect_image_paths(folder_path)?;
+    let folder_path_owned = folder_path.to_path_buf();
+    let entries = tokio::task::spawn_blocking(move || collect_image_paths(&folder_path_owned))
+        .await??;
     for path in entries {
         handle_new_file(pool, app, path, folder_id, data_dir).await;
     }

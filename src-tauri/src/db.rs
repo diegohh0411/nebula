@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
 use std::path::Path;
 
 use crate::models::{EmbedStatus, Folder, FolderWithCount, Image};
@@ -42,11 +42,13 @@ CREATE INDEX IF NOT EXISTS idx_queue_scheduled ON embedding_queue(scheduled_at);
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
-    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let opts = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(&db_url)
+        .connect_with(opts)
         .await?;
 
     sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await?;
@@ -318,7 +320,8 @@ pub async fn mark_embedded(pool: &SqlitePool, image_id: i64, embedding: &[u8]) -
 
 pub async fn mark_failed(pool: &SqlitePool, queue_id: i64, attempts: i32, error: &str) -> Result<()> {
     let new_attempts = attempts + 1;
-    let backoff = std::cmp::min(2_i64.pow(new_attempts as u32) * 30, 28800);
+    let backoff_exponent = std::cmp::min(new_attempts.max(0) as u32, 10);
+    let backoff = std::cmp::min(2_i64.pow(backoff_exponent) * 30, 28800);
     let scheduled_at = chrono::Utc::now().timestamp() + backoff;
     sqlx::query(
         "UPDATE embedding_queue SET attempts = ?, last_error = ?, scheduled_at = ? WHERE id = ?",

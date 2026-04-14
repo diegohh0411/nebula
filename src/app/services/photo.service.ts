@@ -36,6 +36,11 @@ export class PhotoService {
     return flattenToVirtualRows(this.dayGroups(), 6);
   });
 
+  /** Total photo count across all folders, independent of selection. */
+  readonly totalPhotoCount = computed<number>(() =>
+    this.folders().reduce((sum, f) => sum + f.photo_count, 0)
+  );
+
   constructor() {
     this.events.embedProgress$.subscribe((e) => {
       this.embedStatus.set(e);
@@ -47,6 +52,11 @@ export class PhotoService {
 
     this.events.imageUpdated$.subscribe(() => {
       void this.refreshImages();
+    });
+
+    this.events.imageRemoved$.subscribe(() => {
+      void this.refreshImages();
+      void this.loadFolders();
     });
   }
 
@@ -131,10 +141,10 @@ export class PhotoService {
   /** Convert an absolute path to an asset:// URL for use in <img src>. */
   thumbnailUrl(thumbPath: string | null): string | null {
     if (!thumbPath) return null;
-    // Windows path: C:\Users\...\thumbnails\123.jpg
-    // Normalize backslashes to forward slashes for the URL
+    // Normalize Windows backslashes, then percent-encode special characters.
+    // encodeURI preserves '/' and ':' so drive letters and path separators survive.
     const normalized = thumbPath.replace(/\\/g, '/');
-    return `asset://localhost/${normalized}`;
+    return `asset://localhost/${encodeURI(normalized)}`;
   }
 }
 

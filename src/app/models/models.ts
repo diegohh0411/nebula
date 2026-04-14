@@ -48,6 +48,10 @@ export interface ImageUpdatedEvent {
   image_id: number;
 }
 
+export interface ImageRemovedEvent {
+  path: string;
+}
+
 /** A day group for display in the gallery */
 export interface DayGroup {
   label: string;   // "Today", "Yesterday", or "April 12, 2026"

@@ -4,6 +4,7 @@ import { Subject } from 'rxjs';
 import {
   EmbedProgressEvent,
   ImageAddedEvent,
+  ImageRemovedEvent,
   ImageUpdatedEvent,
 } from '../models/models';
 
@@ -12,6 +13,7 @@ export class TauriEventsService implements OnDestroy {
   readonly embedProgress$ = new Subject<EmbedProgressEvent>();
   readonly imageAdded$ = new Subject<ImageAddedEvent>();
   readonly imageUpdated$ = new Subject<ImageUpdatedEvent>();
+  readonly imageRemoved$ = new Subject<ImageRemovedEvent>();
 
   private unlisteners: UnlistenFn[] = [];
 
@@ -29,6 +31,9 @@ export class TauriEventsService implements OnDestroy {
       ),
       await listen<ImageUpdatedEvent>('image_updated', (e) =>
         this.imageUpdated$.next(e.payload)
+      ),
+      await listen<ImageRemovedEvent>('image_removed', (e) =>
+        this.imageRemoved$.next(e.payload)
       )
     );
   }

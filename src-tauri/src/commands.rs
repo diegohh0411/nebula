@@ -32,7 +32,9 @@ pub async fn add_folder(
     // Register the filesystem watcher
     {
         let mut w = state.watcher.lock().await;
-        let _ = w.watch(folder_path, folder_id);
+        if let Err(e) = w.watch(folder_path, folder_id) {
+            eprintln!("Failed to register watcher for folder {folder_id}: {e}");
+        }
     }
 
     // Return updated folder with count
@@ -55,7 +57,9 @@ pub async fn remove_folder(
     if let Some(folder) = folders.iter().find(|f| f.id == id) {
         let path = std::path::PathBuf::from(&folder.path);
         let mut w = state.watcher.lock().await;
-        let _ = w.unwatch(&path);
+        if let Err(e) = w.unwatch(&path) {
+            eprintln!("Failed to unregister watcher for path {}: {e}", path.display());
+        }
     }
 
     db::delete_folder(pool, id).await.map_err(map_err)

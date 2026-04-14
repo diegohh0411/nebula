@@ -20,19 +20,14 @@
     </div>
   }
 
-  <!-- Virtual scroll gallery -->
-  <cdk-virtual-scroll-viewport
-    class="gallery-viewport"
-    itemSize="172"
-    minBufferPx="400"
-    maxBufferPx="800"
-  >
-    <ng-container *cdkVirtualFor="let row of photos.virtualRows(); trackBy: trackRow">
+  <!-- Gallery scroll container -->
+  <div class="gallery-viewport">
+    @for (row of photos.virtualRows(); track trackRow($index, row)) {
       @if (row.type === 'header') {
         <div class="day-header">{{ row.label }}</div>
       } @else {
         <app-photo-grid [images]="row.images" />
       }
-    </ng-container>
-  </cdk-virtual-scroll-viewport>
+    }
+  </div>
 }

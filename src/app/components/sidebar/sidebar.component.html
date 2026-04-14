@@ -19,16 +19,21 @@
       </span>
       <span class="folder-name">All Photos</span>
       <span class="folder-count">
-        {{ photos.images().length }}
+        {{ photos.totalPhotoCount() }}
       </span>
     </button>
 
     <!-- Per-folder entries -->
     @for (folder of photos.folders(); track folder.id) {
-      <button
+      <div
         class="folder-item"
         [class.folder-item--active]="photos.selectedFolderId() === folder.id"
         (click)="selectFolder(folder.id)"
+        (keydown.enter)="selectFolder(folder.id)"
+        (keydown.space)="selectFolder(folder.id)"
+        tabindex="0"
+        role="button"
+        [attr.aria-pressed]="photos.selectedFolderId() === folder.id"
         [title]="folder.path"
       >
         <span class="folder-icon">
@@ -47,7 +52,7 @@
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
         </button>
-      </button>
+      </div>
     }
 
     @if (photos.folders().length === 0) {
