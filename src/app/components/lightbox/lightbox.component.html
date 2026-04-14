@@ -24,10 +24,12 @@
 
       <div class="image-container">
         <img
-          [src]="thumbUrl(image)!"
+          [src]="originalUrl(image)"
           [alt]="filename(image)"
           class="main-image"
           [style.view-transition-name]="'photo-' + ('id' in image ? image.id : image.image_id)"
+          [style.background-image]="'url(' + thumbUrl(image) + ')'"
+          style="background-size: contain; background-repeat: no-repeat; background-position: center;"
         />
       </div>
 

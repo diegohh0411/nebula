@@ -221,6 +221,11 @@ export class PhotoService {
     if (!thumbPath) return null;
     return convertFileSrc(thumbPath);
   }
+
+  /** Convert an absolute path to the original full-res image to a Tauri asset URL. */
+  originalUrl(imagePath: string): string {
+    return convertFileSrc(imagePath);
+  }
 }
 
 // ---- Utility functions ----

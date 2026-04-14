@@ -69,6 +69,10 @@ export class LightboxComponent {
     return this.photos.thumbnailUrl(img.thumbnail_path);
   }
 
+  protected originalUrl(img: Image | SearchResult): string {
+    return this.photos.originalUrl(img.path);
+  }
+
   protected filename(img: Image | SearchResult): string {
     const p = img.path.replace(/\\/g, '/');
     return p.split('/').pop() ?? p;

@@ -15,7 +15,7 @@
           [alt]="filename(img)"
           loading="lazy"
           decoding="async"
-          [style.view-transition-name]="photos.transitioningImageId() === imageId(img) ? 'photo-' + imageId(img) : 'none'"
+          [style.view-transition-name]="(photos.transitioningImageId() === imageId(img) && !photos.selectedImage()) ? 'photo-' + imageId(img) : 'none'"
         />
       } @else {
         <!-- Placeholder when thumbnail not yet generated -->
