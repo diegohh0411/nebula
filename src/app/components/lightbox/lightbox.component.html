@@ -1,0 +1,69 @@
+@if (image) {
+  <div class="lightbox-overlay" (click)="close()">
+    <!-- Top Toolbar -->
+    <div class="lightbox-toolbar" (click)="$event.stopPropagation()">
+      <div class="filename">{{ filename(image) }}</div>
+      <div class="actions">
+        <button class="icon-btn" title="Find Similar">
+          <lucide-icon name="search" size="20"></lucide-icon>
+        </button>
+        <button class="icon-btn" (click)="toggleSidebar()" title="Info">
+          <lucide-icon name="info" size="20"></lucide-icon>
+        </button>
+        <button class="icon-btn" (click)="close()" title="Close">
+          <lucide-icon name="x" size="24"></lucide-icon>
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="lightbox-content" (click)="$event.stopPropagation()">
+      <button class="nav-btn prev" (click)="prev()" title="Previous">
+        <lucide-icon name="chevron-left" size="32"></lucide-icon>
+      </button>
+
+      <div class="image-container">
+        <img
+          [src]="thumbUrl(image)!"
+          [alt]="filename(image)"
+          class="main-image"
+          [style.view-transition-name]="'photo-' + ('id' in image ? image.id : image.image_id)"
+        />
+      </div>
+
+      <button class="nav-btn next" (click)="next()" title="Next">
+        <lucide-icon name="chevron-right" size="32"></lucide-icon>
+      </button>
+    </div>
+
+    <!-- Info Sidebar -->
+    @if (showSidebar()) {
+      <div class="info-sidebar" (click)="$event.stopPropagation()">
+        <div class="sidebar-header">
+          <h3>Details</h3>
+          <button class="icon-btn" (click)="toggleSidebar()">
+            <lucide-icon name="x" size="20"></lucide-icon>
+          </button>
+        </div>
+        <div class="sidebar-content">
+          <div class="meta-item">
+            <label>Filename</label>
+            <div class="value">{{ filename(image) }}</div>
+          </div>
+          <div class="meta-item">
+            <label>Path</label>
+            <div class="value break-all">{{ image.path }}</div>
+          </div>
+          <div class="meta-item">
+            <label>Date</label>
+            <div class="value">{{ (image.date_taken ?? image.date_file) * 1000 | date:'medium' }}</div>
+          </div>
+          <div class="meta-item">
+            <label>Status</label>
+            <div class="value capitalize">{{ image.embed_status }}</div>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+}

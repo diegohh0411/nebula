@@ -9,14 +9,14 @@ import {
 } from '@angular/core';
 import { PhotoService } from '../../services/photo.service';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
+import { LightboxComponent } from '../lightbox/lightbox.component';
 import { VirtualRow } from '../../models/models';
-import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
 
 @Component({
   selector: 'app-gallery',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PhotoGridComponent, ScrollingModule],
+  imports: [PhotoGridComponent, LightboxComponent, ScrollingModule],
   templateUrl: './gallery.component.html',
   styleUrl: './gallery.component.css',
 })

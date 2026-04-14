@@ -28,6 +28,29 @@ export class PhotoService {
   readonly apiKey = signal<string | null>(null);
   readonly showApiKeyInput = signal(false);
 
+  // ---- Lightbox state ----
+  readonly selectedImage = signal<Image | SearchResult | null>(null);
+
+  openLightbox(img: Image | SearchResult): void {
+    this.selectedImage.set(img);
+  }
+
+  closeLightbox(): void {
+    this.selectedImage.set(null);
+  }
+
+  navigateLightbox(direction: number): void {
+    const current = this.selectedImage();
+    if (!current) return;
+
+    const allImages = this.images();
+    const idx = allImages.findIndex((i) => i.id === ('id' in current ? current.id : current.image_id));
+    if (idx === -1) return;
+
+    const nextIdx = (idx + direction + allImages.length) % allImages.length;
+    this.selectedImage.set(allImages[nextIdx]);
+  }
+
   /** Day-grouped images for the gallery. Uses search results when available. */
   readonly dayGroups = computed<DayGroup[]>(() => {
     const results = this.searchResults();

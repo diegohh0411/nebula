@@ -4,6 +4,7 @@
       class="photo-cell group"
       [title]="filename(img)"
       [style.flex-grow]="0.8 + ((imageId(img) * 54321) % 1000) / 1000"
+      (click)="onPhotoClick(img)"
     >
       @if (thumbUrl(img)) {
         <img
@@ -12,6 +13,7 @@
           [alt]="filename(img)"
           loading="lazy"
           decoding="async"
+          [style.view-transition-name]="'photo-' + imageId(img)"
         />
       } @else {
         <!-- Placeholder when thumbnail not yet generated -->

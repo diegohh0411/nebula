@@ -6,6 +6,7 @@ import {
 } from '@angular/core';
 import { Image, SearchResult } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
+import { startViewTransition } from '../../utils/view-transition';
 
 @Component({
   selector: 'app-photo-grid',
@@ -19,6 +20,12 @@ export class PhotoGridComponent {
   @Input() rowHeight: number = 220;
 
   protected photos = inject(PhotoService);
+
+  async onPhotoClick(img: Image | SearchResult) {
+    await startViewTransition(() => {
+      this.photos.openLightbox(img);
+    });
+  }
 
   protected imageId(img: Image | SearchResult): number {
     return 'id' in img ? img.id : img.image_id;
