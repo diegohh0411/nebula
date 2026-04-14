@@ -44,6 +44,23 @@ pub async fn search_images(
         // Sort descending by score
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
+
+        // GAP HEURISTIC (Elbow method):
+        // Find the largest drop in similarity between consecutive results.
+        // If that drop is significant (>= 0.05), we cut off at that point
+        // to return a more "natural" set of matches.
+        if scored.len() > 1 {
+            let mut max_gap = 0.0;
+            let mut cut_index = scored.len();
+            for i in 0..scored.len() - 1 {
+                let gap = scored[i].1 - scored[i + 1].1;
+                if gap > max_gap && gap >= 0.05 {
+                    max_gap = gap;
+                    cut_index = i + 1;
+                }
+            }
+            scored.truncate(cut_index);
+        }
         scored
     })
     .await?;

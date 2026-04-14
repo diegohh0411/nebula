@@ -27,8 +27,18 @@ export class PhotoService {
 
   /** Day-grouped images for the gallery. Uses search results when available. */
   readonly dayGroups = computed<DayGroup[]>(() => {
-    const src = this.searchResults() ?? this.images();
-    return groupByDay(src);
+    const results = this.searchResults();
+    if (results) {
+      // Use a single group for search results to show them sorted by similarity
+      return [
+        {
+          label: 'Search Results',
+          date: 'search',
+          images: results,
+        },
+      ];
+    }
+    return groupByDay(this.images());
   });
 
   /** Flat virtual scroll rows: interleaved headers + image rows */
