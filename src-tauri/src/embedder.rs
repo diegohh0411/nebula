@@ -14,7 +14,7 @@ use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}};
 
 const CONCURRENT_WORKERS: usize = 3;
 const GEMINI_EMBED_URL: &str =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-exp-03-07:embedContent";
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent";
 
 #[derive(Deserialize, Debug)]
 struct EmbedResponse {
@@ -37,11 +37,9 @@ pub fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
 /// Embed a text query using the Gemini API.
 pub async fn embed_text(client: &Client, api_key: &str, text: &str) -> Result<Vec<f32>> {
     let body = serde_json::json!({
-        "model": "models/gemini-embedding-exp-03-07",
         "content": {
             "parts": [{ "text": text }]
-        },
-        "taskType": "RETRIEVAL_QUERY"
+        }
     });
 
     let resp = client
@@ -78,11 +76,9 @@ async fn embed_image(client: &Client, api_key: &str, image_path: &str) -> Result
     let b64 = BASE64.encode(&bytes);
 
     let body = serde_json::json!({
-        "model": "models/gemini-embedding-exp-03-07",
         "content": {
             "parts": [{ "inlineData": { "mimeType": mime, "data": b64 } }]
-        },
-        "taskType": "RETRIEVAL_DOCUMENT"
+        }
     });
 
     let resp = client
