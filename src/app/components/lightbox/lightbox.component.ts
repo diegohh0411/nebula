@@ -57,6 +57,12 @@ export class LightboxComponent {
     this.showSidebar.update(s => !s);
   }
 
+  async findSimilar() {
+    if (!this.image) return;
+    await this.photos.searchByImage(this.image);
+    this.close();
+  }
+
   protected thumbUrl(img: Image | SearchResult): string | null {
     return this.photos.thumbnailUrl(img.thumbnail_path);
   }

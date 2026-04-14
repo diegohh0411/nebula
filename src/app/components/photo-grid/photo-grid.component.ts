@@ -20,6 +20,15 @@ export class PhotoGridComponent {
   @Input() rowHeight: number = 220;
 
   protected photos = inject(PhotoService);
+  protected Math = Math;
+
+  protected hasScore(img: Image | SearchResult): boolean {
+    return 'score' in img && typeof img.score === 'number';
+  }
+
+  protected getScore(img: Image | SearchResult): number {
+    return 'score' in img ? img.score : 0;
+  }
 
   async onPhotoClick(img: Image | SearchResult) {
     await startViewTransition(() => {

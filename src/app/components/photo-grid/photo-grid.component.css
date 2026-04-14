@@ -40,6 +40,10 @@
   @apply text-muted-foreground/40;
 }
 
+.similarity-badge {
+  @apply absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[10px] font-bold text-white rounded-sm backdrop-blur-sm z-10;
+}
+
 /* Embed status dot */
 .status-dot {
   @apply absolute bottom-1.5 right-1.5 w-2 h-2 rounded-full

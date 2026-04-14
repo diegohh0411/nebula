@@ -4,7 +4,7 @@
     <div class="lightbox-toolbar" (click)="$event.stopPropagation()">
       <div class="filename">{{ filename(image) }}</div>
       <div class="actions">
-        <button class="icon-btn" title="Find Similar">
+        <button class="icon-btn" (click)="findSimilar()" title="Find Similar">
           <lucide-icon name="search" size="20"></lucide-icon>
         </button>
         <button class="icon-btn" (click)="toggleSidebar()" title="Info">

@@ -99,6 +99,7 @@ pub fn run() {
             commands::list_folders,
             commands::list_images,
             commands::search_images,
+            commands::search_similar_images,
             commands::get_embed_status,
             commands::set_api_key,
             commands::get_api_key,

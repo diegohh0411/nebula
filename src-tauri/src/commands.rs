@@ -110,6 +110,32 @@ pub async fn search_images(
 }
 
 #[tauri::command]
+pub async fn search_similar_images(
+    image_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SearchResult>, String> {
+    let pool = &state.pool;
+    let embedding = db::get_image_embedding(pool, image_id)
+        .await
+        .map_err(map_err)?
+        .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
+
+    let scored = search::search_images(pool, embedding, 50)
+        .await
+        .map_err(map_err)?;
+
+    // Exclude the source image from its own results
+    let filtered_scored = scored
+        .into_iter()
+        .filter(|(id, _)| *id != image_id)
+        .collect();
+
+    search::build_search_results(pool, filtered_scored)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
 pub async fn get_embed_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<EmbedStatus, String> {

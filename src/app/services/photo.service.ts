@@ -173,6 +173,21 @@ export class PhotoService {
     }
   }
 
+  async searchByImage(image: Image | SearchResult): Promise<void> {
+    const id = 'id' in image ? image.id : image.image_id;
+    this.isSearching.set(true);
+    this.searchError.set(null);
+    try {
+      const results = await invoke<SearchResult[]>('search_similar_images', { imageId: id });
+      this.searchResults.set(results);
+    } catch (e: unknown) {
+      this.searchError.set(typeof e === 'string' ? e : 'Visual search failed.');
+      this.searchResults.set(null);
+    } finally {
+      this.isSearching.set(false);
+    }
+  }
+
   clearSearch(): void {
     this.searchResults.set(null);
     this.searchError.set(null);

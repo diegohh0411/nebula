@@ -28,6 +28,13 @@
         </div>
       }
 
+      <!-- Similarity Score Badge -->
+      @if (hasScore(img)) {
+        <div class="similarity-badge">
+          {{ Math.round(getScore(img) * 100) }}%
+        </div>
+      }
+
       <!-- Embed status dot — visible on hover -->
       <span
         class="status-dot"
