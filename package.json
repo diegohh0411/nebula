@@ -19,9 +19,11 @@
     "@angular/router": "^20.1.4",
     "@spartan-ng/brain": "0.0.1-alpha.668",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "rxjs": "~7.8.2",
     "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.2",
     "tslib": "^2.8.1",
     "zone.js": "~0.15.1"
   },

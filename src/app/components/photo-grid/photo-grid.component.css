@@ -1,0 +1,50 @@
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 3px;
+  padding: 2px 12px;
+}
+
+.photo-cell {
+  @apply relative aspect-square overflow-hidden bg-muted cursor-pointer;
+  border-radius: 2px;
+}
+
+.photo-cell:hover {
+  @apply ring-1 ring-ring;
+}
+
+.photo-thumb {
+  @apply w-full h-full object-cover transition-transform duration-200;
+}
+
+.photo-cell:hover .photo-thumb {
+  transform: scale(1.03);
+}
+
+.photo-placeholder {
+  @apply w-full h-full flex items-center justify-center bg-muted;
+}
+
+.photo-placeholder-icon {
+  @apply text-muted-foreground/40;
+}
+
+/* Embed status dot */
+.status-dot {
+  @apply absolute bottom-1.5 right-1.5 w-2 h-2 rounded-full
+         opacity-0 group-hover:opacity-100 transition-opacity duration-150
+         ring-1 ring-black/20;
+}
+
+.status-dot--done {
+  @apply bg-green-500;
+}
+
+.status-dot--pending {
+  @apply bg-amber-400;
+}
+
+.status-dot--failed {
+  @apply bg-red-500;
+}
