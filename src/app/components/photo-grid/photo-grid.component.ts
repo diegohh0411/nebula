@@ -16,6 +16,7 @@ import { PhotoService } from '../../services/photo.service';
 })
 export class PhotoGridComponent {
   @Input() images: (Image | SearchResult)[] = [];
+  @Input() rowHeight: number = 220;
 
   protected photos = inject(PhotoService);
 

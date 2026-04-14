@@ -6,8 +6,11 @@
 
 .gallery-viewport {
   flex: 1;
-  overflow-y: auto;
   height: 100%;
+}
+
+.viewport-item {
+  width: 100%;
 }
 
 .gallery-empty {

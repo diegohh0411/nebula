@@ -1,6 +1,10 @@
-<div class="photo-grid">
+<div class="photo-grid" [style.height.px]="rowHeight">
   @for (img of images; track imageId(img)) {
-    <div class="photo-cell group" [title]="filename(img)">
+    <div
+      class="photo-cell group"
+      [title]="filename(img)"
+      [style.flex-grow]="0.8 + ((imageId(img) * 54321) % 1000) / 1000"
+    >
       @if (thumbUrl(img)) {
         <img
           class="photo-thumb"

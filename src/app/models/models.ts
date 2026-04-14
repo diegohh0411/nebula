@@ -62,4 +62,4 @@ export interface DayGroup {
 /** A virtual scroll row: either a day header or a row of images */
 export type VirtualRow =
   | { type: 'header'; label: string; date: string }
-  | { type: 'row'; images: (Image | SearchResult)[] };
+  | { type: 'row'; images: (Image | SearchResult)[]; rowHeight: number };

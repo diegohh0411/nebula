@@ -21,13 +21,18 @@
   }
 
   <!-- Gallery scroll container -->
-  <div class="gallery-viewport">
-    @for (row of photos.virtualRows(); track trackRow($index, row)) {
+  <cdk-virtual-scroll-viewport
+    class="gallery-viewport"
+    [itemSize]="photos.targetRowHeight()"
+    minBufferPx="400"
+    maxBufferPx="800"
+  >
+    <div *cdkVirtualFor="let row of photos.virtualRows(); trackBy: trackRow" class="viewport-item">
       @if (row.type === 'header') {
         <div class="day-header">{{ row.label }}</div>
       } @else {
-        <app-photo-grid [images]="row.images" />
+        <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />
       }
-    }
-  </div>
+    </div>
+  </cdk-virtual-scroll-viewport>
 }

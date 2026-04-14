@@ -1,12 +1,13 @@
 .photo-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 3px;
-  padding: 2px 12px;
+  display: flex;
+  gap: 4px;
+  padding: 2px 0;
+  width: 100%;
 }
 
 .photo-cell {
-  @apply relative aspect-square overflow-hidden bg-muted cursor-pointer;
+  @apply relative overflow-hidden bg-muted cursor-pointer;
+  height: 100%;
   border-radius: 2px;
 }
 

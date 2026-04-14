@@ -9,12 +9,15 @@ import {
   VirtualRow,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
+import { buildJustifiedRows } from '../utils/justified-layout';
 
 @Injectable({ providedIn: 'root' })
 export class PhotoService {
   private events = inject(TauriEventsService);
 
   // ---- Reactive state (Angular signals) ----
+  readonly viewportWidth = signal<number>(1000);
+  readonly targetRowHeight = signal<number>(220);
   readonly folders = signal<Folder[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
@@ -41,9 +44,13 @@ export class PhotoService {
     return groupByDay(this.images());
   });
 
-  /** Flat virtual scroll rows: interleaved headers + image rows */
+  /** Flat virtual scroll rows: interleaved headers + justified rows */
   readonly virtualRows = computed<VirtualRow[]>(() => {
-    return flattenToVirtualRows(this.dayGroups(), 6);
+    return flattenToVirtualRowsJustified(
+      this.dayGroups(),
+      this.viewportWidth(),
+      this.targetRowHeight()
+    );
   });
 
   /** Total photo count across all folders, independent of selection. */
@@ -197,15 +204,19 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
 }
 
 /**
- * Flatten day groups into a flat array of virtual rows for CDK virtual scroll.
- * Each row is either a header or a row of `imagesPerRow` photos.
+ * Flatten day groups into a flat array of virtual rows using justified layout.
  */
-function flattenToVirtualRows(groups: DayGroup[], imagesPerRow: number): VirtualRow[] {
+function flattenToVirtualRowsJustified(
+  groups: DayGroup[],
+  containerWidth: number,
+  targetHeight: number
+): VirtualRow[] {
   const rows: VirtualRow[] = [];
   for (const group of groups) {
     rows.push({ type: 'header', label: group.label, date: group.date });
-    for (let i = 0; i < group.images.length; i += imagesPerRow) {
-      rows.push({ type: 'row', images: group.images.slice(i, i + imagesPerRow) });
+    const justifiedRows = buildJustifiedRows(group.images, containerWidth, targetHeight, 4);
+    for (const row of justifiedRows) {
+      rows.push({ type: 'row', images: row.images, rowHeight: row.rowHeight });
     }
   }
   return rows;
