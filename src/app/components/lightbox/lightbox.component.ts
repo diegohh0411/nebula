@@ -39,6 +39,8 @@ export class LightboxComponent {
     await startViewTransition(() => {
       this.photos.closeLightbox();
     });
+    // Clear after closing transition finishes to minimize tracked elements
+    this.photos.transitioningImageId.set(null);
   }
 
   async next() {

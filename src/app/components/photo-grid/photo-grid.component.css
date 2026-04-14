@@ -26,6 +26,7 @@
 
 .photo-thumb {
   @apply w-full h-full object-cover transition-transform duration-200;
+  will-change: transform;
 }
 
 .photo-cell:hover .photo-thumb {

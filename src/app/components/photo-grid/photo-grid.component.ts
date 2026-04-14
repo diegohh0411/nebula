@@ -31,6 +31,11 @@ export class PhotoGridComponent {
   }
 
   async onPhotoClick(img: Image | SearchResult) {
+    this.photos.transitioningImageId.set(this.imageId(img));
+    
+    // Brief delay to let Angular apply the view-transition-name to the clicked thumb
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
     await startViewTransition(() => {
       this.photos.openLightbox(img);
     });

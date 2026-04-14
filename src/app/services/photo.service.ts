@@ -30,6 +30,7 @@ export class PhotoService {
 
   // ---- Lightbox state ----
   readonly selectedImage = signal<Image | SearchResult | null>(null);
+  readonly transitioningImageId = signal<number | null>(null);
   readonly selectedImageIds = signal<Set<number>>(new Set());
 
   toggleSelection(id: number): void {
@@ -48,23 +49,29 @@ export class PhotoService {
   }
 
   openLightbox(img: Image | SearchResult): void {
+    this.transitioningImageId.set('id' in img ? img.id : img.image_id);
     this.selectedImage.set(img);
   }
 
   closeLightbox(): void {
     this.selectedImage.set(null);
+    // Note: transitioningImageId stays set during the transition back, then cleared in the component.
   }
 
   navigateLightbox(direction: number): void {
     const current = this.selectedImage();
     if (!current) return;
 
-    const allImages = this.images();
-    const idx = allImages.findIndex((i) => i.id === ('id' in current ? current.id : current.image_id));
+    // Use search results if available, otherwise full gallery
+    const allImages: (Image | SearchResult)[] = this.searchResults() ?? this.images();
+    const currentId = 'id' in current ? current.id : current.image_id;
+    const idx = allImages.findIndex((i) => ('id' in i ? i.id : i.image_id) === currentId);
     if (idx === -1) return;
 
     const nextIdx = (idx + direction + allImages.length) % allImages.length;
-    this.selectedImage.set(allImages[nextIdx]);
+    const nextImg = allImages[nextIdx];
+    this.selectedImage.set(nextImg);
+    this.transitioningImageId.set('id' in nextImg ? nextImg.id : nextImg.image_id);
   }
 
   /** Day-grouped images for the gallery. Uses search results when available. */
