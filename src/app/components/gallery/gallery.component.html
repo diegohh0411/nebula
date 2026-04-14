@@ -26,6 +26,7 @@
     [itemSize]="photos.targetRowHeight()"
     minBufferPx="400"
     maxBufferPx="800"
+    (pointerdown)="onPointerDown($event)"
   >
     <div *cdkVirtualFor="let row of photos.virtualRows(); trackBy: trackRow" class="viewport-item">
       @if (row.type === 'header') {
@@ -36,5 +37,18 @@
     </div>
   </cdk-virtual-scroll-viewport>
 
+  <!-- Lasso selection rectangle -->
+  @if (isLassoing()) {
+    <div
+      class="lasso-rect"
+      [style.top.px]="lassoRect()?.top"
+      [style.left.px]="lassoRect()?.left"
+      [style.width.px]="lassoRect()?.width"
+      [style.height.px]="lassoRect()?.height"
+    ></div>
+  }
+
   <app-lightbox [image]="photos.selectedImage()" />
+  
+  <app-timeline-scrubber (dateSelected)="scrollToDate($event)" />
 }

@@ -11,6 +11,15 @@
   border-radius: 2px;
 }
 
+.photo-cell.selected {
+  @apply ring-4 ring-primary ring-inset;
+}
+
+.photo-cell.selected::after {
+  content: '';
+  @apply absolute inset-0 bg-primary/20;
+}
+
 .photo-cell:hover {
   @apply ring-1 ring-ring;
 }

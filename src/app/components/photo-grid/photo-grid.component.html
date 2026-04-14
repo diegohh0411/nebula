@@ -5,6 +5,8 @@
       [title]="filename(img)"
       [style.flex-grow]="0.8 + ((imageId(img) * 54321) % 1000) / 1000"
       (click)="onPhotoClick(img)"
+      [attr.data-id]="imageId(img)"
+      [class.selected]="photos.selectedImageIds().has(imageId(img))"
     >
       @if (thumbUrl(img)) {
         <img

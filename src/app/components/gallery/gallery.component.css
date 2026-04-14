@@ -13,6 +13,10 @@
   width: 100%;
 }
 
+.lasso-rect {
+  @apply fixed z-[100] bg-primary/20 border border-primary pointer-events-none;
+}
+
 .gallery-empty {
   @apply flex flex-col items-center justify-center h-full gap-2 text-center px-8;
 }

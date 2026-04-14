@@ -30,6 +30,22 @@ export class PhotoService {
 
   // ---- Lightbox state ----
   readonly selectedImage = signal<Image | SearchResult | null>(null);
+  readonly selectedImageIds = signal<Set<number>>(new Set());
+
+  toggleSelection(id: number): void {
+    const next = new Set(this.selectedImageIds());
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    this.selectedImageIds.set(next);
+  }
+
+  setSelection(ids: number[]): void {
+    this.selectedImageIds.set(new Set(ids));
+  }
+
+  clearSelection(): void {
+    this.selectedImageIds.set(new Set());
+  }
 
   openLightbox(img: Image | SearchResult): void {
     this.selectedImage.set(img);

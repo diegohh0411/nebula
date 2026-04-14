@@ -1,0 +1,8 @@
+<div class="scrubber-track" (mousedown)="onScrub($event)" (mousemove)="$event.buttons === 1 && onScrub($event)">
+  <div class="scrubber-handle"></div>
+  @for (marker of markers(); track marker.date) {
+    <div class="marker" [style.top.%]="($index / markers().length) * 100">
+      <span class="marker-label">{{ marker.label.split(',').pop()?.trim() }}</span>
+    </div>
+  }
+</div>
