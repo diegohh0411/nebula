@@ -1,0 +1,105 @@
+.sidebar-container {
+  @apply flex flex-col h-full w-64 border-r border-border bg-background;
+}
+
+.sidebar-header {
+  @apply flex items-center px-4 py-3 border-b border-border flex-shrink-0;
+}
+
+.sidebar-title {
+  @apply text-xs font-semibold uppercase tracking-widest text-muted-foreground;
+}
+
+.sidebar-nav {
+  @apply flex-1 overflow-y-auto py-2;
+}
+
+.sidebar-empty {
+  @apply text-xs text-muted-foreground px-4 py-2;
+}
+
+.folder-item {
+  @apply flex items-center w-full gap-2 px-3 py-2 text-sm rounded-none
+         text-foreground hover:bg-accent hover:text-accent-foreground
+         transition-colors cursor-pointer border-0 bg-transparent text-left;
+}
+
+.folder-item--active {
+  @apply bg-accent text-accent-foreground font-medium;
+}
+
+.folder-icon {
+  @apply flex-shrink-0 text-muted-foreground;
+}
+
+.folder-item--active .folder-icon {
+  @apply text-foreground;
+}
+
+.folder-name {
+  @apply flex-1 truncate text-left;
+}
+
+.folder-count {
+  @apply flex-shrink-0 text-xs text-muted-foreground ml-auto;
+}
+
+.folder-remove {
+  @apply flex-shrink-0 p-1 rounded text-muted-foreground hover:text-destructive
+         hover:bg-destructive/10 transition-colors opacity-0 ml-1
+         border-0 bg-transparent cursor-pointer;
+}
+
+.folder-item:hover .folder-remove {
+  @apply opacity-100;
+}
+
+/* Footer */
+.sidebar-footer {
+  @apply flex flex-col gap-2 p-3 border-t border-border flex-shrink-0;
+}
+
+.btn-add-folder {
+  @apply flex items-center gap-2 w-full px-3 py-2 text-sm font-medium
+         rounded-md border border-dashed border-border text-muted-foreground
+         hover:border-primary hover:text-foreground hover:bg-accent
+         transition-colors cursor-pointer bg-transparent;
+}
+
+.btn-set-api-key {
+  @apply w-full px-3 py-1.5 text-xs text-muted-foreground
+         border border-border rounded-md hover:bg-accent
+         transition-colors cursor-pointer bg-transparent;
+}
+
+.api-key-area {
+  @apply flex gap-2;
+}
+
+.api-key-input {
+  @apply flex-1 px-2 py-1.5 text-xs rounded-md border border-input bg-background
+         text-foreground placeholder:text-muted-foreground focus:outline-none
+         focus:ring-1 focus:ring-ring;
+}
+
+.btn-save {
+  @apply px-2 py-1.5 text-xs rounded-md bg-primary text-primary-foreground
+         hover:opacity-90 transition-opacity cursor-pointer border-0;
+}
+
+.api-key-set {
+  @apply flex items-center gap-2 text-xs text-muted-foreground;
+}
+
+.api-key-dot {
+  @apply w-2 h-2 rounded-full bg-green-500 flex-shrink-0;
+}
+
+.api-key-label {
+  @apply flex-1;
+}
+
+.btn-gear {
+  @apply p-1 rounded text-muted-foreground hover:text-foreground
+         hover:bg-accent transition-colors cursor-pointer bg-transparent border-0;
+}

@@ -1,0 +1,61 @@
+.search-bar {
+  @apply flex items-center gap-4 px-4 py-2.5 border-b border-border
+         bg-background flex-shrink-0 h-14;
+}
+
+.app-name {
+  @apply flex items-center gap-1.5 font-semibold text-sm tracking-tight
+         text-foreground flex-shrink-0;
+}
+
+.app-icon {
+  @apply text-primary;
+}
+
+.search-input-wrap {
+  @apply relative flex-1 flex items-center;
+}
+
+.search-icon {
+  @apply absolute left-3 text-muted-foreground pointer-events-none;
+}
+
+.search-input {
+  @apply w-full pl-9 pr-10 py-2 text-sm rounded-lg border border-input
+         bg-background text-foreground placeholder:text-muted-foreground
+         focus:outline-none focus:ring-2 focus:ring-ring/50 focus:border-ring
+         transition-colors;
+  /* Remove browser default search cancel button */
+  appearance: none;
+}
+
+.search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search-clear {
+  @apply absolute right-2.5 p-1 rounded text-muted-foreground
+         hover:text-foreground hover:bg-accent transition-colors
+         cursor-pointer bg-transparent border-0;
+}
+
+.search-spinner {
+  @apply absolute right-2.5 w-4 h-4 rounded-full border-2
+         border-muted border-t-primary animate-spin;
+}
+
+/* Embedding status badge */
+.embed-badge {
+  @apply flex items-center gap-1.5 flex-shrink-0 px-2.5 py-1 rounded-full
+         bg-amber-100 text-amber-800 text-xs font-medium
+         dark:bg-amber-900/40 dark:text-amber-300;
+}
+
+.embed-badge-dot {
+  @apply w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400 animate-pulse;
+}
+
+/* Error banner below the header */
+.search-error {
+  @apply px-4 py-2 text-xs text-destructive bg-destructive/10 border-b border-destructive/20;
+}

@@ -1,0 +1,50 @@
+<header class="search-bar">
+  <!-- App name -->
+  <span class="app-name">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="app-icon">
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+    </svg>
+    Nebula
+  </span>
+
+  <!-- Search input -->
+  <div class="search-input-wrap">
+    <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input
+      type="search"
+      class="search-input"
+      placeholder="Search photos…"
+      autocomplete="off"
+      [value]="query()"
+      (input)="query.set($any($event.target).value)"
+      (keyup.enter)="onSearch()"
+    />
+    @if ((photos.searchResults() !== null || query()) && !photos.isSearching()) {
+      <button class="search-clear" (click)="onClear()" title="Clear search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    }
+    @if (photos.isSearching()) {
+      <span class="search-spinner" aria-label="Searching…"></span>
+    }
+  </div>
+
+  <!-- Embedding status badge -->
+  @if (photos.embedStatus().pending > 0) {
+    <span class="embed-badge" title="Photos still being indexed">
+      <span class="embed-badge-dot"></span>
+      {{ photos.embedStatus().pending }} indexing
+    </span>
+  }
+</header>
+
+<!-- Search error message -->
+@if (photos.searchError()) {
+  <div class="search-error" role="alert">
+    {{ photos.searchError() }}
+  </div>
+}

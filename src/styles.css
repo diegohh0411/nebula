@@ -1,7 +1,6 @@
-@layer theme, base, components, utilities;
-@import 'tailwindcss/theme.css' layer(theme);
-@import 'tailwindcss/preflight.css' layer(base);
-@import 'tailwindcss/utilities.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 @import "@angular/cdk/overlay-prebuilt.css";
 
@@ -38,7 +37,7 @@ color-scheme: light;
 --sidebar-accent: 40, 8%, 96%;
 --sidebar-accent-foreground: 40, 5%, 22%;
 --sidebar-border: 40, 8%, 90%;
---sidebar-ring: 40, 8%, 70%);
+--sidebar-ring: 40, 8%, 70%;
 }
 
 :root.dark {
@@ -66,7 +65,7 @@ color-scheme: dark;
 --sidebar-accent: 40, 5%, 26%;
 --sidebar-accent-foreground: 40, 10%, 98%;
 --sidebar-border: 0, 0%, 10%;
---sidebar-ring: 40, 8%, 65%);
+--sidebar-ring: 40, 8%, 65%;
 }
 
 @layer base {

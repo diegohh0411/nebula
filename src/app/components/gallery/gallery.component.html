@@ -1,0 +1,33 @@
+@if (photos.virtualRows().length === 0) {
+  <!-- Empty state -->
+  <div class="gallery-empty">
+    @if (photos.searchResults() !== null) {
+      <p class="gallery-empty-title">No results found</p>
+      <p class="gallery-empty-sub">Try a different search query</p>
+    } @else if (photos.folders().length === 0) {
+      <p class="gallery-empty-title">No folders added yet</p>
+      <p class="gallery-empty-sub">Click "+ Add Folder" in the sidebar to get started</p>
+    } @else {
+      <p class="gallery-empty-title">No photos found</p>
+      <p class="gallery-empty-sub">Add a folder with photos to see them here</p>
+    }
+  </div>
+} @else {
+  <!-- Search result count -->
+  @if (photos.searchResults() !== null) {
+    <div class="search-result-count">
+      {{ photos.searchResults()!.length }} result{{ photos.searchResults()!.length !== 1 ? 's' : '' }}
+    </div>
+  }
+
+  <!-- Gallery scroll container -->
+  <div class="gallery-viewport">
+    @for (row of photos.virtualRows(); track trackRow($index, row)) {
+      @if (row.type === 'header') {
+        <div class="day-header">{{ row.label }}</div>
+      } @else {
+        <app-photo-grid [images]="row.images" />
+      }
+    }
+  </div>
+}

@@ -1,0 +1,37 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gallery-viewport {
+  flex: 1;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.gallery-empty {
+  @apply flex flex-col items-center justify-center h-full gap-2 text-center px-8;
+}
+
+.gallery-empty-title {
+  @apply text-base font-medium text-foreground;
+}
+
+.gallery-empty-sub {
+  @apply text-sm text-muted-foreground;
+}
+
+.search-result-count {
+  @apply flex-shrink-0 px-4 py-2 text-xs font-medium text-muted-foreground
+         border-b border-border bg-background;
+}
+
+.day-header {
+  @apply sticky top-0 z-10 px-4 py-2 text-xs font-semibold uppercase
+         tracking-wider text-muted-foreground
+         bg-background/90 backdrop-blur-sm border-b border-border/50;
+  height: 36px;
+  display: flex;
+  align-items: center;
+}
