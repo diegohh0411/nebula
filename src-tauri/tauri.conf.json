@@ -24,7 +24,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/nebula/thumbnails/**"]
+        "scope": ["$APP_DATA/thumbnails/**"]
       }
     }
   },

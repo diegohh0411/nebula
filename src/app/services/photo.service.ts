@@ -1,5 +1,5 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import {
   DayGroup,
   EmbedStatus,
@@ -138,13 +138,10 @@ export class PhotoService {
     this.apiKey.set(key);
   }
 
-  /** Convert an absolute path to an asset:// URL for use in <img src>. */
+  /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
   thumbnailUrl(thumbPath: string | null): string | null {
     if (!thumbPath) return null;
-    // Normalize Windows backslashes, then percent-encode special characters.
-    // encodeURI preserves '/' and ':' so drive letters and path separators survive.
-    const normalized = thumbPath.replace(/\\/g, '/');
-    return `asset://localhost/${encodeURI(normalized)}`;
+    return convertFileSrc(thumbPath);
   }
 }
 
