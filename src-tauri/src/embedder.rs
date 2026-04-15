@@ -10,9 +10,10 @@ use tokio::sync::{Mutex, Semaphore};
 
 use tauri::Emitter;
 
-use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}};
+use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}, face_detector::Detector};
 
 const CONCURRENT_WORKERS: usize = 3;
+const CLUSTERING_THRESHOLD: f32 = 0.85;
 const GEMINI_EMBED_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent";
 
@@ -52,6 +53,16 @@ pub fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>> {
             )
         })
         .collect())
+}
+
+pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
+    let dot_product: f32 = v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum();
+    let norm1: f32 = v1.iter().map(|a| a * a).sum::<f32>().sqrt();
+    let norm2: f32 = v2.iter().map(|a| a * a).sum::<f32>().sqrt();
+    if norm1 == 0.0 || norm2 == 0.0 {
+        return 0.0;
+    }
+    dot_product / (norm1 * norm2)
 }
 
 /// Embed a text query using the Gemini API.
@@ -114,10 +125,34 @@ async fn embed_image(client: &Client, api_key: &str, image_path: &str) -> Result
     Ok(resp.embedding.values)
 }
 
+#[allow(dead_code)]
+async fn embed_image_bytes(client: &Client, api_key: &str, bytes: Vec<u8>, mime: &str) -> Result<Vec<f32>> {
+    let b64 = BASE64.encode(&bytes);
+
+    let body = serde_json::json!({
+        "content": {
+            "parts": [{ "inlineData": { "mimeType": mime, "data": b64 } }]
+        }
+    });
+
+    let resp = client
+        .post(GEMINI_EMBED_URL)
+        .header("x-goog-api-key", api_key)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<EmbedResponse>()
+        .await?;
+
+    Ok(resp.embedding.values)
+}
+
 async fn process_one(
     pool: &SqlitePool,
     app: &AppHandle,
     client: &Client,
+    detector: &Detector,
     queue_id: i64,
     image_id: i64,
     attempts: i32,
@@ -134,6 +169,59 @@ async fn process_one(
             let blob = f32_slice_to_bytes(&values);
             if db::mark_embedded(pool, image_id, &blob).await.is_ok() {
                 let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
+            }
+
+            // --- Face Detection ---
+            let img_res = tokio::task::spawn_blocking({
+                let path = image.path.clone();
+                move || image::open(path)
+            }).await;
+
+            if let Ok(Ok(dynamic_img)) = img_res {
+                if let Ok(faces) = detector.analyze(&dynamic_img) {
+                    for face_analysis in faces {
+                        let bbox = face_analysis.detection.bbox;
+                        
+                        // Use ArcFace embedding from face_id locally
+                        let face_emb = face_analysis.embedding;
+                        
+                        // Clustering
+                        let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
+                        let mut best_subject_id = None;
+                        let mut best_score = 0.0;
+
+                        for (subject_id, emb_blob) in existing_subjects {
+                            if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
+                                let score = cosine_similarity(&face_emb, &emb);
+                                if score > best_score && score > CLUSTERING_THRESHOLD {
+                                    best_score = score;
+                                    best_subject_id = Some(subject_id);
+                                }
+                            }
+                        }
+
+                        let subject_id = if let Some(sid) = best_subject_id {
+                            Some(sid)
+                        } else {
+                            // Create new unnamed subject
+                            db::insert_subject(pool, None, "person").await.ok()
+                        };
+
+                        let face_blob = f32_slice_to_bytes(&face_emb);
+                        let _ = db::insert_face(
+                            pool,
+                            image_id,
+                            subject_id,
+                            (
+                                bbox.x1 as f64,
+                                bbox.y1 as f64,
+                                (bbox.x2 - bbox.x1) as f64,
+                                (bbox.y2 - bbox.y1) as f64,
+                            ),
+                            Some(&face_blob),
+                        ).await;
+                    }
+                }
             }
         }
         Err(e) => {
@@ -169,6 +257,16 @@ pub async fn run_embedding_worker(
         .build()
         .unwrap_or_default();
 
+    // Initialize face detector
+    let detector = match Detector::new().await {
+        Ok(d) => Arc::new(d),
+        Err(e) => {
+            eprintln!("Failed to initialize face detector: {}", e);
+            // We can still run without face detection if it fails to init
+            return;
+        }
+    };
+
     loop {
         // Check for API key
         let key = {
@@ -202,9 +300,10 @@ pub async fn run_embedding_worker(
             let app_c = app.clone();
             let client_c = client.clone();
             let key_c = key.clone();
+            let detector_c = detector.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_one(&pool_c, &app_c, &client_c, queue_id, image_id, attempts, &key_c).await;
+                process_one(&pool_c, &app_c, &client_c, &detector_c, queue_id, image_id, attempts, &key_c).await;
             }));
         }
         for h in handles {
