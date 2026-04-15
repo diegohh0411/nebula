@@ -9,12 +9,15 @@ import {
   VirtualRow,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
+import { buildJustifiedRows } from '../utils/justified-layout';
 
 @Injectable({ providedIn: 'root' })
 export class PhotoService {
   private events = inject(TauriEventsService);
 
   // ---- Reactive state (Angular signals) ----
+  readonly viewportWidth = signal<number>(1000);
+  readonly targetRowHeight = signal<number>(220);
   readonly folders = signal<Folder[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
@@ -24,6 +27,52 @@ export class PhotoService {
   readonly searchError = signal<string | null>(null);
   readonly apiKey = signal<string | null>(null);
   readonly showApiKeyInput = signal(false);
+
+  // ---- Lightbox state ----
+  readonly selectedImage = signal<Image | SearchResult | null>(null);
+  readonly transitioningImageId = signal<number | null>(null);
+  readonly selectedImageIds = signal<Set<number>>(new Set());
+
+  toggleSelection(id: number): void {
+    const next = new Set(this.selectedImageIds());
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    this.selectedImageIds.set(next);
+  }
+
+  setSelection(ids: number[]): void {
+    this.selectedImageIds.set(new Set(ids));
+  }
+
+  clearSelection(): void {
+    this.selectedImageIds.set(new Set());
+  }
+
+  openLightbox(img: Image | SearchResult): void {
+    this.transitioningImageId.set('id' in img ? img.id : img.image_id);
+    this.selectedImage.set(img);
+  }
+
+  closeLightbox(): void {
+    this.selectedImage.set(null);
+    // Note: transitioningImageId stays set during the transition back, then cleared in the component.
+  }
+
+  navigateLightbox(direction: number): void {
+    const current = this.selectedImage();
+    if (!current) return;
+
+    // Use search results if available, otherwise full gallery
+    const allImages: (Image | SearchResult)[] = this.searchResults() ?? this.images();
+    const currentId = 'id' in current ? current.id : current.image_id;
+    const idx = allImages.findIndex((i) => ('id' in i ? i.id : i.image_id) === currentId);
+    if (idx === -1) return;
+
+    const nextIdx = (idx + direction + allImages.length) % allImages.length;
+    const nextImg = allImages[nextIdx];
+    this.selectedImage.set(nextImg);
+    this.transitioningImageId.set('id' in nextImg ? nextImg.id : nextImg.image_id);
+  }
 
   /** Day-grouped images for the gallery. Uses search results when available. */
   readonly dayGroups = computed<DayGroup[]>(() => {
@@ -41,9 +90,13 @@ export class PhotoService {
     return groupByDay(this.images());
   });
 
-  /** Flat virtual scroll rows: interleaved headers + image rows */
+  /** Flat virtual scroll rows: interleaved headers + justified rows */
   readonly virtualRows = computed<VirtualRow[]>(() => {
-    return flattenToVirtualRows(this.dayGroups(), 6);
+    return flattenToVirtualRowsJustified(
+      this.dayGroups(),
+      this.viewportWidth(),
+      this.targetRowHeight()
+    );
   });
 
   /** Total photo count across all folders, independent of selection. */
@@ -127,6 +180,21 @@ export class PhotoService {
     }
   }
 
+  async searchByImage(image: Image | SearchResult): Promise<void> {
+    const id = 'id' in image ? image.id : image.image_id;
+    this.isSearching.set(true);
+    this.searchError.set(null);
+    try {
+      const results = await invoke<SearchResult[]>('search_similar_images', { imageId: id });
+      this.searchResults.set(results);
+    } catch (e: unknown) {
+      this.searchError.set(typeof e === 'string' ? e : 'Visual search failed.');
+      this.searchResults.set(null);
+    } finally {
+      this.isSearching.set(false);
+    }
+  }
+
   clearSearch(): void {
     this.searchResults.set(null);
     this.searchError.set(null);
@@ -148,10 +216,20 @@ export class PhotoService {
     this.apiKey.set(key);
   }
 
+  async regenerateThumbnails(): Promise<void> {
+    await invoke('regenerate_all_thumbnails');
+    // The image_updated events from Rust will trigger refreshing the grid automatically
+  }
+
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
   thumbnailUrl(thumbPath: string | null): string | null {
     if (!thumbPath) return null;
     return convertFileSrc(thumbPath);
+  }
+
+  /** Convert an absolute path to the original full-res image to a Tauri asset URL. */
+  originalUrl(imagePath: string): string {
+    return convertFileSrc(imagePath);
   }
 }
 
@@ -197,15 +275,19 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
 }
 
 /**
- * Flatten day groups into a flat array of virtual rows for CDK virtual scroll.
- * Each row is either a header or a row of `imagesPerRow` photos.
+ * Flatten day groups into a flat array of virtual rows using justified layout.
  */
-function flattenToVirtualRows(groups: DayGroup[], imagesPerRow: number): VirtualRow[] {
+function flattenToVirtualRowsJustified(
+  groups: DayGroup[],
+  containerWidth: number,
+  targetHeight: number
+): VirtualRow[] {
   const rows: VirtualRow[] = [];
   for (const group of groups) {
     rows.push({ type: 'header', label: group.label, date: group.date });
-    for (let i = 0; i < group.images.length; i += imagesPerRow) {
-      rows.push({ type: 'row', images: group.images.slice(i, i + imagesPerRow) });
+    const justifiedRows = buildJustifiedRows(group.images, containerWidth, targetHeight, 4);
+    for (const row of justifiedRows) {
+      rows.push({ type: 'row', images: row.images, rowHeight: row.rowHeight });
     }
   }
   return rows;

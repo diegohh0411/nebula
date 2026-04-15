@@ -1,0 +1,30 @@
+:host {
+  @apply fixed right-0 top-16 bottom-0 w-8 z-40 bg-background/20 backdrop-blur-sm
+         border-l border-border/50 hover:bg-background/80 transition-colors duration-200;
+}
+
+.scrubber-track {
+  @apply w-full h-full relative cursor-ns-resize;
+}
+
+.scrubber-handle {
+  @apply absolute right-1 w-1 bg-primary/40 rounded-full transition-all duration-150;
+  top: 0;
+  bottom: 0;
+}
+
+:host:hover .scrubber-handle {
+  @apply w-2 bg-primary/60;
+}
+
+.marker {
+  @apply absolute right-4 flex items-center gap-2 opacity-0 transition-opacity duration-200 pointer-events-none;
+}
+
+:host:hover .marker {
+  @apply opacity-100;
+}
+
+.marker-label {
+  @apply text-[10px] font-bold text-muted-foreground uppercase tracking-widest bg-background px-1.5 py-0.5 rounded shadow-sm border border-border;
+}

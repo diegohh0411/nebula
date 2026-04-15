@@ -34,6 +34,26 @@ pub fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
         .collect()
 }
 
+/// Decode raw little-endian bytes back to a Vec<f32>.
+pub fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>> {
+    anyhow::ensure!(
+        bytes.len() % 4 == 0,
+        "invalid embedding byte length: expected a multiple of 4, got {}",
+        bytes.len()
+    );
+
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| {
+            f32::from_le_bytes(
+                chunk
+                    .try_into()
+                    .expect("chunks_exact(4) must yield chunks of exactly 4 bytes"),
+            )
+        })
+        .collect())
+}
+
 /// Embed a text query using the Gemini API.
 pub async fn embed_text(client: &Client, api_key: &str, text: &str) -> Result<Vec<f32>> {
     let body = serde_json::json!({

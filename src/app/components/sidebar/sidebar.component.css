@@ -59,8 +59,18 @@
   @apply flex flex-col gap-2 p-3 border-t border-border flex-shrink-0;
 }
 
+.sidebar-footer-actions {
+  @apply flex gap-2 w-full;
+}
+
+.btn-secondary {
+  @apply flex items-center justify-center p-2 rounded-md border border-border
+         text-muted-foreground hover:bg-accent hover:text-foreground
+         transition-colors cursor-pointer bg-transparent;
+}
+
 .btn-add-folder {
-  @apply flex items-center gap-2 w-full px-3 py-2 text-sm font-medium
+  @apply flex items-center justify-center gap-2 flex-1 px-3 py-2 text-sm font-medium
          rounded-md border border-dashed border-border text-muted-foreground
          hover:border-primary hover:text-foreground hover:bg-accent
          transition-colors cursor-pointer bg-transparent;

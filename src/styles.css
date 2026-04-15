@@ -1,8 +1,8 @@
+@import "@angular/cdk/overlay-prebuilt.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import "@angular/cdk/overlay-prebuilt.css";
 
 /* You can add global styles to this file, and also import other style files */
 
@@ -40,32 +40,34 @@ color-scheme: light;
 --sidebar-ring: 40, 8%, 70%;
 }
 
-:root.dark {
-color-scheme: dark;
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
 
---background: 344.17deg 10.1% 4.29%;
---foreground: 344deg 8.87% 98.11%;
---card: 344.37deg 6.88% 10.34%;
---card-foreground: 344deg 8.87% 98.11%;
---popover: 344.37deg 6.88% 10.34%;
---popover-foreground: 344deg 8.87% 98.11%;
---primary: 344.71deg 5.22% 90.18%;
---primary-foreground: 344.37deg 6.88% 10.34%;
---secondary: 344.41deg 5.76% 15.22%;
---secondary-foreground: 344deg 8.87% 98.11%;
---muted: 344.41deg 5.76% 15.22%;
---muted-foreground: 24.07deg 5.83% 63.06%;
---accent: 344.41deg 5.76% 15.22%;
---accent-foreground: 344deg 8.87% 98.11%;
---destructive: 358.76deg 100% 69.84%;
---border: 0deg 0% 13.73%;
---input: 0deg 0% 18.43%;
---sidebar: 40, 5%, 22%;
---sidebar-foreground: 40, 10%, 98%;
---sidebar-accent: 40, 5%, 26%;
---sidebar-accent-foreground: 40, 10%, 98%;
---sidebar-border: 0, 0%, 10%;
---sidebar-ring: 40, 8%, 65%;
+    --background: 344.17deg 10.1% 4.29%;
+    --foreground: 344deg 8.87% 98.11%;
+    --card: 344.37deg 6.88% 10.34%;
+    --card-foreground: 344deg 8.87% 98.11%;
+    --popover: 344.37deg 6.88% 10.34%;
+    --popover-foreground: 344deg 8.87% 98.11%;
+    --primary: 344.71deg 5.22% 90.18%;
+    --primary-foreground: 344.37deg 6.88% 10.34%;
+    --secondary: 344.41deg 5.76% 15.22%;
+    --secondary-foreground: 344deg 8.87% 98.11%;
+    --muted: 344.41deg 5.76% 15.22%;
+    --muted-foreground: 24.07deg 5.83% 63.06%;
+    --accent: 344.41deg 5.76% 15.22%;
+    --accent-foreground: 344deg 8.87% 98.11%;
+    --destructive: 358.76deg 100% 69.84%;
+    --border: 0deg 0% 13.73%;
+    --input: 0deg 0% 18.43%;
+    --sidebar: 40, 5%, 22%;
+    --sidebar-foreground: 40, 10%, 98%;
+    --sidebar-accent: 40, 5%, 26%;
+    --sidebar-accent-foreground: 40, 10%, 98%;
+    --sidebar-border: 0, 0%, 10%;
+    --sidebar-ring: 40, 8%, 65%;
+  }
 }
 
 @layer base {

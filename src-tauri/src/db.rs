@@ -335,6 +335,14 @@ pub async fn mark_failed(pool: &SqlitePool, queue_id: i64, attempts: i32, error:
     Ok(())
 }
 
+pub async fn get_image_embedding(pool: &SqlitePool, id: i64) -> Result<Option<Vec<u8>>> {
+    let row = sqlx::query("SELECT embedding FROM images WHERE id = ? AND deleted_at IS NULL")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.and_then(|r| r.get::<Option<Vec<u8>>, _>("embedding")))
+}
+
 pub async fn get_all_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
     let rows = sqlx::query(
         "SELECT id, embedding FROM images

@@ -1,13 +1,23 @@
 .photo-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 3px;
-  padding: 2px 12px;
+  display: flex;
+  gap: 4px;
+  padding: 2px 0;
+  width: 100%;
 }
 
 .photo-cell {
-  @apply relative aspect-square overflow-hidden bg-muted cursor-pointer;
+  @apply relative overflow-hidden bg-muted cursor-pointer;
+  height: 100%;
   border-radius: 2px;
+}
+
+.photo-cell.selected {
+  @apply ring-4 ring-primary ring-inset;
+}
+
+.photo-cell.selected::after {
+  content: '';
+  @apply absolute inset-0 bg-primary/20;
 }
 
 .photo-cell:hover {
@@ -16,6 +26,7 @@
 
 .photo-thumb {
   @apply w-full h-full object-cover transition-transform duration-200;
+  will-change: transform;
 }
 
 .photo-cell:hover .photo-thumb {
@@ -28,6 +39,10 @@
 
 .photo-placeholder-icon {
   @apply text-muted-foreground/40;
+}
+
+.similarity-badge {
+  @apply absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[10px] font-bold text-white rounded-sm backdrop-blur-sm z-10;
 }
 
 /* Embed status dot */

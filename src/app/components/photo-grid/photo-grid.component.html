@@ -1,6 +1,13 @@
-<div class="photo-grid">
+<div class="photo-grid" [style.height.px]="rowHeight">
   @for (img of images; track imageId(img)) {
-    <div class="photo-cell group" [title]="filename(img)">
+    <div
+      class="photo-cell group"
+      [title]="filename(img)"
+      [style.flex-grow]="0.8 + ((imageId(img) * 54321) % 1000) / 1000"
+      (click)="onPhotoClick(img)"
+      [attr.data-id]="imageId(img)"
+      [class.selected]="photos.selectedImageIds().has(imageId(img))"
+    >
       @if (thumbUrl(img)) {
         <img
           class="photo-thumb"
@@ -8,6 +15,7 @@
           [alt]="filename(img)"
           loading="lazy"
           decoding="async"
+          [style.view-transition-name]="(photos.transitioningImageId() === imageId(img) && !photos.selectedImage()) ? 'photo-' + imageId(img) : 'none'"
         />
       } @else {
         <!-- Placeholder when thumbnail not yet generated -->
@@ -17,6 +25,13 @@
             <circle cx="8.5" cy="8.5" r="1.5"/>
             <polyline points="21 15 16 10 5 21"/>
           </svg>
+        </div>
+      }
+
+      <!-- Similarity Score Badge -->
+      @if (hasScore(img)) {
+        <div class="similarity-badge">
+          {{ Math.round(getScore(img) * 100) }}%
         </div>
       }
 

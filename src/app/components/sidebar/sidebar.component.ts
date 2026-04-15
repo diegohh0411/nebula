@@ -53,4 +53,10 @@ export class SidebarComponent {
     }
     this.photos.showApiKeyInput.set(false);
   }
+
+  protected async regenerateThumbnails(): Promise<void> {
+    if (confirm('Regenerate all thumbnails? This will clear existing ones and recreate them at higher resolution.')) {
+      await this.photos.regenerateThumbnails();
+    }
+  }
 }

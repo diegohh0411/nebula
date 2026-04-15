@@ -6,6 +6,7 @@ import {
 } from '@angular/core';
 import { Image, SearchResult } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
+import { startViewTransition } from '../../utils/view-transition';
 
 @Component({
   selector: 'app-photo-grid',
@@ -16,8 +17,29 @@ import { PhotoService } from '../../services/photo.service';
 })
 export class PhotoGridComponent {
   @Input() images: (Image | SearchResult)[] = [];
+  @Input() rowHeight: number = 220;
 
   protected photos = inject(PhotoService);
+  protected Math = Math;
+
+  protected hasScore(img: Image | SearchResult): boolean {
+    return 'score' in img && typeof img.score === 'number';
+  }
+
+  protected getScore(img: Image | SearchResult): number {
+    return 'score' in img ? img.score : 0;
+  }
+
+  async onPhotoClick(img: Image | SearchResult) {
+    this.photos.transitioningImageId.set(this.imageId(img));
+    
+    // Brief delay to let Angular apply the view-transition-name to the clicked thumb
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
+    await startViewTransition(() => {
+      this.photos.openLightbox(img);
+    });
+  }
 
   protected imageId(img: Image | SearchResult): number {
     return 'id' in img ? img.id : img.image_id;

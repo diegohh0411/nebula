@@ -11,6 +11,7 @@
   "private": true,
   "dependencies": {
     "@angular/cdk": "20.0.0",
+    "@angular/cdk-experimental": "^20.0.0",
     "@angular/common": "^20.1.4",
     "@angular/compiler": "^20.1.4",
     "@angular/core": "^20.1.4",
@@ -22,6 +23,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "autoprefixer": "^10.5.0",
+    "lucide-angular": "^1.0.0",
     "rxjs": "~7.8.2",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^3.4.19",

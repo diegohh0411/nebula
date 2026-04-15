@@ -6,8 +6,15 @@
 
 .gallery-viewport {
   flex: 1;
-  overflow-y: auto;
   height: 100%;
+}
+
+.viewport-item {
+  width: 100%;
+}
+
+.lasso-rect {
+  @apply fixed z-[100] bg-primary/20 border border-primary pointer-events-none;
 }
 
 .gallery-empty {
