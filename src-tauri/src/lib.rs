@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod db;
 mod embedder;
+mod face_detector;
 mod models;
 mod search;
 mod thumbnail;
