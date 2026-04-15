@@ -133,6 +133,7 @@ pub fn run() {
             commands::list_subjects,
             commands::name_subject,
             commands::list_faces,
+            commands::list_faces_for_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

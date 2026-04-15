@@ -519,3 +519,28 @@ pub async fn update_subject_name(pool: &SqlitePool, id: i64, name: Option<&str>)
         .await?;
     Ok(())
 }
+
+pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Vec<Face>> {
+    let rows = sqlx::query(
+        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at
+         FROM faces WHERE image_id = ? ORDER BY added_at DESC",
+    )
+    .bind(image_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Face {
+            id: r.get("id"),
+            image_id: r.get("image_id"),
+            subject_id: r.get("subject_id"),
+            bbox_x: r.get("bbox_x"),
+            bbox_y: r.get("bbox_y"),
+            bbox_w: r.get("bbox_w"),
+            bbox_h: r.get("bbox_h"),
+            embedding: r.get("embedding"),
+            added_at: r.get("added_at"),
+        })
+        .collect())
+}

@@ -148,6 +148,10 @@ export class PhotoService {
     return await invoke<Face[]>('list_faces', { subjectId });
   }
 
+  async loadFacesForImage(imageId: number): Promise<Face[]> {
+    return await invoke<Face[]>('list_faces_for_image', { imageId });
+  }
+
   async addFolder(path: string): Promise<void> {
     await invoke<Folder>('add_folder', { path });
     await this.loadFolders();

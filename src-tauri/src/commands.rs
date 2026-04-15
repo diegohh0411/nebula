@@ -225,3 +225,8 @@ pub async fn name_subject(id: i64, name: Option<String>, state: tauri::State<'_,
 pub async fn list_faces(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
     db::list_faces_for_subject(&state.pool, subject_id).await.map_err(map_err)
 }
+
+#[tauri::command]
+pub async fn list_faces_for_image(image_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
+    db::list_faces_for_image(&state.pool, image_id).await.map_err(|e| e.to_string())
+}
