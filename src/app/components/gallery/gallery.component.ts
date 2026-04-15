@@ -15,12 +15,19 @@ import { LightboxComponent } from '../lightbox/lightbox.component';
 import { TimelineScrubberComponent } from '../timeline-scrubber/timeline-scrubber.component';
 import { VirtualRow } from '../../models/models';
 import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
+import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
 
 @Component({
   selector: 'app-gallery',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PhotoGridComponent, LightboxComponent, TimelineScrubberComponent, ScrollingModule],
+  imports: [
+    PhotoGridComponent,
+    LightboxComponent,
+    TimelineScrubberComponent,
+    ScrollingModule,
+    CdkAutoSizeVirtualScroll,
+  ],
   templateUrl: './gallery.component.html',
   styleUrl: './gallery.component.css',
 })
@@ -34,14 +41,23 @@ export class GalleryComponent implements AfterViewInit, OnDestroy {
   protected isLassoing = signal(false);
   protected lassoRect = signal<{top: number, left: number, width: number, height: number} | null>(null);
   private lassoStart = {x: 0, y: 0};
+  private cachedCells: NodeListOf<Element> | null = null;
+  private selectionRafId: number | null = null;
 
   onPointerDown(event: PointerEvent) {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button') || target.closest('.photo-cell')) return;
     
+    target.setPointerCapture(event.pointerId);
     this.isLassoing.set(true);
     this.lassoStart = {x: event.clientX, y: event.clientY};
     this.lassoRect.set({top: event.clientY, left: event.clientX, width: 0, height: 0});
     this.photos.clearSelection();
+
+    // Cache the cell list at the start of lasso
+    const viewportEl = this.elementRef.nativeElement.querySelector('.gallery-viewport');
+    this.cachedCells = (viewportEl || document).querySelectorAll('.photo-cell');
   }
 
   @HostListener('window:pointermove', ['$event'])
@@ -54,23 +70,40 @@ export class GalleryComponent implements AfterViewInit, OnDestroy {
     const height = Math.abs(this.lassoStart.y - event.clientY);
 
     this.lassoRect.set({top, left, width, height});
-    this.updateSelection();
+
+    if (this.selectionRafId === null) {
+      this.selectionRafId = requestAnimationFrame(() => {
+        this.updateSelection();
+        this.selectionRafId = null;
+      });
+    }
   }
 
-  @HostListener('window:pointerup')
-  onPointerUp() {
+  @HostListener('window:pointerup', ['$event'])
+  @HostListener('window:pointercancel', ['$event'])
+  onPointerUp(event: PointerEvent) {
+    if (!this.isLassoing()) return;
+    const target = event.target as HTMLElement;
+    if (target.hasPointerCapture(event.pointerId)) {
+      target.releasePointerCapture(event.pointerId);
+    }
+    
     this.isLassoing.set(false);
     this.lassoRect.set(null);
+    this.cachedCells = null;
+    if (this.selectionRafId !== null) {
+      cancelAnimationFrame(this.selectionRafId);
+      this.selectionRafId = null;
+    }
   }
 
   private updateSelection() {
     const rect = this.lassoRect();
-    if (!rect) return;
+    if (!rect || !this.cachedCells) return;
 
-    const elements = document.querySelectorAll('.photo-cell');
     const selectedIds: number[] = [];
     
-    elements.forEach(el => {
+    this.cachedCells.forEach(el => {
       const elRect = el.getBoundingClientRect();
       const isIntersecting = !(
         elRect.right < rect.left ||

@@ -30,15 +30,17 @@ export function buildJustifiedRows(
     const imgWidth = targetRowHeight * aspectRatio;
 
     if (currentRowWidth + imgWidth + gap * currentRow.length > containerWidth) {
-      // Current row is full, calculate its final height to fit the container
-      const totalRatios = currentRow.map(i => {
-        const iId = 'id' in i ? i.id : i.image_id;
-        return 0.8 + ((iId * 54321) % 1000) / 1000;
-      }).reduce((a, b) => a + b, 0);
-      const availableWidth = containerWidth - (gap * (currentRow.length - 1));
-      const rowHeight = availableWidth / totalRatios;
+      if (currentRow.length > 0) {
+        // Current row is full, calculate its final height to fit the container
+        const totalRatios = currentRow.map(i => {
+          const iId = 'id' in i ? i.id : i.image_id;
+          return 0.8 + ((iId * 54321) % 1000) / 1000;
+        }).reduce((a, b) => a + b, 0);
+        const availableWidth = containerWidth - (gap * (currentRow.length - 1));
+        const rowHeight = availableWidth / totalRatios;
 
-      rows.push({ images: currentRow, rowHeight });
+        rows.push({ images: currentRow, rowHeight });
+      }
 
       currentRow = [img];
       currentRowWidth = imgWidth;

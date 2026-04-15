@@ -1,8 +1,6 @@
 import {
   Component,
   Input,
-  Output,
-  EventEmitter,
   ChangeDetectionStrategy,
   HostListener,
   inject,
@@ -62,7 +60,7 @@ export class LightboxComponent {
   async findSimilar() {
     if (!this.image) return;
     await this.photos.searchByImage(this.image);
-    this.close();
+    await this.close();
   }
 
   protected thumbUrl(img: Image | SearchResult): string | null {

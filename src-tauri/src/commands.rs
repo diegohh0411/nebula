@@ -120,7 +120,8 @@ pub async fn search_similar_images(
         .map_err(map_err)?
         .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
 
-    let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding);
+    let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding)
+        .map_err(|e| e.to_string())?;
 
     let scored = search::search_images(pool, embedding_f32, 50)
         .await
@@ -177,8 +178,12 @@ pub async fn regenerate_all_thumbnails(
     // 2. Clear disk cache
     let cache_dir = thumbnail::thumbnail_cache_dir(&state.data_dir);
     if cache_dir.exists() {
-        let _ = std::fs::remove_dir_all(&cache_dir);
-        let _ = std::fs::create_dir_all(&cache_dir);
+        if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
+            eprintln!("Failed to remove thumbnail cache directory {:?}: {}", cache_dir, e);
+        }
+        if let Err(e) = tokio::fs::create_dir_all(&cache_dir).await {
+            eprintln!("Failed to create thumbnail cache directory {:?}: {}", cache_dir, e);
+        }
     }
 
     // 3. Trigger background generation for all images

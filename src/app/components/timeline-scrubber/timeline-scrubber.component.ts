@@ -1,15 +1,13 @@
 import {
   Component,
-  Input,
-  Output,
   EventEmitter,
+  Output,
   ChangeDetectionStrategy,
   inject,
   computed,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
-import { DayGroup } from '../../models/models';
 
 @Component({
   selector: 'app-timeline-scrubber',
@@ -23,11 +21,21 @@ export class TimelineScrubberComponent {
   @Output() dateSelected = new EventEmitter<string>();
 
   protected photos = inject(PhotoService);
-  
+
+  private isStartOfMonth(group: any): boolean {
+    const parts = group.date.split('-');
+    if (parts.length !== 3) return false;
+
+    const day = Number(parts[2]);
+    return Number.isInteger(day) && day === 1;
+  }
+
   protected markers = computed(() => {
     const groups = this.photos.dayGroups();
     // Only show markers for significant jumps or start of months
-    return groups.filter((g, i) => i === 0 || g.label.includes('1,') || i === groups.length - 1);
+    return groups.filter(
+      (g, i) => i === 0 || this.isStartOfMonth(g) || i === groups.length - 1
+    );
   });
 
   onScrub(event: MouseEvent) {

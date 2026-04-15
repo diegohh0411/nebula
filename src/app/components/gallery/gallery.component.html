@@ -23,7 +23,7 @@
   <!-- Gallery scroll container -->
   <cdk-virtual-scroll-viewport
     class="gallery-viewport"
-    [itemSize]="photos.targetRowHeight()"
+    autosize
     minBufferPx="400"
     maxBufferPx="800"
     (pointerdown)="onPointerDown($event)"
