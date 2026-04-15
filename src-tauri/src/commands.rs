@@ -89,24 +89,52 @@ pub async fn search_images(
     query: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SearchResult>, String> {
+    let pool = &state.pool;
+
+    // 1. Fuzzy Subject Search
+    let matched_subjects = db::search_subjects_by_name(pool, &query).await.unwrap_or_default();
+    let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
+    let subject_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+
+    let mut final_results = vec![];
+    
+    // Map explicit subject matches to SearchResult with a high score (1.0)
+    for image_id in &subject_image_ids {
+        if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
+            final_results.push(SearchResult {
+                image_id: *image_id,
+                path: img.path,
+                thumbnail_path: img.thumbnail_path,
+                score: 1.0,
+                date_taken: img.date_taken,
+                date_file: img.date_file,
+                embed_status: img.embed_status,
+            });
+        }
+    }
+
+    // 2. RAG Search Fallback
     let api_key = {
         let lock = state.api_key.lock().await;
         lock.clone()
     };
-    let api_key = api_key.ok_or_else(|| "API key not configured".to_string())?;
 
-    let client = Client::new();
-    let query_embedding = crate::embedder::embed_text(&client, &api_key, &query)
-        .await
-        .map_err(|e| format!("Search requires a connection — try again when online. ({e})"))?;
+    if let Some(api_key) = api_key {
+        let client = Client::new();
+        if let Ok(query_embedding) = crate::embedder::embed_text(&client, &api_key, &query).await {
+            if let Ok(scored) = search::search_images(pool, query_embedding, 50).await {
+                if let Ok(rag_results) = search::build_search_results(pool, scored).await {
+                    for res in rag_results {
+                        if !subject_image_ids.contains(&res.image_id) {
+                            final_results.push(res);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-    let scored = search::search_images(&state.pool, query_embedding, 50)
-        .await
-        .map_err(map_err)?;
-
-    search::build_search_results(&state.pool, scored)
-        .await
-        .map_err(map_err)
+    Ok(final_results)
 }
 
 #[tauri::command]

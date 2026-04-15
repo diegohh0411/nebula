@@ -544,3 +544,44 @@ pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Ve
         })
         .collect())
 }
+
+pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
+    let like_query = format!("%{}%", query);
+    let rows = sqlx::query(
+        "SELECT id, name, thumbnail_face_id, type, added_at 
+         FROM subjects 
+         WHERE name LIKE ? COLLATE NOCASE 
+         ORDER BY added_at DESC"
+    )
+    .bind(like_query)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Subject {
+            id: r.get("id"),
+            name: r.get("name"),
+            thumbnail_face_id: r.get("thumbnail_face_id"),
+            subject_type: r.get("type"),
+            added_at: r.get("added_at"),
+        })
+        .collect())
+}
+
+pub async fn get_image_ids_for_subjects(pool: &SqlitePool, subject_ids: &[i64]) -> Result<Vec<i64>> {
+    if subject_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let params = format!("?{}", ", ?".repeat(subject_ids.len() - 1));
+    let query_str = format!(
+        "SELECT DISTINCT image_id FROM faces WHERE subject_id IN ({})",
+        params
+    );
+    let mut query = sqlx::query(&query_str);
+    for id in subject_ids {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| r.get("image_id")).collect())
+}
