@@ -488,3 +488,34 @@ pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u
         .map(|r| (r.get("subject_id"), r.get("embedding")))
         .collect())
 }
+
+pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> {
+    let row = sqlx::query(
+        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at
+         FROM faces WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    
+    Ok(row.as_ref().map(|r| Face {
+        id: r.get("id"),
+        image_id: r.get("image_id"),
+        subject_id: r.get("subject_id"),
+        bbox_x: r.get("bbox_x"),
+        bbox_y: r.get("bbox_y"),
+        bbox_w: r.get("bbox_w"),
+        bbox_h: r.get("bbox_h"),
+        embedding: r.get("embedding"),
+        added_at: r.get("added_at"),
+    }))
+}
+
+pub async fn update_subject_name(pool: &SqlitePool, id: i64, name: Option<&str>) -> Result<()> {
+    sqlx::query("UPDATE subjects SET name = ? WHERE id = ?")
+        .bind(name)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

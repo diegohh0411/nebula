@@ -130,6 +130,9 @@ pub fn run() {
             commands::set_api_key,
             commands::get_api_key,
             commands::regenerate_all_thumbnails,
+            commands::list_subjects,
+            commands::name_subject,
+            commands::list_faces,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

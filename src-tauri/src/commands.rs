@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     config, db,
-    models::{EmbedStatus, FolderWithCount, Image, SearchResult},
+    models::{EmbedStatus, FolderWithCount, Image, SearchResult, Subject, Face},
     search, thumbnail, watcher, AppState,
 };
 
@@ -209,4 +209,19 @@ pub async fn regenerate_all_thumbnails(
     });
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn list_subjects(state: tauri::State<'_, AppState>) -> Result<Vec<Subject>, String> {
+    db::list_all_subjects(&state.pool).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn name_subject(id: i64, name: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    db::update_subject_name(&state.pool, id, name.as_deref()).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn list_faces(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
+    db::list_faces_for_subject(&state.pool, subject_id).await.map_err(map_err)
 }
