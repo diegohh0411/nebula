@@ -121,3 +121,11 @@ h1 {
   padding: 4rem;
   color: #666;
 }
+
+.clickable {
+  cursor: pointer;
+}
+.clickable:hover {
+  text-decoration: underline;
+  opacity: 0.8;
+}

@@ -35,4 +35,10 @@ export class PeopleViewComponent implements OnInit {
   cancelEdit() {
     this.editingId = null;
   }
+
+  async searchPerson(subject: Subject) {
+    if (!subject.name) return; // Cannot search unnamed subjects via text yet
+    this.photoService.currentView.set('gallery');
+    await this.photoService.search(subject.name);
+  }
 }
