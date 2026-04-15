@@ -5,10 +5,11 @@ import {
   HostListener,
   inject,
   signal,
+  OnChanges,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { LucideAngularModule } from 'lucide-angular';
-import { Image, SearchResult } from '../../models/models';
+import { Image, SearchResult, Face } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 import { startViewTransition } from '../../utils/view-transition';
 
@@ -20,11 +21,33 @@ import { startViewTransition } from '../../utils/view-transition';
   templateUrl: './lightbox.component.html',
   styleUrl: './lightbox.component.css',
 })
-export class LightboxComponent {
+export class LightboxComponent implements OnChanges {
   @Input() image: Image | SearchResult | null = null;
   
   protected photos = inject(PhotoService);
   protected showSidebar = signal(false);
+
+  faces = signal<Face[]>([]);
+  activeFaceId = signal<number | null>(null);
+
+  ngOnChanges() {
+    if (this.image) {
+      const id = 'id' in this.image ? this.image.id : this.image.image_id;
+      this.photos.loadFacesForImage(id).then(f => this.faces.set(f));
+    } else {
+      this.faces.set([]);
+    }
+  }
+
+  getSubjectName(subjectId: number | null): string {
+    if (!subjectId) return 'Unnamed Subject';
+    const sub = this.photos.subjects().find(s => s.id === subjectId);
+    return sub?.name || 'Unnamed Subject';
+  }
+
+  setActiveFace(id: number | null) {
+    this.activeFaceId.set(id);
+  }
 
   @HostListener('window:keydown', ['$event'])
   handleKeyDown(event: KeyboardEvent) {

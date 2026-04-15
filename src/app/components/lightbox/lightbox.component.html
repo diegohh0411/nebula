@@ -23,7 +23,7 @@
           <lucide-icon name="chevron-left" size="32"></lucide-icon>
         </button>
 
-        <div class="image-container">
+        <div class="image-container" style="position: relative;">
           <img
             [src]="originalUrl(image)"
             [alt]="filename(image)"
@@ -32,6 +32,21 @@
             [style.background-image]="'url(' + thumbUrl(image) + ')'"
             style="background-size: contain; background-repeat: no-repeat; background-position: center;"
           />
+          @if (showSidebar()) {
+            @for (face of faces(); track face.id) {
+              <div 
+                class="face-overlay"
+                [class.active]="activeFaceId() === face.id"
+                [style.left.%]="face.bbox_x * 100"
+                [style.top.%]="face.bbox_y * 100"
+                [style.width.%]="face.bbox_w * 100"
+                [style.height.%]="face.bbox_h * 100"
+                (mouseenter)="setActiveFace(face.id)"
+                (mouseleave)="setActiveFace(null)">
+                <div class="face-label" *ngIf="activeFaceId() === face.id">{{ getSubjectName(face.subject_id) }}</div>
+              </div>
+            }
+          }
         </div>
 
         <button class="nav-btn next" (click)="next()" title="Next">
@@ -65,6 +80,26 @@
           <div class="meta-item">
             <label>Status</label>
             <div class="value capitalize">{{ image.embed_status }}</div>
+          </div>
+
+          <div class="meta-section">
+            <h3>People</h3>
+            @if (faces().length === 0) {
+              <div class="value">No people detected</div>
+            } @else {
+              <div class="people-list">
+                @for (face of faces(); track face.id) {
+                  <div 
+                    class="person-item"
+                    [class.active]="activeFaceId() === face.id"
+                    (mouseenter)="setActiveFace(face.id)"
+                    (mouseleave)="setActiveFace(null)">
+                    <div class="person-avatar">👤</div>
+                    <div class="person-name">{{ getSubjectName(face.subject_id) }}</div>
+                  </div>
+                }
+              </div>
+            }
           </div>
         </div>
       </div>

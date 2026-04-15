@@ -77,3 +77,45 @@
 .break-all {
   word-break: break-all;
 }
+
+.face-overlay {
+  position: absolute;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(0,0,0,0.5);
+  border-radius: 4px;
+  pointer-events: auto;
+  cursor: crosshair;
+  transition: all 0.2s ease;
+}
+.face-overlay:hover, .face-overlay.active {
+  border-color: #0071e3;
+  background: rgba(0, 113, 227, 0.2);
+  z-index: 10;
+}
+.face-label {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.meta-section { margin-top: 24px; }
+.meta-section h3 { margin-bottom: 12px; font-size: 14px; font-weight: 600; color: #fff; }
+.people-list { display: flex; flex-direction: column; gap: 8px; }
+.person-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.person-item:hover, .person-item.active { background: rgba(255, 255, 255, 0.1); }
+.person-avatar { width: 32px; height: 32px; background: #333; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+.person-name { font-size: 14px; font-weight: 500; }
