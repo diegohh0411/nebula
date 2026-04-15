@@ -42,7 +42,7 @@ import { TauriEventsService } from './services/tauri-events.service';
 })
 export class AppComponent implements OnInit, OnDestroy {
   private media = inject(MediaMatcher);
-  private photos = inject(PhotoService);
+  protected photos = inject(PhotoService);
   // Inject events service early so its constructor wires up listeners
   private _events = inject(TauriEventsService);
 
