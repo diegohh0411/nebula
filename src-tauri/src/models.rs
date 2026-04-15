@@ -69,3 +69,26 @@ pub struct SearchResult {
     pub date_file: i64,
     pub embed_status: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Subject {
+    pub id: i64,
+    pub name: Option<String>,
+    pub thumbnail_face_id: Option<i64>,
+    #[serde(rename = "type")]
+    pub subject_type: String,
+    pub added_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Face {
+    pub id: i64,
+    pub image_id: i64,
+    pub subject_id: Option<i64>,
+    pub bbox_x: f64,
+    pub bbox_y: f64,
+    pub bbox_w: f64,
+    pub bbox_h: f64,
+    pub embedding: Option<Vec<u8>>,
+    pub added_at: i64,
+}

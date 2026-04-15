@@ -2,7 +2,7 @@ use anyhow::Result;
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
 use std::path::Path;
 
-use crate::models::{EmbedStatus, Folder, FolderWithCount, Image};
+use crate::models::{EmbedStatus, Folder, FolderWithCount, Image, Face, Subject};
 
 const MIGRATIONS: &str = r#"
 CREATE TABLE IF NOT EXISTS folders (
@@ -38,6 +38,29 @@ CREATE TABLE IF NOT EXISTS embedding_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queue_scheduled ON embedding_queue(scheduled_at);
+
+CREATE TABLE IF NOT EXISTS subjects (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT,
+    thumbnail_face_id INTEGER,
+    type              TEXT NOT NULL DEFAULT 'person',
+    added_at          INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS faces (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id    INTEGER NOT NULL,
+    subject_id  INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+    bbox_x      REAL NOT NULL,
+    bbox_y      REAL NOT NULL,
+    bbox_w      REAL NOT NULL,
+    bbox_h      REAL NOT NULL,
+    embedding   BLOB,
+    added_at    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
+CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);
 "#;
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -372,4 +395,96 @@ pub async fn get_embed_counts(pool: &SqlitePool) -> Result<EmbedStatus> {
         pending: row.get("pending"),
         done: row.get("done"),
     })
+}
+
+pub async fn insert_subject(pool: &SqlitePool, name: Option<&str>, subject_type: &str) -> Result<i64> {
+    let now = chrono::Utc::now().timestamp();
+    let result = sqlx::query("INSERT INTO subjects (name, type, added_at) VALUES (?, ?, ?)")
+        .bind(name)
+        .bind(subject_type)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    Ok(result.last_insert_rowid())
+}
+
+pub async fn insert_face(
+    pool: &SqlitePool,
+    image_id: i64,
+    subject_id: Option<i64>,
+    bbox: (f64, f64, f64, f64),
+    embedding: Option<&[u8]>,
+) -> Result<i64> {
+    let now = chrono::Utc::now().timestamp();
+    let result = sqlx::query(
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(image_id)
+    .bind(subject_id)
+    .bind(bbox.0)
+    .bind(bbox.1)
+    .bind(bbox.2)
+    .bind(bbox.3)
+    .bind(embedding)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.last_insert_rowid())
+}
+
+pub async fn list_all_subjects(pool: &SqlitePool) -> Result<Vec<Subject>> {
+    let rows = sqlx::query("SELECT id, name, thumbnail_face_id, type, added_at FROM subjects ORDER BY added_at DESC")
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Subject {
+            id: r.get("id"),
+            name: r.get("name"),
+            thumbnail_face_id: r.get("thumbnail_face_id"),
+            subject_type: r.get("type"),
+            added_at: r.get("added_at"),
+        })
+        .collect())
+}
+
+pub async fn list_faces_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Face>> {
+    let rows = sqlx::query(
+        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at
+         FROM faces WHERE subject_id = ? ORDER BY added_at DESC",
+    )
+    .bind(subject_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Face {
+            id: r.get("id"),
+            image_id: r.get("image_id"),
+            subject_id: r.get("subject_id"),
+            bbox_x: r.get("bbox_x"),
+            bbox_y: r.get("bbox_y"),
+            bbox_w: r.get("bbox_w"),
+            bbox_h: r.get("bbox_h"),
+            embedding: r.get("embedding"),
+            added_at: r.get("added_at"),
+        })
+        .collect())
+}
+
+pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
+    let rows = sqlx::query(
+        "SELECT subject_id, embedding FROM faces
+         WHERE subject_id IS NOT NULL AND embedding IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get("subject_id"), r.get("embedding")))
+        .collect())
 }
