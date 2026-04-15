@@ -37,6 +37,7 @@ export class SidebarComponent {
   }
 
   protected selectFolder(id: number | null): void {
+    this.photos.currentView.set('gallery');
     this.photos.selectFolder(id);
   }
 

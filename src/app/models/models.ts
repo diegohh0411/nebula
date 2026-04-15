@@ -59,6 +59,25 @@ export interface DayGroup {
   images: (Image | SearchResult)[];
 }
 
+export interface Subject {
+  id: number;
+  name: string | null;
+  thumbnail_face_id: number | null;
+  type: string;
+  added_at: number;
+}
+
+export interface Face {
+  id: number;
+  image_id: number;
+  subject_id: number | null;
+  bbox_x: number;
+  bbox_y: number;
+  bbox_w: number;
+  bbox_h: number;
+  added_at: number;
+}
+
 /** A virtual scroll row: either a day header or a row of images */
 export type VirtualRow =
   | { type: 'header'; label: string; date: string }

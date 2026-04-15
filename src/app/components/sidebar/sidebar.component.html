@@ -9,7 +9,7 @@
     <!-- "All Photos" entry -->
     <button
       class="folder-item"
-      [class.folder-item--active]="photos.selectedFolderId() === null"
+      [class.folder-item--active]="photos.selectedFolderId() === null && photos.currentView() === 'gallery'"
       (click)="selectFolder(null)"
     >
       <span class="folder-icon">
@@ -22,6 +22,21 @@
         {{ photos.totalPhotoCount() }}
       </span>
     </button>
+
+    <button
+      class="folder-item"
+      [class.folder-item--active]="photos.currentView() === 'people'"
+      (click)="photos.currentView.set('people')"
+    >
+      <span class="folder-icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+      </span>
+      <span class="folder-name">People</span>
+    </button>
+
+    <div class="sidebar-divider"></div>
 
     <!-- Per-folder entries -->
     @for (folder of photos.folders(); track folder.id) {

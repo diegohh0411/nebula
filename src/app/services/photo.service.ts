@@ -7,6 +7,8 @@ import {
   Image,
   SearchResult,
   VirtualRow,
+  Subject,
+  Face,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -19,11 +21,13 @@ export class PhotoService {
   readonly viewportWidth = signal<number>(1000);
   readonly targetRowHeight = signal<number>(220);
   readonly folders = signal<Folder[]>([]);
+  readonly subjects = signal<Subject[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
   readonly embedStatus = signal<EmbedStatus>({ pending: 0, done: 0 });
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
+  readonly currentView = signal<'gallery' | 'people'>('gallery');
   readonly searchError = signal<string | null>(null);
   readonly apiKey = signal<string | null>(null);
   readonly showApiKeyInput = signal(false);
@@ -128,6 +132,20 @@ export class PhotoService {
   async loadFolders(): Promise<void> {
     const folders = await invoke<Folder[]>('list_folders');
     this.folders.set(folders);
+  }
+
+  async loadSubjects(): Promise<void> {
+    const subjects = await invoke<Subject[]>('list_subjects');
+    this.subjects.set(subjects);
+  }
+
+  async nameSubject(id: number, name: string | null): Promise<void> {
+    await invoke('name_subject', { id, name });
+    await this.loadSubjects();
+  }
+
+  async loadFaces(subjectId: number): Promise<Face[]> {
+    return await invoke<Face[]>('list_faces', { subjectId });
   }
 
   async addFolder(path: string): Promise<void> {

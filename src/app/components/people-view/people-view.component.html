@@ -1,0 +1,35 @@
+<div class="people-container">
+  <h1>People & Subjects</h1>
+  
+  <div class="subject-grid">
+    @for (subject of photoService.subjects(); track subject.id) {
+      <div class="subject-card">
+        <div class="face-thumbnail">
+          <!-- TODO: Actual face thumbnail from backend crop -->
+          <div class="placeholder-face">👤</div>
+        </div>
+        
+        <div class="subject-info">
+          @if (editingId === subject.id) {
+            <div class="edit-mode">
+              <input [(ngModel)]="editName" (keyup.enter)="saveEdit(subject)" (keyup.escape)="cancelEdit()" autofocus />
+              <button (click)="saveEdit(subject)">Save</button>
+              <button (click)="cancelEdit()">Cancel</button>
+            </div>
+          } @else {
+            <div class="view-mode">
+              <span class="name" [class.unnamed]="!subject.name" (click)="startEdit(subject)">
+                {{ subject.name || 'Unnamed Subject' }}
+              </span>
+              <button class="edit-btn" (click)="startEdit(subject)">✏️</button>
+            </div>
+          }
+        </div>
+      </div>
+    } @empty {
+      <div class="empty-state">
+        <p>No subjects discovered yet. Start adding photos to see people here!</p>
+      </div>
+    }
+  </div>
+</div>
