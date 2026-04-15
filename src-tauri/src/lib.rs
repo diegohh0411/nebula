@@ -83,6 +83,31 @@ pub fn run() {
                 .await;
             });
 
+            // Startup rescan: pick up images added while the app was offline
+            let pool_rescan = pool.clone();
+            let app_handle_rescan = app.handle().clone();
+            let data_dir_rescan = data_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(folders) = db::list_all_folders(&pool_rescan).await {
+                    for folder in folders {
+                        let path = PathBuf::from(&folder.path);
+                        if path.exists() {
+                            if let Err(e) = watcher::scan_folder(
+                                &pool_rescan,
+                                &app_handle_rescan,
+                                folder.id,
+                                &path,
+                                &data_dir_rescan,
+                            )
+                            .await
+                            {
+                                eprintln!("Startup rescan failed for {}: {}", folder.path, e);
+                            }
+                        }
+                    }
+                }
+            });
+
             // Spawn embedding worker
             let pool_embed = pool.clone();
             let app_handle_embed = app.handle().clone();
