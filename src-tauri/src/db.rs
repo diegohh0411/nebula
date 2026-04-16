@@ -444,7 +444,7 @@ pub async fn insert_face(
 }
 
 pub async fn list_all_subjects(pool: &SqlitePool) -> Result<Vec<Subject>> {
-    let rows = sqlx::query("SELECT id, name, thumbnail_face_id, type, added_at FROM subjects ORDER BY added_at DESC")
+    let rows = sqlx::query("SELECT id, name, thumbnail_face_id, type, added_at FROM subjects ORDER BY CASE WHEN name IS NOT NULL THEN 0 ELSE 1 END, added_at DESC")
         .fetch_all(pool)
         .await?;
 
