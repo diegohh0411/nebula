@@ -20,7 +20,7 @@ export class SearchBarComponent {
   protected query = signal('');
 
   protected onSearch(): void {
-    void this.photos.search(this.query());
+    void this.photos.searchByText(this.query());
   }
 
   protected onClear(): void {

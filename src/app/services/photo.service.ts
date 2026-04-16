@@ -28,6 +28,8 @@ export class PhotoService {
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
   readonly searchError = signal<string | null>(null);
+  readonly searchImage = signal<{ thumbnailUrl: string; type: 'library' | 'external' } | null>(null);
+  readonly searchText = signal<string>('');
   readonly apiKey = signal<string | null>(null);
   readonly showApiKeyInput = signal(false);
 
@@ -195,15 +197,17 @@ export class PhotoService {
     this.embedStatus.set(status);
   }
 
-  async search(query: string): Promise<void> {
+  async searchByText(query: string): Promise<void> {
     if (!query.trim()) {
       this.clearSearch();
       return;
     }
+    this.searchText.set(query);
+    this.searchImage.set(null);
     this.isSearching.set(true);
     this.searchError.set(null);
     try {
-      const results = await invoke<SearchResult[]>('search_images', { query });
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'text', query } });
       this.searchResults.set(results);
     } catch (e: unknown) {
       const msg =
@@ -219,10 +223,13 @@ export class PhotoService {
 
   async searchByImage(image: Image | SearchResult): Promise<void> {
     const id = 'id' in image ? image.id : image.image_id;
+    const thumbUrl = this.thumbnailUrl(image.thumbnail_path);
+    this.searchImage.set(thumbUrl ? { thumbnailUrl: thumbUrl, type: 'library' } : null);
+    this.searchText.set('');
     this.isSearching.set(true);
     this.searchError.set(null);
     try {
-      const results = await invoke<SearchResult[]>('search_similar_images', { imageId: id });
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageId', imageId: id } });
       this.searchResults.set(results);
     } catch (e: unknown) {
       this.searchError.set(typeof e === 'string' ? e : 'Visual search failed.');
@@ -232,9 +239,27 @@ export class PhotoService {
     }
   }
 
+  async searchByExternalImage(base64Data: string, mimeType: string, objectUrl: string): Promise<void> {
+    this.searchImage.set({ thumbnailUrl: objectUrl, type: 'external' });
+    this.searchText.set('');
+    this.isSearching.set(true);
+    this.searchError.set(null);
+    try {
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageBytes', data: base64Data, mimeType } });
+      this.searchResults.set(results);
+    } catch (e: unknown) {
+      this.searchError.set(typeof e === 'string' ? e : 'Image search failed.');
+      this.searchResults.set(null);
+    } finally {
+      this.isSearching.set(false);
+    }
+  }
+
   clearSearch(): void {
     this.searchResults.set(null);
     this.searchError.set(null);
+    this.searchImage.set(null);
+    this.searchText.set('');
   }
 
   selectFolder(id: number | null): void {
