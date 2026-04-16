@@ -50,16 +50,14 @@ pub async fn generate_face_crop(
 
     tokio::task::spawn_blocking(move || -> Result<()> {
         let mut img = image::open(&src_path)?;
-        let (width, height) = (img.width() as f64, img.height() as f64);
+        let (img_w, img_h) = (img.width() as f64, img.height() as f64);
 
-        // Bbox is often normalized (0.0 to 1.0), but let's check if it's absolute.
-        // Looking at face_detector.rs might help, but typical ML bboxes are normalized.
-        // Assuming normalized for now. If absolute, we don't multiply by width/height.
-        // Actually, let's check face_detector.rs if possible.
-        let x = (bbox.0 * width).max(0.0) as u32;
-        let y = (bbox.1 * height).max(0.0) as u32;
-        let w = (bbox.2 * width).min(width - x as f64) as u32;
-        let h = (bbox.3 * height).min(height - y as f64) as u32;
+        let x = (bbox.0 * img_w).max(0.0).min(img_w - 1.0) as u32;
+        let y = (bbox.1 * img_h).max(0.0).min(img_h - 1.0) as u32;
+        let max_w = img_w - x as f64;
+        let max_h = img_h - y as f64;
+        let w = (bbox.2 * img_w).min(max_w).max(1.0) as u32;
+        let h = (bbox.3 * img_h).min(max_h).max(1.0) as u32;
 
         let face = img.crop(x, y, w, h);
         let face_resized = face.thumbnail_exact(200, 200);
