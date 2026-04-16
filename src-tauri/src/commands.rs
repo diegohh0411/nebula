@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     config, db,
-    models::{EmbedStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face},
+    models::{EmbedStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
     search, thumbnail, watcher, AppState,
 };
 
@@ -292,8 +292,34 @@ pub async fn list_subjects(state: tauri::State<'_, AppState>) -> Result<Vec<Subj
 }
 
 #[tauri::command]
-pub async fn name_subject(id: i64, name: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    db::update_subject_name(&state.pool, id, name.as_deref()).await.map_err(map_err)
+pub async fn name_subject(
+    id: i64,
+    name: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<NameSubjectResult, String> {
+    let pool = &state.pool;
+
+    let duplicate_subject_id = if let Some(ref n) = name {
+        let trimmed = n.trim();
+        if !trimmed.is_empty() {
+            db::find_subject_by_name(pool, trimmed, id)
+                .await
+                .map_err(map_err)?
+                .map(|s| s.id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    db::update_subject_name(pool, id, name.as_deref())
+        .await
+        .map_err(map_err)?;
+
+    Ok(NameSubjectResult {
+        duplicate_subject_id,
+    })
 }
 
 #[tauri::command]
@@ -369,6 +395,36 @@ pub async fn recluster_faces(
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::clustering::ReclusterResult, String> {
     crate::clustering::recluster_all(&state.pool)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn get_merge_suggestions(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<MergeSuggestion>, String> {
+    db::get_merge_suggestions(&state.pool)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn merge_subjects(
+    target_id: i64,
+    source_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    db::merge_subjects(&state.pool, target_id, source_id)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn dismiss_merge_suggestion(
+    id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    db::dismiss_merge_suggestion(&state.pool, id)
         .await
         .map_err(map_err)
 }

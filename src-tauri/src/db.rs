@@ -769,3 +769,140 @@ pub async fn delete_stale_cache_entries(pool: &SqlitePool) -> Result<u64> {
         .await?;
     Ok(result.rows_affected())
 }
+
+pub async fn clear_merge_suggestions(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("DELETE FROM merge_suggestions")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn insert_merge_suggestion(
+    pool: &SqlitePool,
+    subject_id_a: i64,
+    subject_id_b: i64,
+    cross_match_count: i64,
+    total_pairs: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    let (lo, hi) = if subject_id_a < subject_id_b {
+        (subject_id_a, subject_id_b)
+    } else {
+        (subject_id_b, subject_id_a)
+    };
+    sqlx::query(
+        "INSERT OR IGNORE INTO merge_suggestions (subject_id_a, subject_id_b, cross_match_count, total_pairs, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(lo)
+    .bind(hi)
+    .bind(cross_match_count)
+    .bind(total_pairs)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_merge_suggestions(pool: &SqlitePool) -> Result<Vec<crate::models::MergeSuggestion>> {
+    let rows = sqlx::query(
+        r#"SELECT ms.id, ms.cross_match_count, ms.total_pairs,
+                  sa.id as sa_id, sa.name as sa_name, sa.thumbnail_face_id as sa_thumbnail_face_id, sa.type as sa_type, sa.added_at as sa_added_at,
+                  sb.id as sb_id, sb.name as sb_name, sb.thumbnail_face_id as sb_thumbnail_face_id, sb.type as sb_type, sb.added_at as sb_added_at
+           FROM merge_suggestions ms
+           JOIN subjects sa ON ms.subject_id_a = sa.id
+           JOIN subjects sb ON ms.subject_id_b = sb.id"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| crate::models::MergeSuggestion {
+            id: r.get("id"),
+            subject_a: crate::models::Subject {
+                id: r.get("sa_id"),
+                name: r.get("sa_name"),
+                thumbnail_face_id: r.get("sa_thumbnail_face_id"),
+                subject_type: r.get("sa_type"),
+                added_at: r.get("sa_added_at"),
+            },
+            subject_b: crate::models::Subject {
+                id: r.get("sb_id"),
+                name: r.get("sb_name"),
+                thumbnail_face_id: r.get("sb_thumbnail_face_id"),
+                subject_type: r.get("sb_type"),
+                added_at: r.get("sb_added_at"),
+            },
+            cross_match_count: r.get("cross_match_count"),
+            total_pairs: r.get("total_pairs"),
+        })
+        .collect())
+}
+
+pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -> Result<()> {
+    sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
+        .bind(target_id)
+        .bind(source_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM merge_suggestions WHERE subject_id_a = ? OR subject_id_b = ? OR subject_id_a = ? OR subject_id_b = ?")
+        .bind(target_id)
+        .bind(target_id)
+        .bind(source_id)
+        .bind(source_id)
+        .execute(pool)
+        .await?;
+
+    sqlx::query("DELETE FROM subjects WHERE id = ?")
+        .bind(source_id)
+        .execute(pool)
+        .await?;
+
+    let _ = auto_assign_missing_thumbnails(pool).await;
+    Ok(())
+}
+
+pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM merge_suggestions WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn find_subject_by_name(pool: &SqlitePool, name: &str, exclude_id: i64) -> Result<Option<Subject>> {
+    let row = sqlx::query(
+        "SELECT id, name, thumbnail_face_id, type, added_at FROM subjects WHERE name = ? COLLATE NOCASE AND id != ? LIMIT 1",
+    )
+    .bind(name)
+    .bind(exclude_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| Subject {
+        id: r.get("id"),
+        name: r.get("name"),
+        thumbnail_face_id: r.get("thumbnail_face_id"),
+        subject_type: r.get("type"),
+        added_at: r.get("added_at"),
+    }))
+}
+
+pub async fn get_faces_by_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<(i64, Vec<u8>)>> {
+    let rows = sqlx::query(
+        "SELECT id, embedding FROM faces WHERE subject_id = ? AND embedding IS NOT NULL",
+    )
+    .bind(subject_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let id: i64 = r.get("id");
+            let emb: Option<Vec<u8>> = r.get("embedding");
+            emb.map(|e| (id, e))
+        })
+        .collect())
+}
