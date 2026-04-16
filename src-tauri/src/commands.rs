@@ -92,7 +92,6 @@ pub async fn search(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SearchResult>, String> {
     let pool = &state.pool;
-    let mut final_results: Vec<SearchResult> = vec![];
 
     match query {
         SearchQuery::Text { ref query } => {
@@ -100,9 +99,10 @@ pub async fn search(
             let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
             let subject_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
 
+            let mut results = vec![];
             for image_id in &subject_image_ids {
                 if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
-                    final_results.push(SearchResult {
+                    results.push(SearchResult {
                         image_id: *image_id,
                         path: img.path,
                         thumbnail_path: img.thumbnail_path,
@@ -120,7 +120,7 @@ pub async fn search(
             };
 
             let Some(api_key) = api_key else {
-                return Ok(final_results);
+                return Ok(results);
             };
 
             let cache_key = {
@@ -132,9 +132,9 @@ pub async fn search(
             let client = Client::new();
 
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
-                crate::embedder::bytes_to_f32_vec(&cached).map_err(|e| e.to_string())?
+                crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let emb = crate::embedder::embed_text(&client, &api_key, query).await.map_err(|e| e.to_string())?;
+                let emb = crate::embedder::embed_text(&client, &api_key, query).await.map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
@@ -144,38 +144,36 @@ pub async fn search(
                 if let Ok(rag_results) = search::build_search_results(pool, scored).await {
                     for res in rag_results {
                         if !subject_image_ids.contains(&res.image_id) {
-                            final_results.push(res);
+                            results.push(res);
                         }
                     }
                 }
             }
 
             let _ = db::delete_stale_cache_entries(pool).await;
-            return Ok(final_results);
+            Ok(results)
         }
 
         SearchQuery::ImageId { image_id } => {
             let embedding_blob = db::get_image_embedding(pool, image_id)
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(map_err)?
                 .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
             let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding_blob)
-                .map_err(|e| e.to_string())?;
+                .map_err(map_err)?;
 
             let mut scored = search::search_images(pool, embedding_f32, 50)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_err)?;
             scored.retain(|(id, _)| *id != image_id);
 
-            return search::build_search_results(pool, scored)
-                .await
-                .map_err(|e| e.to_string());
+            search::build_search_results(pool, scored).await.map_err(map_err)
         }
 
         SearchQuery::ImageBytes { ref data, ref mime_type } => {
             let raw_bytes = base64::engine::general_purpose::STANDARD
                 .decode(data)
-                .map_err(|e| e.to_string())?;
+                .map_err(map_err)?;
 
             let cache_key = {
                 let mut hasher = Sha256::new();
@@ -195,11 +193,11 @@ pub async fn search(
             let client = Client::new();
 
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
-                crate::embedder::bytes_to_f32_vec(&cached).map_err(|e| e.to_string())?
+                crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
                 let emb = crate::embedder::embed_image_bytes(&client, &api_key, raw_bytes, mime_type)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb
@@ -207,14 +205,12 @@ pub async fn search(
 
             let scored = search::search_images(pool, query_embedding, 50)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(map_err)?;
 
             let _ = db::delete_stale_cache_entries(pool).await;
-            return search::build_search_results(pool, scored)
-                .await
-                .map_err(|e| e.to_string());
+            search::build_search_results(pool, scored).await.map_err(map_err)
         }
-    };
+    }
 }
 
 #[tauri::command]
@@ -307,7 +303,7 @@ pub async fn list_faces(subject_id: i64, state: tauri::State<'_, AppState>) -> R
 
 #[tauri::command]
 pub async fn list_faces_for_image(image_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
-    db::list_faces_for_image(&state.pool, image_id).await.map_err(|e| e.to_string())
+    db::list_faces_for_image(&state.pool, image_id).await.map_err(map_err)
 }
 
 #[tauri::command]
@@ -374,5 +370,5 @@ pub async fn recluster_faces(
 ) -> Result<crate::clustering::ReclusterResult, String> {
     crate::clustering::recluster_all(&state.pool)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(map_err)
 }
