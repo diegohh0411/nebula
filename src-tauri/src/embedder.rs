@@ -318,6 +318,7 @@ pub async fn run_embedding_worker(
             continue;
         }
 
+        let had_items = !batch.is_empty();
         let mut handles = vec![];
         for (queue_id, image_id, attempts) in batch {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
@@ -334,6 +335,22 @@ pub async fn run_embedding_worker(
         }
         for h in handles {
             let _ = h.await;
+        }
+
+        if had_items {
+            eprintln!("[face-cluster] Batch complete, running auto-recluster...");
+            match crate::clustering::recluster_all(&pool).await {
+                Ok(result) => {
+                    eprintln!(
+                        "[face-cluster] Recluster done: {} clusters, {} noise, {} merged, {} deleted",
+                        result.clusters, result.noise, result.merged, result.deleted
+                    );
+                    let _ = app.emit("subjects_updated", ());
+                }
+                Err(e) => {
+                    eprintln!("[face-cluster] Auto-recluster failed: {}", e);
+                }
+            }
         }
     }
 }
