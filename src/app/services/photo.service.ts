@@ -229,7 +229,7 @@ export class PhotoService {
     this.isSearching.set(true);
     this.searchError.set(null);
     try {
-      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageId', imageId: id } });
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageId', image_id: id } });
       this.searchResults.set(results);
     } catch (e: unknown) {
       this.searchError.set(typeof e === 'string' ? e : 'Visual search failed.');
@@ -245,7 +245,7 @@ export class PhotoService {
     this.isSearching.set(true);
     this.searchError.set(null);
     try {
-      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageBytes', data: base64Data, mimeType } });
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageBytes', data: base64Data, mime_type: mimeType } });
       this.searchResults.set(results);
     } catch (e: unknown) {
       this.searchError.set(typeof e === 'string' ? e : 'Image search failed.');
