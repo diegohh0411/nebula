@@ -13,7 +13,7 @@ use tauri::Emitter;
 use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}, face_detector::Detector};
 
 const CONCURRENT_WORKERS: usize = 3;
-const CLUSTERING_THRESHOLD: f32 = 0.85;
+const CLUSTERING_THRESHOLD: f32 = 0.4;
 const GEMINI_EMBED_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent";
 
@@ -153,6 +153,7 @@ async fn process_one(
     app: &AppHandle,
     client: &Client,
     detector: &Detector,
+    clustering_lock: &tokio::sync::Mutex<()>,
     queue_id: i64,
     image_id: i64,
     attempts: i32,
@@ -185,48 +186,60 @@ async fn process_one(
                         // Use ArcFace embedding from face_id locally
                         let face_emb = face_analysis.embedding;
                         
-                        // Clustering
-                        let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
-                        let mut best_subject_id = None;
-                        let mut best_score = 0.0;
+                        let (subject_id, face_id) = {
+                            let _guard = clustering_lock.lock().await;
 
-                        for (subject_id, emb_blob) in existing_subjects {
-                            if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
-                                let score = cosine_similarity(&face_emb, &emb);
-                                if score > best_score && score > CLUSTERING_THRESHOLD {
-                                    best_score = score;
-                                    best_subject_id = Some(subject_id);
+                            let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
+                            let mut best_subject_id = None;
+                            let mut best_score = 0.0;
+
+                            for (sid, emb_blob) in existing_subjects {
+                                if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
+                                    let score = cosine_similarity(&face_emb, &emb);
+                                    if score > best_score {
+                                        best_score = score;
+                                        if score > CLUSTERING_THRESHOLD {
+                                            best_subject_id = Some(sid);
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        let subject_id = if let Some(sid) = best_subject_id {
-                            Some(sid)
-                        } else {
-                            // Create new unnamed subject
-                            db::insert_subject(pool, None, "person").await.ok()
+                            if best_score > 0.0 {
+                                eprintln!(
+                                    "[face-cluster] image_id={} best_score={:.4} threshold={} matched={}",
+                                    image_id, best_score, CLUSTERING_THRESHOLD, best_subject_id.is_some()
+                                );
+                            }
+
+                            let subject_id = if let Some(sid) = best_subject_id {
+                                Some(sid)
+                            } else {
+                                db::insert_subject(pool, None, "person").await.ok()
+                            };
+
+                            let face_blob = f32_slice_to_bytes(&face_emb);
+                            let face_id = db::insert_face(
+                                pool,
+                                image_id,
+                                subject_id,
+                                (
+                                    bbox.x1 as f64,
+                                    bbox.y1 as f64,
+                                    (bbox.x2 - bbox.x1) as f64,
+                                    (bbox.y2 - bbox.y1) as f64,
+                                ),
+                                Some(&face_blob),
+                            ).await.ok();
+
+                            (subject_id, face_id)
                         };
 
-                        let face_blob = f32_slice_to_bytes(&face_emb);
-                        if let Ok(face_id) = db::insert_face(
-                            pool,
-                            image_id,
-                            subject_id,
-                            (
-                                bbox.x1 as f64,
-                                bbox.y1 as f64,
-                                (bbox.x2 - bbox.x1) as f64,
-                                (bbox.y2 - bbox.y1) as f64,
-                            ),
-                            Some(&face_blob),
-                        ).await {
-                            // Auto-select thumbnail if not set
-                            if let Some(sid) = subject_id {
-                                if let Ok(subjects) = db::list_all_subjects(pool).await {
-                                    if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
-                                        if sub.thumbnail_face_id.is_none() {
-                                            let _ = db::update_subject_thumbnail_face(pool, sid, face_id).await;
-                                        }
+                        if let (Some(sid), Some(fid)) = (subject_id, face_id) {
+                            if let Ok(subjects) = db::list_all_subjects(pool).await {
+                                if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
+                                    if sub.thumbnail_face_id.is_none() {
+                                        let _ = db::update_subject_thumbnail_face(pool, sid, fid).await;
                                     }
                                 }
                             }
@@ -263,6 +276,7 @@ pub async fn run_embedding_worker(
     api_key: Arc<Mutex<Option<String>>>,
 ) {
     let semaphore = Arc::new(Semaphore::new(CONCURRENT_WORKERS));
+    let clustering_lock = Arc::new(tokio::sync::Mutex::new(()));
     let client = Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
@@ -312,9 +326,10 @@ pub async fn run_embedding_worker(
             let client_c = client.clone();
             let key_c = key.clone();
             let detector_c = detector.clone();
+            let lock_c = clustering_lock.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_one(&pool_c, &app_c, &client_c, &detector_c, queue_id, image_id, attempts, &key_c).await;
+                process_one(&pool_c, &app_c, &client_c, &detector_c, &lock_c, queue_id, image_id, attempts, &key_c).await;
             }));
         }
         for h in handles {
