@@ -14,6 +14,7 @@ import { RouterLink } from '@angular/router';
 export class PeopleViewComponent implements OnInit {
   protected photoService = inject(PhotoService);
   protected faceCropUrls = signal<Record<number, string>>({});
+  protected reclustering = signal(false);
 
   async ngOnInit() {
     await this.photoService.loadSubjects();
@@ -38,5 +39,19 @@ export class PeopleViewComponent implements OnInit {
     }));
     
     this.faceCropUrls.set(urls);
+  }
+
+  async recluster() {
+    this.reclustering.set(true);
+    try {
+      const result = await this.photoService.reclusterFaces();
+      console.log('Recluster result:', result);
+      await this.photoService.loadSubjects();
+      await this.loadThumbnails();
+    } catch (e) {
+      console.error('Recluster failed:', e);
+    } finally {
+      this.reclustering.set(false);
+    }
   }
 }

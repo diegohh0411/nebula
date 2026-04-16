@@ -258,6 +258,10 @@ export class PhotoService {
     // The image_updated events from Rust will trigger refreshing the grid automatically
   }
 
+  async reclusterFaces(): Promise<{ clusters: number; noise: number; merged: number; deleted: number }> {
+    return await invoke<{ clusters: number; noise: number; merged: number; deleted: number }>('recluster_faces');
+  }
+
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
   thumbnailUrl(thumbPath: string | null): string | null {
     if (!thumbPath) return null;
