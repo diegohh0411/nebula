@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cache_key ON embedding_cache(cache_key);
+
+CREATE TABLE IF NOT EXISTS merge_suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    cross_match_count INTEGER NOT NULL,
+    total_pairs INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
+    CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
+    CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
+);
 "#;
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
