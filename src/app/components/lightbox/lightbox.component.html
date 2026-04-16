@@ -23,30 +23,34 @@
           <lucide-icon name="chevron-left" size="32"></lucide-icon>
         </button>
 
-        <div class="image-container" style="position: relative;">
+        <div #imgContainer class="image-container" style="position: relative;">
           <img
+            #mainImg
             [src]="originalUrl(image)"
             [alt]="filename(image)"
             class="main-image"
             [style.view-transition-name]="'photo-' + ('id' in image ? image.id : image.image_id)"
             [style.background-image]="'url(' + thumbUrl(image) + ')'"
             style="background-size: contain; background-repeat: no-repeat; background-position: center;"
+            (load)="onImageLoad()"
           />
-          @if (showSidebar()) {
+          @if (showSidebar() && faceOverlayStyles().size > 0) {
             @for (face of faces(); track face.id) {
-              <div 
-                class="face-overlay"
-                [class.active]="activeFaceId() === face.id"
-                [class.clickable]="!!face.subject_id"
-                [style.left.%]="face.bbox_x * 100"
-                [style.top.%]="face.bbox_y * 100"
-                [style.width.%]="face.bbox_w * 100"
-                [style.height.%]="face.bbox_h * 100"
-                (mouseenter)="setActiveFace(face.id)"
-                (mouseleave)="setActiveFace(null)"
-                (click)="navigateToSubject(face.subject_id)">
-                <div class="face-label" *ngIf="activeFaceId() === face.id">{{ getSubjectName(face.subject_id) }}</div>
-              </div>
+              @if (faceOverlayStyles().get(face.id); as style) {
+                <div 
+                  class="face-overlay"
+                  [class.active]="activeFaceId() === face.id"
+                  [class.clickable]="!!face.subject_id"
+                  [style.left.%]="style.left"
+                  [style.top.%]="style.top"
+                  [style.width.%]="style.width"
+                  [style.height.%]="style.height"
+                  (mouseenter)="setActiveFace(face.id)"
+                  (mouseleave)="setActiveFace(null)"
+                  (click)="navigateToSubject(face.subject_id)">
+                  <div class="face-label" *ngIf="activeFaceId() === face.id">{{ getSubjectName(face.subject_id) }}</div>
+                </div>
+              }
             }
           }
         </div>

@@ -6,6 +6,11 @@ import {
   inject,
   signal,
   OnChanges,
+  OnDestroy,
+  AfterViewInit,
+  ElementRef,
+  ViewChild,
+  computed,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
@@ -13,6 +18,13 @@ import { LucideAngularModule } from 'lucide-angular';
 import { Image, SearchResult, Face } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 import { startViewTransition } from '../../utils/view-transition';
+
+interface FaceOverlayStyle {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
 
 @Component({
   selector: 'app-lightbox',
@@ -22,15 +34,42 @@ import { startViewTransition } from '../../utils/view-transition';
   templateUrl: './lightbox.component.html',
   styleUrl: './lightbox.component.css',
 })
-export class LightboxComponent implements OnChanges {
+export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
   @Input() image: Image | SearchResult | null = null;
-  
+  @ViewChild('mainImg') imgRef?: ElementRef<HTMLImageElement>;
+  @ViewChild('imgContainer') containerRef?: ElementRef<HTMLDivElement>;
+
   protected photos = inject(PhotoService);
   protected router = inject(Router);
   protected showSidebar = signal(false);
 
   faces = signal<Face[]>([]);
   activeFaceId = signal<number | null>(null);
+
+  private naturalW = 0;
+  private naturalH = 0;
+  private containerW = 0;
+  private containerH = 0;
+  private resizeObserver?: ResizeObserver;
+
+  private imgLayout = signal<{ offsetX: number; offsetY: number; renderedW: number; renderedH: number; containerW: number; containerH: number } | null>(null);
+
+  protected faceOverlayStyles = computed(() => {
+    const layout = this.imgLayout();
+    if (!layout) return new Map<number, FaceOverlayStyle>();
+
+    const { offsetX, offsetY, renderedW, renderedH, containerW, containerH } = layout;
+    const styles = new Map<number, FaceOverlayStyle>();
+    for (const face of this.faces()) {
+      styles.set(face.id, {
+        left: ((offsetX + face.bbox_x * renderedW) / containerW) * 100,
+        top: ((offsetY + face.bbox_y * renderedH) / containerH) * 100,
+        width: (face.bbox_w * renderedW / containerW) * 100,
+        height: (face.bbox_h * renderedH / containerH) * 100,
+      });
+    }
+    return styles;
+  });
 
   ngOnChanges() {
     if (this.image) {
@@ -39,6 +78,57 @@ export class LightboxComponent implements OnChanges {
     } else {
       this.faces.set([]);
     }
+    this.recalcLayout();
+  }
+
+  ngAfterViewInit() {
+    const container = this.containerRef?.nativeElement;
+    if (container) {
+      this.containerW = container.clientWidth;
+      this.containerH = container.clientHeight;
+    }
+    this.initResizeObserver();
+    this.recalcLayout();
+  }
+
+  ngOnDestroy() {
+    this.resizeObserver?.disconnect();
+  }
+
+  protected onImageLoad() {
+    const img = this.imgRef?.nativeElement;
+    if (img) {
+      this.naturalW = img.naturalWidth;
+      this.naturalH = img.naturalHeight;
+      this.recalcLayout();
+    }
+  }
+
+  protected initResizeObserver() {
+    const container = this.containerRef?.nativeElement;
+    if (!container) return;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new ResizeObserver(() => {
+      this.containerW = container.clientWidth;
+      this.containerH = container.clientHeight;
+      this.recalcLayout();
+    });
+    this.resizeObserver.observe(container);
+  }
+
+  private recalcLayout() {
+    if (!this.naturalW || !this.naturalH || !this.containerW || !this.containerH) {
+      this.imgLayout.set(null);
+      return;
+    }
+    const scaleX = this.containerW / this.naturalW;
+    const scaleY = this.containerH / this.naturalH;
+    const scale = Math.min(scaleX, scaleY);
+    const renderedW = this.naturalW * scale;
+    const renderedH = this.naturalH * scale;
+    const offsetX = (this.containerW - renderedW) / 2;
+    const offsetY = (this.containerH - renderedH) / 2;
+    this.imgLayout.set({ offsetX, offsetY, renderedW, renderedH, containerW: this.containerW, containerH: this.containerH });
   }
 
   getSubjectName(subjectId: number | null): string {
@@ -62,7 +152,6 @@ export class LightboxComponent implements OnChanges {
     await startViewTransition(() => {
       this.photos.closeLightbox();
     });
-    // Clear after closing transition finishes to minimize tracked elements
     this.photos.transitioningImageId.set(null);
   }
 
