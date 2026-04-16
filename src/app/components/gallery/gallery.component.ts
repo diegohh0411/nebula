@@ -12,6 +12,7 @@ import {
 import { PhotoService } from '../../services/photo.service';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { LightboxComponent } from '../lightbox/lightbox.component';
+import { SearchBarComponent } from '../search-bar/search-bar.component';
 import { TimelineScrubberComponent } from '../timeline-scrubber/timeline-scrubber.component';
 import { VirtualRow } from '../../models/models';
 import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
@@ -25,6 +26,7 @@ import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
     PhotoGridComponent,
     LightboxComponent,
     TimelineScrubberComponent,
+    SearchBarComponent,
     ScrollingModule,
     CdkAutoSizeVirtualScroll,
   ],

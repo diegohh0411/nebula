@@ -520,6 +520,78 @@ pub async fn update_subject_name(pool: &SqlitePool, id: i64, name: Option<&str>)
     Ok(())
 }
 
+pub async fn update_subject_thumbnail_face(pool: &SqlitePool, subject_id: i64, face_id: i64) -> Result<()> {
+    // Validate face belongs to subject
+    let face = sqlx::query("SELECT id FROM faces WHERE id = ? AND subject_id = ?")
+        .bind(face_id)
+        .bind(subject_id)
+        .fetch_optional(pool)
+        .await?;
+
+    if face.is_none() {
+        return Err(anyhow::anyhow!("Face does not belong to subject"));
+    }
+
+    sqlx::query("UPDATE subjects SET thumbnail_face_id = ? WHERE id = ?")
+        .bind(face_id)
+        .bind(subject_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Result<Option<crate::models::SubjectDetail>> {
+    let row = sqlx::query(
+        r#"SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at,
+                  (SELECT COUNT(DISTINCT image_id) FROM faces WHERE subject_id = s.id) as photo_count,
+                  (SELECT COUNT(*) FROM faces WHERE subject_id = s.id) as face_count
+           FROM subjects s
+           WHERE s.id = ?"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| crate::models::SubjectDetail {
+        subject: Subject {
+            id: r.get("id"),
+            name: r.get("name"),
+            thumbnail_face_id: r.get("thumbnail_face_id"),
+            subject_type: r.get("type"),
+            added_at: r.get("added_at"),
+        },
+        photo_count: r.get("photo_count"),
+        face_count: r.get("face_count"),
+    }))
+}
+
+pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Image>> {
+    let rows = sqlx::query(
+        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.date_taken, i.date_file, i.thumbnail_path,
+                           i.embed_status, i.added_at, i.updated_at, i.deleted_at
+           FROM images i
+           JOIN faces f ON f.image_id = i.id
+           WHERE f.subject_id = ? AND i.deleted_at IS NULL
+           ORDER BY COALESCE(i.date_taken, i.date_file) DESC"#,
+    )
+    .bind(subject_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.iter().map(row_to_image).collect())
+}
+
+pub async fn get_largest_face_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Option<i64>> {
+    let row = sqlx::query(
+        "SELECT id FROM faces WHERE subject_id = ? ORDER BY (bbox_w * bbox_h) DESC LIMIT 1"
+    )
+    .bind(subject_id)
+    .fetch_optional(pool)
+    .await?;
+    
+    Ok(row.map(|r| r.get("id")))
+}
+
 pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Vec<Face>> {
     let rows = sqlx::query(
         "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at

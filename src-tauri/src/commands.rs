@@ -258,3 +258,61 @@ pub async fn list_faces(subject_id: i64, state: tauri::State<'_, AppState>) -> R
 pub async fn list_faces_for_image(image_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
     db::list_faces_for_image(&state.pool, image_id).await.map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn get_face_crop(face_id: i64, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let pool = &state.pool;
+    let data_dir = &state.data_dir;
+
+    let face = db::get_face_by_id(pool, face_id).await.map_err(map_err)?
+        .ok_or_else(|| "Face not found".to_string())?;
+
+    let image = db::get_image_by_id(pool, face.image_id).await.map_err(map_err)?
+        .ok_or_else(|| "Image not found".to_string())?;
+
+    let crop_path = thumbnail::face_crop_path_for(data_dir, face_id);
+    if !crop_path.exists() {
+        thumbnail::generate_face_crop(
+            std::path::PathBuf::from(&image.path),
+            crop_path.clone(),
+            (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h)
+        ).await.map_err(map_err)?;
+    }
+
+    Ok(crop_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn set_subject_thumbnail(subject_id: i64, face_id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    db::update_subject_thumbnail_face(&state.pool, subject_id, face_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn get_subject_photos(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<SearchResult>, String> {
+    let images = db::list_images_for_subject(&state.pool, subject_id).await.map_err(map_err)?;
+    Ok(images.into_iter().map(|img| SearchResult {
+        image_id: img.id,
+        path: img.path,
+        thumbnail_path: img.thumbnail_path,
+        score: 1.0, // Subjects are perfect matches
+        date_taken: img.date_taken,
+        date_file: img.date_file,
+        embed_status: img.embed_status,
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<crate::models::SubjectDetail, String> {
+    let mut detail = db::get_subject_detail_with_counts(&state.pool, subject_id).await.map_err(map_err)?
+        .ok_or_else(|| "Subject not found".to_string())?;
+
+    // Auto-select thumbnail if not set
+    if detail.subject.thumbnail_face_id.is_none() {
+        if let Ok(Some(face_id)) = db::get_largest_face_for_subject(&state.pool, subject_id).await {
+            let _ = db::update_subject_thumbnail_face(&state.pool, subject_id, face_id).await;
+            detail.subject.thumbnail_face_id = Some(face_id);
+        }
+    }
+
+    Ok(detail)
+}

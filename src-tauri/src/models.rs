@@ -92,3 +92,10 @@ pub struct Face {
     pub embedding: Option<Vec<u8>>,
     pub added_at: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubjectDetail {
+    pub subject: Subject,
+    pub photo_count: i64,
+    pub face_count: i64,
+}

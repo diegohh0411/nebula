@@ -1,0 +1,57 @@
+<div class="face-picker-container h-full flex flex-col bg-background overflow-hidden">
+  <!-- Header -->
+  <header class="px-6 py-4 border-b border-border flex items-center gap-4">
+    <button (click)="goBack()" class="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground">
+      <lucide-icon name="arrow-left" size="20"></lucide-icon>
+    </button>
+    <h1 class="text-xl font-bold tracking-tight">Choose Representative Face</h1>
+  </header>
+
+  <!-- Main content -->
+  <main class="flex-1 overflow-y-auto p-6">
+    <div class="max-w-4xl mx-auto">
+      <p class="text-muted-foreground mb-8">Select the face you want to appear on the People card.</p>
+
+      @if (isLoading()) {
+        <div class="flex justify-center items-center py-20">
+          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        </div>
+      } @else if (faceCrops().length === 0) {
+        <div class="text-center py-20 bg-muted/30 rounded-lg border-2 border-dashed border-border">
+          <p class="text-muted-foreground">No face detections yet</p>
+        </div>
+      } @else {
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          @for (item of faceCrops(); track item.face.id) {
+            <div
+              (click)="selectFace(item.face.id)"
+              class="relative group cursor-pointer aspect-square rounded-lg overflow-hidden border-2 transition-all hover:ring-2 hover:ring-primary/50"
+              [class.border-accent]="currentThumbnailFaceId() === item.face.id"
+              [class.border-transparent]="currentThumbnailFaceId() !== item.face.id"
+            >
+              <img [src]="item.url" class="w-full h-full object-cover" />
+              
+              <div
+                class="absolute top-2 right-2 p-1.5 rounded-full shadow-md transition-all"
+                [class.bg-accent]="currentThumbnailFaceId() === item.face.id"
+                [class.text-accent-foreground]="currentThumbnailFaceId() === item.face.id"
+                [class.bg-background/80]="currentThumbnailFaceId() !== item.face.id"
+                [class.text-muted-foreground]="currentThumbnailFaceId() !== item.face.id"
+              >
+                <lucide-icon
+                  [name]="'star'"
+                  [size]="14"
+                  [class.fill-current]="currentThumbnailFaceId() === item.face.id"
+                ></lucide-icon>
+              </div>
+              
+              @if (currentThumbnailFaceId() === item.face.id) {
+                <div class="absolute inset-0 ring-2 ring-accent ring-inset pointer-events-none"></div>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </main>
+</div>

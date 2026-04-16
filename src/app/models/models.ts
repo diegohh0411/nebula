@@ -78,6 +78,12 @@ export interface Face {
   added_at: number;
 }
 
+export interface SubjectDetail {
+  subject: Subject;
+  photo_count: number;
+  face_count: number;
+}
+
 /** A virtual scroll row: either a day header or a row of images */
 export type VirtualRow =
   | { type: 'header'; label: string; date: string }

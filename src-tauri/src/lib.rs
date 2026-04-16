@@ -32,6 +32,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             std::fs::create_dir_all(thumbnail::thumbnail_cache_dir(&data_dir))?;
+            std::fs::create_dir_all(thumbnail::face_crop_cache_dir(&data_dir))?;
 
             // Initialize DB
             let pool = tauri::async_runtime::block_on(db::init_db(&data_dir))?;
@@ -134,6 +135,10 @@ pub fn run() {
             commands::name_subject,
             commands::list_faces,
             commands::list_faces_for_image,
+            commands::get_face_crop,
+            commands::set_subject_thumbnail,
+            commands::get_subject_photos,
+            commands::get_subject_detail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

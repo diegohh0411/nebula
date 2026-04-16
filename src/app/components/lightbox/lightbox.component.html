@@ -37,12 +37,14 @@
               <div 
                 class="face-overlay"
                 [class.active]="activeFaceId() === face.id"
+                [class.clickable]="!!face.subject_id"
                 [style.left.%]="face.bbox_x * 100"
                 [style.top.%]="face.bbox_y * 100"
                 [style.width.%]="face.bbox_w * 100"
                 [style.height.%]="face.bbox_h * 100"
                 (mouseenter)="setActiveFace(face.id)"
-                (mouseleave)="setActiveFace(null)">
+                (mouseleave)="setActiveFace(null)"
+                (click)="navigateToSubject(face.subject_id)">
                 <div class="face-label" *ngIf="activeFaceId() === face.id">{{ getSubjectName(face.subject_id) }}</div>
               </div>
             }
@@ -92,8 +94,10 @@
                   <div 
                     class="person-item"
                     [class.active]="activeFaceId() === face.id"
+                    [class.clickable]="!!face.subject_id"
                     (mouseenter)="setActiveFace(face.id)"
-                    (mouseleave)="setActiveFace(null)">
+                    (mouseleave)="setActiveFace(null)"
+                    (click)="navigateToSubject(face.subject_id)">
                     <div class="person-avatar">👤</div>
                     <div class="person-name">{{ getSubjectName(face.subject_id) }}</div>
                   </div>

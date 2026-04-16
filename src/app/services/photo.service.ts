@@ -27,7 +27,6 @@ export class PhotoService {
   readonly embedStatus = signal<EmbedStatus>({ pending: 0, done: 0 });
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
-  readonly currentView = signal<'gallery' | 'people'>('gallery');
   readonly searchError = signal<string | null>(null);
   readonly apiKey = signal<string | null>(null);
   readonly showApiKeyInput = signal(false);
@@ -150,6 +149,22 @@ export class PhotoService {
 
   async loadFacesForImage(imageId: number): Promise<Face[]> {
     return await invoke<Face[]>('list_faces_for_image', { imageId });
+  }
+
+  async getSubjectDetail(subjectId: number): Promise<any> {
+    return await invoke('get_subject_detail', { subjectId });
+  }
+
+  async getSubjectPhotos(subjectId: number): Promise<SearchResult[]> {
+    return await invoke<SearchResult[]>('get_subject_photos', { subjectId });
+  }
+
+  async setSubjectThumbnail(subjectId: number, faceId: number): Promise<void> {
+    await invoke('set_subject_thumbnail', { subjectId, faceId });
+  }
+
+  async getFaceCrop(faceId: number): Promise<string> {
+    return await invoke<string>('get_face_crop', { faceId });
   }
 
   async addFolder(path: string): Promise<void> {

@@ -208,7 +208,7 @@ async fn process_one(
                         };
 
                         let face_blob = f32_slice_to_bytes(&face_emb);
-                        let _ = db::insert_face(
+                        if let Ok(face_id) = db::insert_face(
                             pool,
                             image_id,
                             subject_id,
@@ -219,7 +219,18 @@ async fn process_one(
                                 (bbox.y2 - bbox.y1) as f64,
                             ),
                             Some(&face_blob),
-                        ).await;
+                        ).await {
+                            // Auto-select thumbnail if not set
+                            if let Some(sid) = subject_id {
+                                if let Ok(subjects) = db::list_all_subjects(pool).await {
+                                    if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
+                                        if sub.thumbnail_face_id.is_none() {
+                                            let _ = db::update_subject_thumbnail_face(pool, sid, face_id).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

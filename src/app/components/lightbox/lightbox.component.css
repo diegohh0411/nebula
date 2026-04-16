@@ -87,6 +87,12 @@
   cursor: crosshair;
   transition: all 0.2s ease;
 }
+.face-overlay.clickable {
+  cursor: pointer;
+}
+.clickable {
+  cursor: pointer;
+}
 .face-overlay:hover, .face-overlay.active {
   border-color: #0071e3;
   background: rgba(0, 113, 227, 0.2);

@@ -1,44 +1,42 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
 import { Subject } from '../../models/models';
-import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 
 @Component({
   selector: 'app-people-view',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, RouterLink],
   templateUrl: './people-view.component.html',
   styleUrl: './people-view.component.css'
 })
 export class PeopleViewComponent implements OnInit {
   protected photoService = inject(PhotoService);
-  editingId: number | null = null;
-  editName: string = '';
+  protected faceCropUrls = signal<Record<number, string>>({});
 
-  ngOnInit() {
-    void this.photoService.loadSubjects();
+  async ngOnInit() {
+    await this.photoService.loadSubjects();
+    void this.loadThumbnails();
   }
 
-  startEdit(subject: Subject) {
-    this.editingId = subject.id;
-    this.editName = subject.name || '';
-  }
-
-  async saveEdit(subject: Subject) {
-    if (this.editingId === subject.id) {
-      await this.photoService.nameSubject(subject.id, this.editName);
-      this.editingId = null;
-    }
-  }
-
-  cancelEdit() {
-    this.editingId = null;
-  }
-
-  async searchPerson(subject: Subject) {
-    if (!subject.name) return; // Cannot search unnamed subjects via text yet
-    this.photoService.currentView.set('gallery');
-    await this.photoService.search(subject.name);
+  private async loadThumbnails() {
+    const subjects = this.photoService.subjects();
+    const urls: Record<number, string> = {};
+    
+    // Load crops in parallel (with some concurrency limit if needed, but here simple parallel is fine for now)
+    await Promise.all(subjects.map(async (s) => {
+      if (s.thumbnail_face_id) {
+        try {
+          const path = await this.photoService.getFaceCrop(s.thumbnail_face_id);
+          const url = this.photoService.thumbnailUrl(path);
+          if (url) urls[s.id] = url;
+        } catch (e) {
+          console.error(`Failed to load thumbnail for subject ${s.id}`, e);
+        }
+      }
+    }));
+    
+    this.faceCropUrls.set(urls);
   }
 }

@@ -8,6 +8,7 @@ import {
   OnChanges,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
 import { Image, SearchResult, Face } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
@@ -25,6 +26,7 @@ export class LightboxComponent implements OnChanges {
   @Input() image: Image | SearchResult | null = null;
   
   protected photos = inject(PhotoService);
+  protected router = inject(Router);
   protected showSidebar = signal(false);
 
   faces = signal<Face[]>([]);
@@ -62,6 +64,12 @@ export class LightboxComponent implements OnChanges {
     });
     // Clear after closing transition finishes to minimize tracked elements
     this.photos.transitioningImageId.set(null);
+  }
+
+  async navigateToSubject(subjectId: number | null) {
+    if (!subjectId) return;
+    await this.close();
+    void this.router.navigate(['/subject', subjectId]);
   }
 
   async next() {
