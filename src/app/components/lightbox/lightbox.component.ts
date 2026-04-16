@@ -46,10 +46,6 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
   faces = signal<Face[]>([]);
   activeFaceId = signal<number | null>(null);
 
-  private naturalW = 0;
-  private naturalH = 0;
-  private containerW = 0;
-  private containerH = 0;
   private resizeObserver?: ResizeObserver;
 
   private imgLayout = signal<{ offsetX: number; offsetY: number; renderedW: number; renderedH: number; containerW: number; containerH: number } | null>(null);
@@ -78,17 +74,11 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
     } else {
       this.faces.set([]);
     }
-    this.recalcLayout();
+    this.imgLayout.set(null);
   }
 
   ngAfterViewInit() {
-    const container = this.containerRef?.nativeElement;
-    if (container) {
-      this.containerW = container.clientWidth;
-      this.containerH = container.clientHeight;
-    }
-    this.initResizeObserver();
-    this.recalcLayout();
+    this.tryInitResizeObserver();
   }
 
   ngOnDestroy() {
@@ -96,39 +86,34 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
   }
 
   protected onImageLoad() {
-    const img = this.imgRef?.nativeElement;
-    if (img) {
-      this.naturalW = img.naturalWidth;
-      this.naturalH = img.naturalHeight;
-      this.recalcLayout();
-    }
+    this.updateLayoutFromDOM();
+    this.tryInitResizeObserver();
   }
 
-  protected initResizeObserver() {
+  private tryInitResizeObserver() {
     const container = this.containerRef?.nativeElement;
-    if (!container) return;
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = new ResizeObserver(() => {
-      this.containerW = container.clientWidth;
-      this.containerH = container.clientHeight;
-      this.recalcLayout();
-    });
+    if (!container || this.resizeObserver) return;
+    this.resizeObserver = new ResizeObserver(() => this.updateLayoutFromDOM());
     this.resizeObserver.observe(container);
   }
 
-  private recalcLayout() {
-    if (!this.naturalW || !this.naturalH || !this.containerW || !this.containerH) {
+  private updateLayoutFromDOM() {
+    const img = this.imgRef?.nativeElement;
+    const container = this.containerRef?.nativeElement;
+    if (!img || !container) {
       this.imgLayout.set(null);
       return;
     }
-    const scaleX = this.containerW / this.naturalW;
-    const scaleY = this.containerH / this.naturalH;
-    const scale = Math.min(scaleX, scaleY);
-    const renderedW = this.naturalW * scale;
-    const renderedH = this.naturalH * scale;
-    const offsetX = (this.containerW - renderedW) / 2;
-    const offsetY = (this.containerH - renderedH) / 2;
-    this.imgLayout.set({ offsetX, offsetY, renderedW, renderedH, containerW: this.containerW, containerH: this.containerH });
+    const imgRect = img.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    this.imgLayout.set({
+      offsetX: imgRect.left - containerRect.left,
+      offsetY: imgRect.top - containerRect.top,
+      renderedW: imgRect.width,
+      renderedH: imgRect.height,
+      containerW: containerRect.width,
+      containerH: containerRect.height,
+    });
   }
 
   getSubjectName(subjectId: number | null): string {
