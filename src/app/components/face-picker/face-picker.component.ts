@@ -51,15 +51,12 @@ export class FacePickerComponent implements OnInit {
       this.currentThumbnailFaceId.set(detail.subject.thumbnail_face_id);
 
       const faces = await this.photos.loadFaces(id);
-      const crops: FaceCrop[] = [];
-      
-      for (const face of faces) {
-        const path = await this.photos.getFaceCrop(face.id);
-        crops.push({
-          face,
-          url: this.photos.thumbnailUrl(path) || '',
-        });
-      }
+      const crops = await Promise.all(
+        faces.map(async (face) => {
+          const path = await this.photos.getFaceCrop(face.id);
+          return { face, url: this.photos.thumbnailUrl(path) || '' };
+        })
+      );
       this.faceCrops.set(crops);
     } catch (e) {
       console.error('Failed to load face crops', e);
