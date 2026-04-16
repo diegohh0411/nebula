@@ -205,6 +205,7 @@ export class PhotoService {
       this.clearSearch();
       return;
     }
+    this.revokeExternalImage();
     this.searchText.set(query);
     this.searchImage.set(null);
     this.isSearching.set(true);
@@ -227,6 +228,7 @@ export class PhotoService {
   async searchByImage(image: Image | SearchResult): Promise<void> {
     const id = 'id' in image ? image.id : image.image_id;
     const thumbUrl = this.thumbnailUrl(image.thumbnail_path);
+    this.revokeExternalImage();
     this.searchImage.set(thumbUrl ? { thumbnailUrl: thumbUrl, type: 'library' } : null);
     this.searchText.set('');
     this.isSearching.set(true);
@@ -243,6 +245,7 @@ export class PhotoService {
   }
 
   async searchByExternalImage(base64Data: string, mimeType: string, objectUrl: string): Promise<void> {
+    this.revokeExternalImage();
     this.searchImage.set({ thumbnailUrl: objectUrl, type: 'external' });
     this.searchText.set('');
     this.isSearching.set(true);
@@ -259,6 +262,7 @@ export class PhotoService {
   }
 
   clearSearch(): void {
+    this.revokeExternalImage();
     this.searchResults.set(null);
     this.searchError.set(null);
     this.searchImage.set(null);
@@ -301,6 +305,13 @@ export class PhotoService {
 
   async dismissMergeSuggestion(id: number): Promise<void> {
     await invoke('dismiss_merge_suggestion', { id });
+  }
+
+  private revokeExternalImage(): void {
+    const img = this.searchImage();
+    if (img?.type === 'external' && img.thumbnailUrl) {
+      URL.revokeObjectURL(img.thumbnailUrl);
+    }
   }
 
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
