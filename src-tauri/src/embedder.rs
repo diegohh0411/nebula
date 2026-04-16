@@ -151,7 +151,7 @@ async fn process_one(
     pool: &SqlitePool,
     app: &AppHandle,
     client: &Client,
-    detector: &Detector,
+    detector: Option<&Detector>,
     clustering_lock: &tokio::sync::Mutex<()>,
     queue_id: i64,
     image_id: i64,
@@ -172,73 +172,75 @@ async fn process_one(
             }
 
             // --- Face Detection ---
-            let img_res = tokio::task::spawn_blocking({
-                let path = image.path.clone();
-                move || image::open(path)
-            }).await;
+            if let Some(detector) = detector {
+                let img_res = tokio::task::spawn_blocking({
+                    let path = image.path.clone();
+                    move || image::open(path)
+                }).await;
 
-            if let Ok(Ok(dynamic_img)) = img_res {
-                if let Ok(faces) = detector.analyze(&dynamic_img) {
-                    for face_analysis in faces {
-                        let bbox = face_analysis.detection.bbox;
-                        
-                        // Use ArcFace embedding from face_id locally
-                        let face_emb = face_analysis.embedding;
-                        
-                        let (subject_id, face_id) = {
-                            let _guard = clustering_lock.lock().await;
+                if let Ok(Ok(dynamic_img)) = img_res {
+                    if let Ok(faces) = detector.analyze(&dynamic_img) {
+                        for face_analysis in faces {
+                            let bbox = face_analysis.detection.bbox;
+                            
+                            // Use ArcFace embedding from face_id locally
+                            let face_emb = face_analysis.embedding;
+                            
+                            let (subject_id, face_id) = {
+                                let _guard = clustering_lock.lock().await;
 
-                            let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
-                            let mut best_subject_id = None;
-                            let mut best_score = 0.0;
+                                let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
+                                let mut best_subject_id = None;
+                                let mut best_score = 0.0;
 
-                            for (sid, emb_blob) in existing_subjects {
-                                if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
-                                    let score = cosine_similarity(&face_emb, &emb);
-                                    if score > best_score {
-                                        best_score = score;
-                                        if score > CLUSTERING_THRESHOLD {
-                                            best_subject_id = Some(sid);
+                                for (sid, emb_blob) in existing_subjects {
+                                    if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
+                                        let score = cosine_similarity(&face_emb, &emb);
+                                        if score > best_score {
+                                            best_score = score;
+                                            if score > CLUSTERING_THRESHOLD {
+                                                best_subject_id = Some(sid);
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            if best_score > 0.0 {
-                                eprintln!(
-                                    "[face-cluster] image_id={} best_score={:.4} threshold={} matched={}",
-                                    image_id, best_score, CLUSTERING_THRESHOLD, best_subject_id.is_some()
-                                );
-                            }
+                                if best_score > 0.0 {
+                                    eprintln!(
+                                        "[face-cluster] image_id={} best_score={:.4} threshold={} matched={}",
+                                        image_id, best_score, CLUSTERING_THRESHOLD, best_subject_id.is_some()
+                                    );
+                                }
 
-                            let subject_id = if let Some(sid) = best_subject_id {
-                                Some(sid)
-                            } else {
-                                db::insert_subject(pool, None, "person").await.ok()
+                                let subject_id = if let Some(sid) = best_subject_id {
+                                    Some(sid)
+                                } else {
+                                    db::insert_subject(pool, None, "person").await.ok()
+                                };
+
+                                let face_blob = f32_slice_to_bytes(&face_emb);
+                                let face_id = db::insert_face(
+                                    pool,
+                                    image_id,
+                                    subject_id,
+                                    (
+                                        bbox.x1 as f64,
+                                        bbox.y1 as f64,
+                                        (bbox.x2 - bbox.x1) as f64,
+                                        (bbox.y2 - bbox.y1) as f64,
+                                    ),
+                                    Some(&face_blob),
+                                ).await.ok();
+
+                                (subject_id, face_id)
                             };
 
-                            let face_blob = f32_slice_to_bytes(&face_emb);
-                            let face_id = db::insert_face(
-                                pool,
-                                image_id,
-                                subject_id,
-                                (
-                                    bbox.x1 as f64,
-                                    bbox.y1 as f64,
-                                    (bbox.x2 - bbox.x1) as f64,
-                                    (bbox.y2 - bbox.y1) as f64,
-                                ),
-                                Some(&face_blob),
-                            ).await.ok();
-
-                            (subject_id, face_id)
-                        };
-
-                        if let (Some(sid), Some(fid)) = (subject_id, face_id) {
-                            if let Ok(subjects) = db::list_all_subjects(pool).await {
-                                if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
-                                    if sub.thumbnail_face_id.is_none() {
-                                        let _ = db::update_subject_thumbnail_face(pool, sid, fid).await;
+                            if let (Some(sid), Some(fid)) = (subject_id, face_id) {
+                                if let Ok(subjects) = db::list_all_subjects(pool).await {
+                                    if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
+                                        if sub.thumbnail_face_id.is_none() {
+                                            let _ = db::update_subject_thumbnail_face(pool, sid, fid).await;
+                                        }
                                     }
                                 }
                             }
@@ -283,11 +285,10 @@ pub async fn run_embedding_worker(
 
     // Initialize face detector
     let detector = match Detector::new().await {
-        Ok(d) => Arc::new(d),
+        Ok(d) => Some(Arc::new(d)),
         Err(e) => {
             eprintln!("Failed to initialize face detector: {}", e);
-            // We can still run without face detection if it fails to init
-            return;
+            None
         }
     };
 
@@ -329,7 +330,7 @@ pub async fn run_embedding_worker(
             let lock_c = clustering_lock.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_one(&pool_c, &app_c, &client_c, &detector_c, &lock_c, queue_id, image_id, attempts, &key_c).await;
+                process_one(&pool_c, &app_c, &client_c, detector_c.as_deref(), &lock_c, queue_id, image_id, attempts, &key_c).await;
             }));
         }
         for h in handles {
