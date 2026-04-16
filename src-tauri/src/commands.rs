@@ -316,3 +316,12 @@ pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppStat
 
     Ok(detail)
 }
+
+#[tauri::command]
+pub async fn recluster_faces(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::clustering::ReclusterResult, String> {
+    crate::clustering::recluster_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())
+}

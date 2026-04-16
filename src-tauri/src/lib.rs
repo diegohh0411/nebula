@@ -140,6 +140,7 @@ pub fn run() {
             commands::set_subject_thumbnail,
             commands::get_subject_photos,
             commands::get_subject_detail,
+            commands::recluster_faces,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
