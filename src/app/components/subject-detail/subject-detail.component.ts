@@ -7,9 +7,9 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule, Location } from '@angular/common';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
-import { SearchResult, VirtualRow, SubjectDetail } from '../../models/models';
+import { SearchResult, VirtualRow, SubjectDetail, MergeSuggestion } from '../../models/models';
 import { LucideAngularModule } from 'lucide-angular';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { FormsModule } from '@angular/forms';
@@ -34,6 +34,7 @@ import { LightboxComponent } from '../lightbox/lightbox.component';
 export class SubjectDetailComponent implements OnInit {
   private route = inject(ActivatedRoute);
   private location = inject(Location);
+  private router = inject(Router);
   protected photos = inject(PhotoService);
 
   protected subjectId = signal<number | null>(null);
@@ -45,13 +46,18 @@ export class SubjectDetailComponent implements OnInit {
   protected editedName = signal('');
   protected isMenuOpen = signal(false);
 
+  protected similarSubjects = signal<MergeSuggestion[]>([]);
+  protected similarCropUrls = signal<Record<number, string>>({});
+  protected showNameConflict = signal(false);
+  protected conflictingSubjectId = signal<number | null>(null);
+
   protected readonly virtualRows = computed<VirtualRow[]>(() => {
     const images = this.subjectPhotos();
     const width = this.photos.viewportWidth();
-    const targetHeight = this.photos.targetRowHeight();
-    
+    const targetRowHeight = this.photos.targetRowHeight();
+
     const rows: VirtualRow[] = [];
-    const justifiedRows = buildJustifiedRows(images, width, targetHeight, 4);
+    const justifiedRows = buildJustifiedRows(images, width, targetRowHeight, 4);
     for (const row of justifiedRows) {
       rows.push({ type: 'row', images: row.images, rowHeight: row.rowHeight });
     }
@@ -81,11 +87,44 @@ export class SubjectDetailComponent implements OnInit {
 
       const photos = await this.photos.getSubjectPhotos(id);
       this.subjectPhotos.set(photos);
+
+      void this.loadSimilarSubjects(id);
     } catch (e) {
       console.error('Failed to load subject detail', e);
-      // Fallback or navigate back
       this.location.back();
     }
+  }
+
+  private async loadSimilarSubjects(id: number) {
+    try {
+      const all = await this.photos.getMergeSuggestions();
+      const related = all.filter(
+        (s) => s.subject_a.id === id || s.subject_b.id === id
+      );
+      this.similarSubjects.set(related);
+      void this.loadSimilarCrops(related);
+    } catch (e) {
+      console.error('Failed to load similar subjects', e);
+    }
+  }
+
+  private async loadSimilarCrops(suggestions: MergeSuggestion[]) {
+    const ids = new Set<number>();
+    for (const s of suggestions) {
+      if (s.subject_a.thumbnail_face_id) ids.add(s.subject_a.thumbnail_face_id);
+      if (s.subject_b.thumbnail_face_id) ids.add(s.subject_b.thumbnail_face_id);
+    }
+    const urls: Record<number, string> = {};
+    await Promise.all(
+      [...ids].map(async (faceId) => {
+        try {
+          const path = await this.photos.getFaceCrop(faceId);
+          const url = this.photos.thumbnailUrl(path);
+          if (url) urls[faceId] = url;
+        } catch {}
+      })
+    );
+    this.similarCropUrls.set(urls);
   }
 
   protected goBack() {
@@ -105,17 +144,68 @@ export class SubjectDetailComponent implements OnInit {
     const id = this.subjectId();
     const name = this.editedName().trim();
     if (id !== null) {
-      await this.photos.nameSubject(id, name || null);
-      this.detail.update(d => {
+      const result = await this.photos.nameSubject(id, name || null);
+      this.detail.update((d) => {
         if (d) d.subject.name = name || null;
         return d;
       });
       this.isEditingName.set(false);
+
+      if (result.duplicate_subject_id) {
+        this.conflictingSubjectId.set(result.duplicate_subject_id);
+        this.showNameConflict.set(true);
+      }
     }
   }
 
+  protected async confirmMerge() {
+    const id = this.subjectId();
+    const conflictId = this.conflictingSubjectId();
+    if (id !== null && conflictId !== null) {
+      await this.photos.mergeSubjects(id, conflictId);
+      this.showNameConflict.set(false);
+      this.conflictingSubjectId.set(null);
+      this.router.navigate(['/subject', id]);
+    }
+  }
+
+  protected cancelMerge() {
+    this.showNameConflict.set(false);
+    this.conflictingSubjectId.set(null);
+  }
+
+  protected async mergeSimilar(suggestion: MergeSuggestion) {
+    const id = this.subjectId();
+    if (id === null) return;
+    const sourceId =
+      suggestion.subject_a.id === id
+        ? suggestion.subject_b.id
+        : suggestion.subject_a.id;
+    await this.photos.mergeSubjects(id, sourceId);
+    void this.loadData(id);
+  }
+
+  protected async dismissSimilar(suggestion: MergeSuggestion) {
+    await this.photos.dismissMergeSuggestion(suggestion.id);
+    this.similarSubjects.update((list) =>
+      list.filter((s) => s.id !== suggestion.id)
+    );
+  }
+
+  protected getOtherSubject(suggestion: MergeSuggestion) {
+    const id = this.subjectId();
+    return suggestion.subject_a.id === id
+      ? suggestion.subject_b
+      : suggestion.subject_a;
+  }
+
+  protected getSimilarThumbUrl(subject: { thumbnail_face_id: number | null }): string | null {
+    if (!subject.thumbnail_face_id) return null;
+    return this.similarCropUrls()[subject.thumbnail_face_id] ?? null;
+  }
+
   protected toggleMenu() {
-    this.isMenuOpen.update(v => !v);
+    this.isMenuOpen.update((v) => !v);
   }
 
   protected closeMenu() {
