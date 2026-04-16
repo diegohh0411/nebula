@@ -84,6 +84,18 @@ export interface SubjectDetail {
   face_count: number;
 }
 
+export interface MergeSuggestion {
+  id: number;
+  subject_a: Subject;
+  subject_b: Subject;
+  cross_match_count: number;
+  total_pairs: number;
+}
+
+export interface NameSubjectResult {
+  duplicate_subject_id: number | null;
+}
+
 /** A virtual scroll row: either a day header or a row of images */
 export type VirtualRow =
   | { type: 'header'; label: string; date: string }

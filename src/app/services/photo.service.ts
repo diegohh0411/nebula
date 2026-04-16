@@ -9,6 +9,8 @@ import {
   VirtualRow,
   Subject,
   Face,
+  MergeSuggestion,
+  NameSubjectResult,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -140,9 +142,10 @@ export class PhotoService {
     this.subjects.set(subjects);
   }
 
-  async nameSubject(id: number, name: string | null): Promise<void> {
-    await invoke('name_subject', { id, name });
+  async nameSubject(id: number, name: string | null): Promise<NameSubjectResult> {
+    const result = await invoke<NameSubjectResult>('name_subject', { id, name });
     await this.loadSubjects();
+    return result;
   }
 
   async loadFaces(subjectId: number): Promise<Face[]> {
@@ -285,6 +288,19 @@ export class PhotoService {
 
   async reclusterFaces(): Promise<{ clusters: number; noise: number; merged: number; deleted: number }> {
     return await invoke<{ clusters: number; noise: number; merged: number; deleted: number }>('recluster_faces');
+  }
+
+  async getMergeSuggestions(): Promise<MergeSuggestion[]> {
+    return await invoke<MergeSuggestion[]>('get_merge_suggestions');
+  }
+
+  async mergeSubjects(targetId: number, sourceId: number): Promise<void> {
+    await invoke('merge_subjects', { targetId, sourceId });
+    await this.loadSubjects();
+  }
+
+  async dismissMergeSuggestion(id: number): Promise<void> {
+    await invoke('dismiss_merge_suggestion', { id });
   }
 
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
