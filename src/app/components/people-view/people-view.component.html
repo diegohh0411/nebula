@@ -9,7 +9,61 @@
       {{ reclustering() ? 'Clustering...' : 'Re-cluster' }}
     </button>
   </div>
-  
+
+  @if (mergeSuggestions().length > 0) {
+    <div class="mb-8 p-4 rounded-lg border border-accent/30 bg-accent/5">
+      <h2 class="text-lg font-semibold mb-3">Possible Duplicates</h2>
+      <div class="flex flex-col gap-3">
+        @for (suggestion of mergeSuggestions(); track suggestion.id) {
+          <div class="flex items-center gap-4 p-3 rounded-md bg-background border border-border">
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <div class="w-12 h-12 rounded-full overflow-hidden border border-border bg-muted flex items-center justify-center shrink-0">
+                  @if (getThumbUrl(suggestion.subject_a)) {
+                    <img [src]="getThumbUrl(suggestion.subject_a)" alt="" class="w-full h-full object-cover" />
+                  } @else {
+                    <span class="text-lg text-muted-foreground">👤</span>
+                  }
+                </div>
+                <div class="w-12 h-12 rounded-full overflow-hidden border border-border bg-muted flex items-center justify-center shrink-0">
+                  @if (getThumbUrl(suggestion.subject_b)) {
+                    <img [src]="getThumbUrl(suggestion.subject_b)" alt="" class="w-full h-full object-cover" />
+                  } @else {
+                    <span class="text-lg text-muted-foreground">👤</span>
+                  }
+                </div>
+              </div>
+              <div class="min-w-0">
+                <div class="font-medium truncate">
+                  {{ suggestion.subject_a.name || 'Unnamed' }}
+                  &amp;
+                  {{ suggestion.subject_b.name || 'Unnamed' }}
+                </div>
+                <div class="text-xs text-muted-foreground">
+                  {{ suggestion.cross_match_count }} similar face pairs
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button
+                class="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                (click)="merge(suggestion)"
+              >
+                Merge
+              </button>
+              <button
+                class="px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+                (click)="dismiss(suggestion)"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+
   <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
     @for (subject of photoService.subjects(); track subject.id) {
       <a class="group cursor-pointer flex flex-col items-center gap-3 transition-transform hover:scale-105" [routerLink]="['/subject', subject.id]">
@@ -20,7 +74,7 @@
             <span class="text-4xl text-muted-foreground">👤</span>
           }
         </div>
-        
+
         <div class="text-center">
           <span class="font-medium block" [class.text-muted-foreground]="!subject.name">
             {{ subject.name || 'Unnamed' }}
