@@ -11,6 +11,7 @@ import {
   Face,
   MergeSuggestion,
   NameSubjectResult,
+  SubjectDetail,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -156,8 +157,8 @@ export class PhotoService {
     return await invoke<Face[]>('list_faces_for_image', { imageId });
   }
 
-  async getSubjectDetail(subjectId: number): Promise<any> {
-    return await invoke('get_subject_detail', { subjectId });
+  async getSubjectDetail(subjectId: number): Promise<SubjectDetail> {
+    return await invoke<SubjectDetail>('get_subject_detail', { subjectId });
   }
 
   async getSubjectPhotos(subjectId: number): Promise<SearchResult[]> {
