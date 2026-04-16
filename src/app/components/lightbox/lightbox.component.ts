@@ -71,6 +71,9 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
     if (this.image) {
       const id = 'id' in this.image ? this.image.id : this.image.image_id;
       this.photos.loadFacesForImage(id).then(f => this.faces.set(f));
+      if (this.photos.subjects().length === 0) {
+        void this.photos.loadSubjects();
+      }
     } else {
       this.faces.set([]);
     }
