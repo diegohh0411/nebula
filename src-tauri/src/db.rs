@@ -657,3 +657,55 @@ pub async fn get_image_ids_for_subjects(pool: &SqlitePool, subject_ids: &[i64]) 
     let rows = query.fetch_all(pool).await?;
     Ok(rows.into_iter().map(|r| r.get("image_id")).collect())
 }
+
+pub async fn get_all_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Option<i64>, Vec<u8>)>> {
+    let rows = sqlx::query(
+        "SELECT id, subject_id, embedding FROM faces WHERE embedding IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let id: i64 = r.get("id");
+            let subject_id: Option<i64> = r.get("subject_id");
+            let emb: Option<Vec<u8>> = r.get("embedding");
+            emb.map(|e| (id, subject_id, e))
+        })
+        .collect())
+}
+
+pub async fn update_face_subject(pool: &SqlitePool, face_id: i64, subject_id: Option<i64>) -> Result<()> {
+    sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
+        .bind(subject_id)
+        .bind(face_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_subjects_with_no_faces(pool: &SqlitePool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM subjects WHERE id NOT IN (SELECT DISTINCT subject_id FROM faces WHERE subject_id IS NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+pub async fn auto_assign_missing_thumbnails(pool: &SqlitePool) -> Result<()> {
+    let rows = sqlx::query(
+        "SELECT s.id FROM subjects s WHERE s.thumbnail_face_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for row in &rows {
+        let subject_id: i64 = row.get("id");
+        if let Ok(Some(face_id)) = get_largest_face_for_subject(pool, subject_id).await {
+            let _ = update_subject_thumbnail_face(pool, subject_id, face_id).await;
+        }
+    }
+    Ok(())
+}

@@ -1,3 +1,4 @@
+mod clustering;
 mod commands;
 mod config;
 mod db;
