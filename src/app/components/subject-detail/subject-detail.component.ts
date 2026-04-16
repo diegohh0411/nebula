@@ -45,6 +45,7 @@ export class SubjectDetailComponent implements OnInit {
   protected isEditingName = signal(false);
   protected editedName = signal('');
   protected isMenuOpen = signal(false);
+  protected isSavingName = signal(false);
 
   protected similarSubjects = signal<MergeSuggestion[]>([]);
   protected similarCropUrls = signal<Record<number, string>>({});
@@ -141,19 +142,25 @@ export class SubjectDetailComponent implements OnInit {
   }
 
   protected async saveName() {
+    if (this.isSavingName() || !this.isEditingName()) return;
     const id = this.subjectId();
     const name = this.editedName().trim();
     if (id !== null) {
-      const result = await this.photos.nameSubject(id, name || null);
-      this.detail.update((d) => {
-        if (d) d.subject.name = name || null;
-        return d;
-      });
-      this.isEditingName.set(false);
+      this.isSavingName.set(true);
+      try {
+        const result = await this.photos.nameSubject(id, name || null);
+        this.detail.update((d) => {
+          if (d) d.subject.name = name || null;
+          return d;
+        });
+        this.isEditingName.set(false);
 
-      if (result.duplicate_subject_id) {
-        this.conflictingSubjectId.set(result.duplicate_subject_id);
-        this.showNameConflict.set(true);
+        if (result.duplicate_subject_id) {
+          this.conflictingSubjectId.set(result.duplicate_subject_id);
+          this.showNameConflict.set(true);
+        }
+      } finally {
+        this.isSavingName.set(false);
       }
     }
   }
