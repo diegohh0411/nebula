@@ -99,3 +99,11 @@ pub struct SubjectDetail {
     pub photo_count: i64,
     pub face_count: i64,
 }
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SearchQuery {
+    Text { query: String },
+    ImageId { image_id: i64 },
+    ImageBytes { data: String, mime_type: String },
+}

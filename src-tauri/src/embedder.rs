@@ -125,8 +125,7 @@ async fn embed_image(client: &Client, api_key: &str, image_path: &str) -> Result
     Ok(resp.embedding.values)
 }
 
-#[allow(dead_code)]
-async fn embed_image_bytes(client: &Client, api_key: &str, bytes: Vec<u8>, mime: &str) -> Result<Vec<f32>> {
+pub async fn embed_image_bytes(client: &Client, api_key: &str, bytes: Vec<u8>, mime: &str) -> Result<Vec<f32>> {
     let b64 = BASE64.encode(&bytes);
 
     let body = serde_json::json!({

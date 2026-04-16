@@ -1,9 +1,11 @@
+use base64::Engine;
 use reqwest::Client;
+use sha2::{Sha256, Digest};
 use tauri::{AppHandle, Emitter};
 
 use crate::{
     config, db,
-    models::{EmbedStatus, FolderWithCount, Image, SearchResult, Subject, Face},
+    models::{EmbedStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face},
     search, thumbnail, watcher, AppState,
 };
 
@@ -85,43 +87,59 @@ pub async fn list_images(
 }
 
 #[tauri::command]
-pub async fn search_images(
-    query: String,
+pub async fn search(
+    query: SearchQuery,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SearchResult>, String> {
     let pool = &state.pool;
+    let mut final_results: Vec<SearchResult> = vec![];
 
-    // 1. Fuzzy Subject Search
-    let matched_subjects = db::search_subjects_by_name(pool, &query).await.unwrap_or_default();
-    let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
-    let subject_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+    match query {
+        SearchQuery::Text { ref query } => {
+            let matched_subjects = db::search_subjects_by_name(pool, query).await.unwrap_or_default();
+            let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
+            let subject_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
 
-    let mut final_results = vec![];
-    
-    // Map explicit subject matches to SearchResult with a high score (1.0)
-    for image_id in &subject_image_ids {
-        if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
-            final_results.push(SearchResult {
-                image_id: *image_id,
-                path: img.path,
-                thumbnail_path: img.thumbnail_path,
-                score: 1.0,
-                date_taken: img.date_taken,
-                date_file: img.date_file,
-                embed_status: img.embed_status,
-            });
-        }
-    }
+            for image_id in &subject_image_ids {
+                if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
+                    final_results.push(SearchResult {
+                        image_id: *image_id,
+                        path: img.path,
+                        thumbnail_path: img.thumbnail_path,
+                        score: 1.0,
+                        date_taken: img.date_taken,
+                        date_file: img.date_file,
+                        embed_status: img.embed_status,
+                    });
+                }
+            }
 
-    // 2. RAG Search Fallback
-    let api_key = {
-        let lock = state.api_key.lock().await;
-        lock.clone()
-    };
+            let api_key = {
+                let lock = state.api_key.lock().await;
+                lock.clone()
+            };
 
-    if let Some(api_key) = api_key {
-        let client = Client::new();
-        if let Ok(query_embedding) = crate::embedder::embed_text(&client, &api_key, &query).await {
+            let Some(api_key) = api_key else {
+                return Ok(final_results);
+            };
+
+            let cache_key = {
+                let mut hasher = Sha256::new();
+                hasher.update(query.as_bytes());
+                format!("{:x}", hasher.finalize())
+            };
+
+            let client = Client::new();
+
+            let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
+                crate::embedder::bytes_to_f32_vec(&cached).map_err(|e| e.to_string())?
+            } else {
+                let emb = crate::embedder::embed_text(&client, &api_key, query).await.map_err(|e| e.to_string())?;
+                let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
+                emb
+            };
+
             if let Ok(scored) = search::search_images(pool, query_embedding, 50).await {
                 if let Ok(rag_results) = search::build_search_results(pool, scored).await {
                     for res in rag_results {
@@ -131,39 +149,72 @@ pub async fn search_images(
                     }
                 }
             }
+
+            let _ = db::delete_stale_cache_entries(pool).await;
+            return Ok(final_results);
         }
-    }
 
-    Ok(final_results)
-}
+        SearchQuery::ImageId { image_id } => {
+            let embedding_blob = db::get_image_embedding(pool, image_id)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
+            let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding_blob)
+                .map_err(|e| e.to_string())?;
 
-#[tauri::command]
-pub async fn search_similar_images(
-    image_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<SearchResult>, String> {
-    let pool = &state.pool;
-    let embedding = db::get_image_embedding(pool, image_id)
-        .await
-        .map_err(map_err)?
-        .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
+            let mut scored = search::search_images(pool, embedding_f32, 50)
+                .await
+                .map_err(|e| e.to_string())?;
+            scored.retain(|(id, _)| *id != image_id);
 
-    let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding)
-        .map_err(|e| e.to_string())?;
+            return search::build_search_results(pool, scored)
+                .await
+                .map_err(|e| e.to_string());
+        }
 
-    let scored = search::search_images(pool, embedding_f32, 50)
-        .await
-        .map_err(map_err)?;
+        SearchQuery::ImageBytes { ref data, ref mime_type } => {
+            let raw_bytes = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| e.to_string())?;
 
-    // Exclude the source image from its own results
-    let filtered_scored = scored
-        .into_iter()
-        .filter(|(id, _)| *id != image_id)
-        .collect();
+            let cache_key = {
+                let mut hasher = Sha256::new();
+                hasher.update(&raw_bytes);
+                format!("{:x}", hasher.finalize())
+            };
 
-    search::build_search_results(pool, filtered_scored)
-        .await
-        .map_err(map_err)
+            let api_key = {
+                let lock = state.api_key.lock().await;
+                lock.clone()
+            };
+
+            let Some(api_key) = api_key else {
+                return Err("API key required for image search".to_string());
+            };
+
+            let client = Client::new();
+
+            let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
+                crate::embedder::bytes_to_f32_vec(&cached).map_err(|e| e.to_string())?
+            } else {
+                let emb = crate::embedder::embed_image_bytes(&client, &api_key, raw_bytes, mime_type)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
+                emb
+            };
+
+            let scored = search::search_images(pool, query_embedding, 50)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let _ = db::delete_stale_cache_entries(pool).await;
+            return search::build_search_results(pool, scored)
+                .await
+                .map_err(|e| e.to_string());
+        }
+    };
 }
 
 #[tauri::command]
