@@ -8,6 +8,7 @@ import {
   HostListener,
   viewChild,
   signal,
+  OnInit,
 } from '@angular/core';
 import { PhotoService } from '../../services/photo.service';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
@@ -33,7 +34,7 @@ import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
   templateUrl: './gallery.component.html',
   styleUrl: './gallery.component.css',
 })
-export class GalleryComponent implements AfterViewInit, OnDestroy {
+export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
   protected photos = inject(PhotoService);
   private elementRef = inject(ElementRef);
   private resizeObserver?: ResizeObserver;
@@ -45,6 +46,11 @@ export class GalleryComponent implements AfterViewInit, OnDestroy {
   private lassoStart = {x: 0, y: 0};
   private cachedCells: NodeListOf<Element> | null = null;
   private selectionRafId: number | null = null;
+
+  ngOnInit() {
+    // Ensure images are loaded when we navigate to gallery
+    void this.photos.refreshImages();
+  }
 
   onPointerDown(event: PointerEvent) {
     if (event.button !== 0) return;
