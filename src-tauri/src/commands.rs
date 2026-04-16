@@ -1,6 +1,7 @@
 use base64::Engine;
 use reqwest::Client;
 use sha2::{Sha256, Digest};
+use std::collections::HashSet;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
@@ -97,7 +98,7 @@ pub async fn search(
         SearchQuery::Text { ref query } => {
             let matched_subjects = db::search_subjects_by_name(pool, query).await.unwrap_or_default();
             let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
-            let subject_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+            let subject_image_ids: HashSet<i64> = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default().into_iter().collect();
 
             let mut results = vec![];
             for image_id in &subject_image_ids {
