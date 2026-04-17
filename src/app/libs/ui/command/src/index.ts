@@ -1,5 +1,4 @@
 import { HlmCommand } from './lib/hlm-command';
-import { HlmCommandDialog } from './lib/hlm-command-dialog';
 import { HlmCommandEmpty } from './lib/hlm-command-empty';
 import { HlmCommandEmptyState } from './lib/hlm-command-empty-state';
 import { HlmCommandGroup } from './lib/hlm-command-group';
@@ -11,7 +10,6 @@ import { HlmCommandSeparator } from './lib/hlm-command-separator';
 import { HlmCommandShortcut } from './lib/hlm-command-shortcut';
 
 export * from './lib/hlm-command';
-export * from './lib/hlm-command-dialog';
 export * from './lib/hlm-command-empty';
 export * from './lib/hlm-command-empty-state';
 export * from './lib/hlm-command-group';
@@ -24,7 +22,6 @@ export * from './lib/hlm-command-shortcut';
 
 export const HlmCommandImports = [
 	HlmCommand,
-	HlmCommandDialog,
 	HlmCommandEmpty,
 	HlmCommandEmptyState,
 	HlmCommandGroup,
