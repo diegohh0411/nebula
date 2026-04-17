@@ -1,10 +1,9 @@
 <div brnPopover #pop="brnPopover">
   @if (isReassignMode()) {
     <button brnPopoverTrigger [brnPopoverTriggerFor]="pop"
-            class="text-xs text-muted-foreground hover:text-foreground transition-colors bg-transparent border-none p-0 flex items-center gap-1 cursor-pointer"
+            class="text-muted-foreground hover:text-foreground hover:bg-accent transition-colors bg-transparent border-none p-1 rounded cursor-pointer"
             (click)="open()">
-      <span class="underline underline-offset-2">{{ currentSubjectName() }}</span>
-      <lucide-icon name="pencil" [size]="12" class="shrink-0" />
+      <lucide-icon name="pencil" [size]="14" class="shrink-0" />
     </button>
   } @else {
     <button brnPopoverTrigger [brnPopoverTriggerFor]="pop"
