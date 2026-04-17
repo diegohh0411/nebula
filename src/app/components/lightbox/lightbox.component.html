@@ -132,7 +132,9 @@
                     </div>
                     <div class="flex flex-col gap-1">
                       @for (face of unassignedFaces(); track face.id) {
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2"
+                          (mouseenter)="setActiveFace(face.id)"
+                          (mouseleave)="setActiveFace(null)">
                           <div class="w-8 h-8 rounded-full bg-muted border border-dashed border-muted-foreground shrink-0 overflow-hidden">
                           </div>
                           <app-face-assign-popover
