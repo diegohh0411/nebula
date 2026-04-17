@@ -429,3 +429,25 @@ pub async fn dismiss_merge_suggestion(
         .await
         .map_err(map_err)
 }
+
+#[tauri::command]
+pub async fn assign_face_to_subject(
+    face_id: i64,
+    subject_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    db::assign_face_to_subject(&state.pool, face_id, subject_id)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn create_subject_for_face(
+    face_id: i64,
+    name: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::models::Subject, String> {
+    db::create_subject_for_face(&state.pool, face_id, name.as_deref())
+        .await
+        .map_err(map_err)
+}

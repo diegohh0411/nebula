@@ -143,6 +143,8 @@ pub fn run() {
             commands::get_merge_suggestions,
             commands::merge_subjects,
             commands::dismiss_merge_suggestion,
+            commands::assign_face_to_subject,
+            commands::create_subject_for_face,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
