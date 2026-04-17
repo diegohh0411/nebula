@@ -7,7 +7,7 @@ use tokio::sync::Semaphore;
 
 use tauri::Emitter;
 
-use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}, face_detector::Detector};
+use crate::{db, models::{EmbedProgressPayload, ImageUpdatedPayload}};
 
 const CONCURRENT_WORKERS: usize = 3;
 const CLUSTERING_THRESHOLD: f32 = 0.4;
@@ -54,7 +54,6 @@ async fn process_one(
     pool: &SqlitePool,
     app: &AppHandle,
     vision_engine: &crate::vision_engine::VisionEngine,
-    detector: Option<&Detector>,
     clustering_lock: &tokio::sync::Mutex<()>,
     queue_id: i64,
     image_id: i64,
@@ -86,14 +85,14 @@ async fn process_one(
             }
 
             // --- Face Detection ---
-            if let Some(detector) = detector {
+            if let Ok(analyzer) = vision_engine.get_face_analyzer().await {
                 let img_res = tokio::task::spawn_blocking({
                     let path = image.path.clone();
                     move || image::open(path)
                 }).await;
 
                 if let Ok(Ok(dynamic_img)) = img_res {
-                    if let Ok(faces) = detector.analyze(&dynamic_img) {
+                    if let Ok(faces) = analyzer.analyze(&dynamic_img) {
                         for face_analysis in faces {
                             let bbox = face_analysis.detection.bbox;
 
@@ -193,14 +192,10 @@ pub async fn run_embedding_worker(
     let semaphore = Arc::new(Semaphore::new(CONCURRENT_WORKERS));
     let clustering_lock = Arc::new(tokio::sync::Mutex::new(()));
 
-    // Initialize face detector
-    let detector = match Detector::new().await {
-        Ok(d) => Some(Arc::new(d)),
-        Err(e) => {
-            eprintln!("Failed to initialize face detector: {}", e);
-            None
-        }
-    };
+    // Prefetch face analyzer so it's loaded before queue processing
+    if let Err(e) = vision_engine.get_face_analyzer().await {
+        eprintln!("Failed to initialize face analyzer: {}", e);
+    }
 
     loop {
         // Fetch a batch from the queue (up to CONCURRENT_WORKERS * 2)
@@ -225,11 +220,10 @@ pub async fn run_embedding_worker(
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
-            let detector_c = detector.clone();
             let lock_c = clustering_lock.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_one(&pool_c, &app_c, ve_c.as_ref(), detector_c.as_deref(), &lock_c, queue_id, image_id, attempts).await;
+                process_one(&pool_c, &app_c, ve_c.as_ref(), &lock_c, queue_id, image_id, attempts).await;
             }));
         }
         for h in handles {

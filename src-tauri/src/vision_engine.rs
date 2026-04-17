@@ -12,6 +12,7 @@ pub struct VisionEngine {
     image_session: std::sync::Mutex<Option<Session>>,
     text_session: std::sync::Mutex<Option<Session>>,
     tokenizer: std::sync::Mutex<Option<tokenizers::Tokenizer>>,
+    face_analyzer: tokio::sync::OnceCell<face_id::analyzer::FaceAnalyzer>,
 }
 
 impl VisionEngine {
@@ -21,7 +22,19 @@ impl VisionEngine {
             image_session: std::sync::Mutex::new(None),
             text_session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
+            face_analyzer: tokio::sync::OnceCell::new(),
         }
+    }
+
+    pub async fn get_face_analyzer(&self) -> Result<&face_id::analyzer::FaceAnalyzer> {
+        self.face_analyzer
+            .get_or_try_init(|| async {
+                face_id::analyzer::FaceAnalyzer::from_hf()
+                    .build()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
+            })
+            .await
     }
 
     fn load_session<'a>(
