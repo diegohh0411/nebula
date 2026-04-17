@@ -321,6 +321,10 @@ export class PhotoService {
     return subject;
   }
 
+  async unassignFace(faceId: number): Promise<void> {
+    await invoke('unassign_face', { faceId });
+  }
+
   private revokeExternalImage(): void {
     const img = this.searchImage();
     if (img?.type === 'external' && img.thumbnailUrl) {

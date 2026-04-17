@@ -76,6 +76,7 @@ export interface Face {
   bbox_w: number;
   bbox_h: number;
   added_at: number;
+  is_manual: boolean;
 }
 
 export interface SubjectDetail {
