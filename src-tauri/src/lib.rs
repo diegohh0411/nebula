@@ -7,6 +7,7 @@ mod face_detector;
 mod models;
 mod search;
 mod thumbnail;
+mod vision_engine;
 mod watcher;
 
 use std::path::PathBuf;
@@ -22,6 +23,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub api_key: Arc<Mutex<Option<String>>>,
     pub watcher: Arc<Mutex<FolderWatcher>>,
+    pub vision_engine: Arc<vision_engine::VisionEngine>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -64,12 +66,16 @@ pub fn run() {
                 });
             }
 
+            // Create VisionEngine
+            let vision_engine = Arc::new(vision_engine::VisionEngine::new(data_dir.clone()));
+
             // Register app state
             app.manage(AppState {
                 pool: pool.clone(),
                 data_dir: data_dir.clone(),
                 api_key: api_key.clone(),
                 watcher: watcher_arc,
+                vision_engine,
             });
 
             // Spawn watcher event consumer
