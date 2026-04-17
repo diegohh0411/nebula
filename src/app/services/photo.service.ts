@@ -308,6 +308,19 @@ export class PhotoService {
     await invoke('dismiss_merge_suggestion', { id });
   }
 
+  async assignFaceToSubject(faceId: number, subjectId: number): Promise<void> {
+    await invoke('assign_face_to_subject', { faceId, subjectId });
+  }
+
+  async createSubjectForFace(faceId: number, name?: string): Promise<Subject> {
+    const subject = await invoke<Subject>('create_subject_for_face', {
+      faceId,
+      name: name ?? null,
+    });
+    this.subjects.update(subjects => [...subjects, subject]);
+    return subject;
+  }
+
   private revokeExternalImage(): void {
     const img = this.searchImage();
     if (img?.type === 'external' && img.thumbnailUrl) {
