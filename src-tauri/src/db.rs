@@ -993,3 +993,24 @@ pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
         .await?;
     Ok(())
 }
+
+pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
+    // 1. Clear image embeddings (Gemini space)
+    sqlx::query("UPDATE images SET embedding = NULL, embed_status = 'pending'")
+        .execute(pool)
+        .await?;
+
+    // 2. Clear embedding queue to prevent retries of old tasks
+    sqlx::query("DELETE FROM embedding_queue")
+        .execute(pool)
+        .await?;
+
+    // 3. Re-enqueue all images for the new local engine
+    sqlx::query("INSERT INTO embedding_queue (image_id, attempts, scheduled_at)
+                 SELECT id, 0, ? FROM images WHERE deleted_at IS NULL")
+        .bind(chrono::Utc::now().timestamp())
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
