@@ -48,7 +48,9 @@
                   (mouseenter)="setActiveFace(face.id)"
                   (mouseleave)="setActiveFace(null)"
                   (click)="navigateToSubject(face.subject_id)">
-                  <div class="face-label" *ngIf="activeFaceId() === face.id">{{ getSubjectName(face.subject_id) }}</div>
+                  @if (activeFaceId() === face.id) {
+                    <div class="face-label">{{ getSubjectName(face.subject_id) }}</div>
+                  }
                 </div>
               }
             }
