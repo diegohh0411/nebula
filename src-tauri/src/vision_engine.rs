@@ -1,4 +1,6 @@
+use anyhow::Result;
 use ort::session::Session;
+use ort::session::builder::GraphOptimizationLevel;
 use std::path::PathBuf;
 
 pub struct VisionEngine {
@@ -16,5 +18,40 @@ impl VisionEngine {
             text_session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
         }
+    }
+
+    fn load_session(
+        &self,
+        filename: &str,
+        session_mutex: &std::sync::Mutex<Option<Session>>,
+    ) -> Result<()> {
+        let mut lock = session_mutex.lock().unwrap();
+        if lock.is_none() {
+            let api = hf_hub::api::sync::Api::new()?;
+            let repo = api.model("google/siglip-so400m-patch14-384".to_string());
+            let model_path = repo.get(filename)?;
+
+            let session = Session::builder()
+                .map_err(|e| anyhow::anyhow!("failed to create session builder: {e}"))?
+                .with_optimization_level(GraphOptimizationLevel::Level3)
+                .map_err(|e| anyhow::anyhow!("failed to set optimization level: {e}"))?
+                .with_intra_threads(4)
+                .map_err(|e| anyhow::anyhow!("failed to set intra threads: {e}"))?
+                .commit_from_file(model_path)
+                .map_err(|e| anyhow::anyhow!("failed to load model from file: {e}"))?;
+
+            *lock = Some(session);
+        }
+        Ok(())
+    }
+
+    pub fn get_image_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
+        self.load_session("model.onnx", &self.image_session)?;
+        Ok(self.image_session.lock().unwrap())
+    }
+
+    pub fn get_text_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
+        self.load_session("text_model.onnx", &self.text_session)?;
+        Ok(self.text_session.lock().unwrap())
     }
 }
