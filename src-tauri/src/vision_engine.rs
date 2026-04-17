@@ -20,12 +20,14 @@ impl VisionEngine {
         }
     }
 
-    fn load_session(
-        &self,
+    fn load_session<'a>(
+        &'a self,
         filename: &str,
-        session_mutex: &std::sync::Mutex<Option<Session>>,
-    ) -> Result<()> {
-        let mut lock = session_mutex.lock().unwrap();
+        session_mutex: &'a std::sync::Mutex<Option<Session>>,
+    ) -> Result<std::sync::MutexGuard<'a, Option<Session>>> {
+        let mut lock = session_mutex
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
         if lock.is_none() {
             let api = hf_hub::api::sync::Api::new()?;
             let repo = api.model("google/siglip-so400m-patch14-384".to_string());
@@ -42,16 +44,14 @@ impl VisionEngine {
 
             *lock = Some(session);
         }
-        Ok(())
+        Ok(lock)
     }
 
     pub fn get_image_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
-        self.load_session("model.onnx", &self.image_session)?;
-        Ok(self.image_session.lock().unwrap())
+        self.load_session("model.onnx", &self.image_session)
     }
 
     pub fn get_text_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
-        self.load_session("text_model.onnx", &self.text_session)?;
-        Ok(self.text_session.lock().unwrap())
+        self.load_session("text_model.onnx", &self.text_session)
     }
 }
