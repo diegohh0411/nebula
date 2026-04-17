@@ -83,46 +83,46 @@
         }
       </div>
     }
-  </main>
 
-  <!-- Similar Subjects -->
-  @if (similarSubjects().length > 0) {
-    <div class="border-t border-border px-6 py-4">
-      <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Similar Subjects</h2>
-      <div class="flex flex-col gap-2">
-        @for (suggestion of similarSubjects(); track suggestion.id) {
-          @let other = getOtherSubject(suggestion);
-          <div class="flex items-center gap-3 p-2 rounded-md border border-border bg-card">
-            <a
-              [routerLink]="['/subject', other.id]"
-              class="flex items-center gap-3 flex-1 min-w-0 hover:bg-muted/50 rounded-md p-1 transition-colors"
-            >
-              <div class="w-10 h-10 rounded-full overflow-hidden border border-border bg-muted flex items-center justify-center shrink-0">
-                @if (getSimilarThumbUrl(other)) {
-                  <img [src]="getSimilarThumbUrl(other)" alt="" class="w-full h-full object-cover" />
-                } @else {
-                  <span class="text-sm text-muted-foreground">👤</span>
-                }
-              </div>
-              <span class="font-medium text-sm truncate">{{ other.name || 'Unnamed' }}</span>
-            </a>
-            <button
-              class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-              (click)="mergeSimilar(suggestion)"
-            >
-              Merge
-            </button>
-            <button
-              class="px-2 py-1 text-xs rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
-              (click)="dismissSimilar(suggestion)"
-            >
-              Dismiss
-            </button>
-          </div>
-        }
+    <!-- Similar Subjects -->
+    @if (similarSubjects().length > 0) {
+      <div class="border-t border-border mt-6 pt-4 max-w-[1600px] mx-auto">
+        <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Similar Subjects</h2>
+        <div class="flex flex-col gap-2">
+          @for (suggestion of similarSubjects(); track suggestion.id) {
+            @let other = getOtherSubject(suggestion);
+            <div class="flex items-center gap-3 p-2 rounded-md border border-border bg-card">
+              <a
+                [routerLink]="['/subject', other.id]"
+                class="flex items-center gap-3 flex-1 min-w-0 hover:bg-muted/50 rounded-md p-1 transition-colors"
+              >
+                <div class="w-10 h-10 rounded-full overflow-hidden border border-border bg-muted flex items-center justify-center shrink-0">
+                  @if (getSimilarThumbUrl(other)) {
+                    <img [src]="getSimilarThumbUrl(other)" alt="" class="w-full h-full object-cover" />
+                  } @else {
+                    <span class="text-sm text-muted-foreground">👤</span>
+                  }
+                </div>
+                <span class="font-medium text-sm truncate">{{ other.name || 'Unnamed' }}</span>
+              </a>
+              <button
+                class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                (click)="mergeSimilar(suggestion)"
+              >
+                Merge
+              </button>
+              <button
+                class="px-2 py-1 text-xs rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+                (click)="dismissSimilar(suggestion)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
+        </div>
       </div>
-    </div>
-  }
+    }
+  </main>
 
   <!-- Name Conflict Dialog -->
   @if (showNameConflict()) {
