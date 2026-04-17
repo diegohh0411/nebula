@@ -87,6 +87,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
 );
 "#;
 
+const POST_MIGRATIONS: &str = r#"
+ALTER TABLE faces ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS face_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    old_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+    new_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_corrections_face ON face_corrections(face_id);
+"#;
+
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
     let opts = SqliteConnectOptions::new()
@@ -108,6 +122,14 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
             sqlx::query(s).execute(&pool).await?;
         }
     }
+
+    for stmt in POST_MIGRATIONS.split(';') {
+        let s = stmt.trim();
+        if !s.is_empty() {
+            let _ = sqlx::query(s).execute(&pool).await;
+        }
+    }
+
     Ok(pool)
 }
 
