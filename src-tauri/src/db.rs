@@ -906,3 +906,12 @@ pub async fn get_faces_by_subject(pool: &SqlitePool, subject_id: i64) -> Result<
         })
         .collect())
 }
+
+pub async fn assign_face_to_subject(pool: &SqlitePool, face_id: i64, subject_id: i64) -> Result<()> {
+    sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
+        .bind(subject_id)
+        .bind(face_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
