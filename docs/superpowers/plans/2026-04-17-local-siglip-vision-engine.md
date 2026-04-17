@@ -302,13 +302,13 @@ git commit -m "refactor: update search command for local embeddings"
 **Files:**
 - Modify: `src-tauri/src/lib.rs`
 
-- [ ] **Step 1: Trigger `db::reset_all_embeddings` if detected needed (one-time)**
+- [x] **Step 1: Trigger `db::reset_all_embeddings` if detected needed (one-time)** (Skipped by user request)
 
-- [ ] **Step 2: Remove redundant `face_detector.rs` if unified into `VisionEngine`**
+- [x] **Step 2: Remove redundant `face_detector.rs` if unified into `VisionEngine`** (Not unified, kept separate)
 
-- [ ] **Step 3: Final verification run**
+- [x] **Step 3: Final verification run**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -m "feat: final migration to local SigLIP 2"
