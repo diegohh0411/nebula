@@ -498,7 +498,7 @@ pub async fn list_all_subjects(pool: &SqlitePool) -> Result<Vec<Subject>> {
 
 pub async fn list_faces_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Face>> {
     let rows = sqlx::query(
-        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at
+        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual
          FROM faces WHERE subject_id = ? ORDER BY added_at DESC",
     )
     .bind(subject_id)
@@ -517,6 +517,7 @@ pub async fn list_faces_for_subject(pool: &SqlitePool, subject_id: i64) -> Resul
             bbox_h: r.get("bbox_h"),
             embedding: r.get("embedding"),
             added_at: r.get("added_at"),
+            is_manual: r.get::<i32, _>("is_manual") != 0,
         })
         .collect())
 }
@@ -537,7 +538,7 @@ pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u
 
 pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> {
     let row = sqlx::query(
-        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at
+        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual
          FROM faces WHERE id = ?",
     )
     .bind(id)
@@ -554,6 +555,7 @@ pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> 
         bbox_h: r.get("bbox_h"),
         embedding: r.get("embedding"),
         added_at: r.get("added_at"),
+        is_manual: r.get::<i32, _>("is_manual") != 0,
     }))
 }
 
@@ -640,7 +642,7 @@ pub async fn get_largest_face_for_subject(pool: &SqlitePool, subject_id: i64) ->
 
 pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Vec<Face>> {
     let rows = sqlx::query(
-        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at
+        "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual
          FROM faces WHERE image_id = ? ORDER BY added_at DESC",
     )
     .bind(image_id)
@@ -659,6 +661,7 @@ pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Ve
             bbox_h: r.get("bbox_h"),
             embedding: r.get("embedding"),
             added_at: r.get("added_at"),
+            is_manual: r.get::<i32, _>("is_manual") != 0,
         })
         .collect())
 }
@@ -704,9 +707,9 @@ pub async fn get_image_ids_for_subjects(pool: &SqlitePool, subject_ids: &[i64]) 
     Ok(rows.into_iter().map(|r| r.get("image_id")).collect())
 }
 
-pub async fn get_all_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Option<i64>, Vec<u8>)>> {
+pub async fn get_all_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Option<i64>, Vec<u8>, bool)>> {
     let rows = sqlx::query(
-        "SELECT id, subject_id, embedding FROM faces WHERE embedding IS NOT NULL",
+        "SELECT id, subject_id, embedding, is_manual FROM faces WHERE embedding IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -717,7 +720,8 @@ pub async fn get_all_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64
             let id: i64 = r.get("id");
             let subject_id: Option<i64> = r.get("subject_id");
             let emb: Option<Vec<u8>> = r.get("embedding");
-            emb.map(|e| (id, subject_id, e))
+            let is_manual: bool = r.get::<i32, _>("is_manual") != 0;
+            emb.map(|e| (id, subject_id, e, is_manual))
         })
         .collect())
 }
@@ -930,7 +934,7 @@ pub async fn get_faces_by_subject(pool: &SqlitePool, subject_id: i64) -> Result<
 }
 
 pub async fn assign_face_to_subject(pool: &SqlitePool, face_id: i64, subject_id: i64) -> Result<()> {
-    sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
+    sqlx::query("UPDATE faces SET subject_id = ?, is_manual = 1 WHERE id = ?")
         .bind(subject_id)
         .bind(face_id)
         .execute(pool)
@@ -940,7 +944,7 @@ pub async fn assign_face_to_subject(pool: &SqlitePool, face_id: i64, subject_id:
 
 pub async fn create_subject_for_face(pool: &SqlitePool, face_id: i64, name: Option<&str>) -> Result<Subject> {
     let subject_id = insert_subject(pool, name, "person").await?;
-    sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
+    sqlx::query("UPDATE faces SET subject_id = ?, is_manual = 1 WHERE id = ?")
         .bind(subject_id)
         .bind(face_id)
         .execute(pool)
@@ -958,4 +962,34 @@ pub async fn create_subject_for_face(pool: &SqlitePool, face_id: i64, name: Opti
         subject_type: row.get("type"),
         added_at: row.get("added_at"),
     })
+}
+
+pub async fn get_face_subject_id(pool: &SqlitePool, face_id: i64) -> Result<Option<i64>> {
+    let row = sqlx::query("SELECT subject_id FROM faces WHERE id = ?")
+        .bind(face_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.and_then(|r| r.get::<Option<i64>, _>("subject_id")))
+}
+
+pub async fn record_face_correction(pool: &SqlitePool, face_id: i64, old_subject_id: Option<i64>, new_subject_id: Option<i64>) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "INSERT INTO face_corrections (face_id, old_subject_id, new_subject_id, created_at) VALUES (?, ?, ?, ?)"
+    )
+    .bind(face_id)
+    .bind(old_subject_id)
+    .bind(new_subject_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
+    sqlx::query("UPDATE faces SET subject_id = NULL, is_manual = 1 WHERE id = ?")
+        .bind(face_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
