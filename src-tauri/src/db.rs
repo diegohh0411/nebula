@@ -915,3 +915,25 @@ pub async fn assign_face_to_subject(pool: &SqlitePool, face_id: i64, subject_id:
         .await?;
     Ok(())
 }
+
+pub async fn create_subject_for_face(pool: &SqlitePool, face_id: i64, name: Option<&str>) -> Result<Subject> {
+    let subject_id = insert_subject(pool, name, "person").await?;
+    sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
+        .bind(subject_id)
+        .bind(face_id)
+        .execute(pool)
+        .await?;
+    let row = sqlx::query(
+        "SELECT id, name, thumbnail_face_id, type, added_at FROM subjects WHERE id = ?"
+    )
+    .bind(subject_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(Subject {
+        id: row.get("id"),
+        name: row.get("name"),
+        thumbnail_face_id: row.get("thumbnail_face_id"),
+        subject_type: row.get("type"),
+        added_at: row.get("added_at"),
+    })
+}
