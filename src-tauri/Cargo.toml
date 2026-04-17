@@ -36,3 +36,7 @@ once_cell = "1"
 chrono = { version = "0.4", features = ["serde"] }
 face_id = "0.4.1"
 hdbscan = "0.12"
+hf-hub = "0.4"
+ndarray = "0.15"
+ort = "2.0.0-rc.12"
+tokenizers = "0.21"
