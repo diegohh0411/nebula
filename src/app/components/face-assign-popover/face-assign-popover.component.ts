@@ -34,17 +34,31 @@ import { Face, Subject } from '../../models/models';
 export class FaceAssignPopoverComponent {
   readonly face = input.required<Face>();
   readonly assigned = output<{ face: Face; subject: Subject }>();
+  readonly removed = output<{ face: Face }>();
 
   protected photos = inject(PhotoService);
   protected query = signal('');
   protected isOpen = signal(false);
 
+  protected isReassignMode = computed(() => this.face().subject_id !== null);
+
+  protected currentSubjectName = computed(() => {
+    const sid = this.face().subject_id;
+    if (!sid) return null;
+    const sub = this.photos.subjects().find(s => s.id === sid);
+    return sub?.name || 'Unnamed Subject';
+  });
+
   protected filteredSubjects = computed(() => {
+    const currentId = this.face().subject_id;
     const q = this.query().toLowerCase().trim();
-    if (!q) return this.photos.subjects();
-    return this.photos.subjects().filter(s =>
-      s.name?.toLowerCase().includes(q) ?? false
-    );
+    let subjects = this.photos.subjects().filter(s => s.id !== currentId);
+    if (q) {
+      subjects = subjects.filter(s =>
+        s.name?.toLowerCase().includes(q) ?? false
+      );
+    }
+    return subjects;
   });
 
   async open() {
@@ -67,6 +81,12 @@ export class FaceAssignPopoverComponent {
     const name = this.query().trim() || undefined;
     const subject = await this.photos.createSubjectForFace(this.face().id, name);
     this.assigned.emit({ face: this.face(), subject });
+    this.close();
+  }
+
+  async removeFace() {
+    await this.photos.unassignFace(this.face().id);
+    this.removed.emit({ face: this.face() });
     this.close();
   }
 }
