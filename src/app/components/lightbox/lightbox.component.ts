@@ -143,6 +143,12 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
     }
   }
 
+  onFaceRemoved(event: { face: Face }) {
+    this.faces.update(faces =>
+      faces.map(f => f.id === event.face.id ? { ...f, subject_id: null } : f)
+    );
+  }
+
   getSubjectName(subjectId: number | null): string {
     if (!subjectId) return 'Unnamed Subject';
     const sub = this.photos.subjects().find(s => s.id === subjectId);

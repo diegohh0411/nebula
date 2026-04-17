@@ -98,13 +98,17 @@
               <div class="people-list">
                 @for (face of assignedFaces(); track face.id) {
                   <div
-                    class="person-item clickable"
+                    class="person-item"
                     [class.active]="activeFaceId() === face.id"
                     (mouseenter)="setActiveFace(face.id)"
-                    (mouseleave)="setActiveFace(null)"
-                    (click)="navigateToSubject(face.subject_id)">
-                    <div class="person-avatar">👤</div>
-                    <div class="person-name">{{ getSubjectName(face.subject_id) }}</div>
+                    (mouseleave)="setActiveFace(null)">
+                    <div class="person-avatar" (click)="navigateToSubject(face.subject_id)">👤</div>
+                    <div class="person-name" (click)="navigateToSubject(face.subject_id)">{{ getSubjectName(face.subject_id) }}</div>
+                    <app-face-assign-popover
+                      class="ml-auto"
+                      [face]="face"
+                      (assigned)="onFaceAssigned($event)"
+                      (removed)="onFaceRemoved($event)" />
                   </div>
                 }
               </div>
