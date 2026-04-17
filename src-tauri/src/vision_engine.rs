@@ -59,7 +59,9 @@ impl VisionEngine {
 
     pub fn embed_image(&self, img: &image::DynamicImage) -> Result<Vec<f32>> {
         let mut lock = self.get_image_session()?;
-        let session = lock.as_mut().unwrap();
+        let session = lock
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("image session not initialized"))?;
 
         // Preprocess: resize to 384x384 for so400m model
         let resized = img.resize_exact(384, 384, image::imageops::FilterType::Lanczos3);
@@ -77,11 +79,11 @@ impl VisionEngine {
         let tensor = TensorRef::from_array_view(input.view())
             .map_err(|e| anyhow::anyhow!("failed to create tensor: {e}"))?;
         let outputs = session
-            .run(ort::inputs![tensor])
-            .map_err(|e| anyhow::anyhow!("inference failed: {e}"))?;
-        let (_shape, data) = outputs[0]
+            .run(ort::inputs!["pixel_values" => tensor])
+            .map_err(|e| anyhow::anyhow!("image inference failed: {e}"))?;
+        let (_shape, data) = outputs["image_embeds"]
             .try_extract_tensor::<f32>()
-            .map_err(|e| anyhow::anyhow!("failed to extract output tensor: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to extract image embedding: {e}"))?;
         Ok(data.to_vec())
     }
 }
