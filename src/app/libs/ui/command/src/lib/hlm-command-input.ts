@@ -1,38 +1,30 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
-import { NgIcon, provideIcons } from '@ng-icons/core';
-import { lucideSearch } from '@ng-icons/lucide';
+import { LucideAngularModule } from 'lucide-angular';
 import { BrnCommandInput } from '@spartan-ng/brain/command';
-import { HlmInputGroupImports } from '@spartan-ng/helm/input-group';
 import { classes } from '@spartan-ng/helm/utils';
 
 @Component({
 	selector: 'hlm-command-input',
-	imports: [HlmInputGroupImports, NgIcon, BrnCommandInput],
-	providers: [provideIcons({ lucideSearch })],
+	imports: [LucideAngularModule, BrnCommandInput],
 	changeDetection: ChangeDetectionStrategy.OnPush,
 	template: `
-		<hlm-input-group
-			class="bg-input/30 border-input/30 h-8 rounded-lg shadow-none *:data-[slot=input-group-addon]:pl-2"
-		>
+		<div class="flex items-center border-b px-3 gap-2">
+			<lucide-icon name="search" [size]="16" class="shrink-0 opacity-50" />
 			<input
 				brnCommandInput
 				data-slot="command-input"
-				class="w-full text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50"
+				class="flex h-10 w-full bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
 				[id]="id()"
 				[placeholder]="placeholder()"
 			/>
-
-			<hlm-input-group-addon>
-				<ng-icon name="lucideSearch" />
-			</hlm-input-group-addon>
-		</hlm-input-group>
+		</div>
 	`,
 })
 export class HlmCommandInput {
 	public readonly id = input<string | undefined>();
-	public readonly placeholder = input<string>('');
+	public readonly placeholder = input<string>('Search...');
 
 	constructor() {
-		classes(() => 'p-1 pb-0');
+		classes(() => '');
 	}
 }
