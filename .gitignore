@@ -3,6 +3,7 @@
 # AI
 .claude/
 .superpowers/
+.opencode/
 
 # Compiled output
 /dist
