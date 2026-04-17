@@ -86,4 +86,67 @@ impl VisionEngine {
             .map_err(|e| anyhow::anyhow!("failed to extract image embedding: {e}"))?;
         Ok(data.to_vec())
     }
+
+    pub fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
+        // 1. Load tokenizer lazily
+        {
+            let mut tok_lock = self
+                .tokenizer
+                .lock()
+                .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
+            if tok_lock.is_none() {
+                let api = hf_hub::api::sync::Api::new()?;
+                let repo = api.model("google/siglip-so400m-patch14-384".to_string());
+                let tok_path = repo.get("tokenizer.json")?;
+                *tok_lock = Some(
+                    tokenizers::Tokenizer::from_file(tok_path)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?,
+                );
+            }
+        } // tokenizer lock released here
+
+        // 2. Tokenize
+        let encoding = {
+            let tok_lock = self
+                .tokenizer
+                .lock()
+                .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
+            let tokenizer = tok_lock
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("tokenizer not initialized"))?;
+            tokenizer
+                .encode(text, true)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+        }; // tokenizer lock released
+
+        // 3. Build input tensors
+        let input_ids: Vec<i64> = encoding
+            .get_ids()
+            .iter()
+            .map(|&id| id as i64)
+            .collect();
+        let seq_len = input_ids.len();
+        let input_ids_tensor =
+            ndarray::Array2::from_shape_vec((1, seq_len), input_ids)?;
+
+        // 4. Run text model (tokenizer lock already released above)
+        let mut session_lock = self.get_text_session()?;
+        let session = session_lock
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("text session not initialized"))?;
+
+        let ids_tensor_ref =
+            ort::value::TensorRef::from_array_view(input_ids_tensor.view())
+                .map_err(|e| anyhow::anyhow!("failed to create input_ids tensor: {e}"))?;
+
+        let outputs = session
+            .run(ort::inputs!["input_ids" => ids_tensor_ref])
+            .map_err(|e| anyhow::anyhow!("text inference failed: {e}"))?;
+
+        let (_shape, data) = outputs["text_embeds"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("failed to extract text embedding: {e}"))?;
+
+        Ok(data.to_vec())
+    }
 }
