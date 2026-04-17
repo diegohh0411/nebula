@@ -120,9 +120,9 @@ pub fn run() {
             // Spawn embedding worker
             let pool_embed = pool.clone();
             let app_handle_embed = app.handle().clone();
-            let api_key_embed = api_key.clone();
+            let vision_engine_embed = Arc::clone(&app.state::<AppState>().vision_engine);
             tauri::async_runtime::spawn(async move {
-                embedder::run_embedding_worker(pool_embed, app_handle_embed, api_key_embed).await;
+                embedder::run_embedding_worker(pool_embed, app_handle_embed, vision_engine_embed).await;
             });
 
             Ok(())
