@@ -90,15 +90,14 @@
 
           <div class="meta-section">
             <h3>People</h3>
-            @if (faces().length === 0) {
+            @if (assignedFaces().length === 0 && unassignedFaces().length === 0) {
               <div class="value">No people detected</div>
             } @else {
               <div class="people-list">
-                @for (face of faces(); track face.id) {
-                  <div 
-                    class="person-item"
+                @for (face of assignedFaces(); track face.id) {
+                  <div
+                    class="person-item clickable"
                     [class.active]="activeFaceId() === face.id"
-                    [class.clickable]="!!face.subject_id"
                     (mouseenter)="setActiveFace(face.id)"
                     (mouseleave)="setActiveFace(null)"
                     (click)="navigateToSubject(face.subject_id)">
@@ -107,6 +106,43 @@
                   </div>
                 }
               </div>
+
+              @if (unassignedFaces().length > 0) {
+                @if (!showFacesToAdd()) {
+                  <button
+                    type="button"
+                    class="mt-2 text-xs text-muted-foreground underline cursor-pointer hover:text-foreground transition-colors bg-transparent border-none p-0"
+                    (click)="showFacesToAdd.set(true)"
+                  >
+                    There are some faces to add
+                  </button>
+                } @else {
+                  <div class="mt-3 pt-3 border-t border-border">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="text-xs uppercase tracking-wide text-muted-foreground">Faces to add</span>
+                      <button
+                        type="button"
+                        class="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors bg-transparent border-none p-0"
+                        (click)="showFacesToAdd.set(false)"
+                      >
+                        ▴ hide
+                      </button>
+                    </div>
+                    <div class="flex flex-col gap-1">
+                      @for (face of unassignedFaces(); track face.id) {
+                        <div class="flex items-center gap-2">
+                          <div class="w-8 h-8 rounded-full bg-muted border border-dashed border-muted-foreground shrink-0 overflow-hidden">
+                          </div>
+                          <app-face-assign-popover
+                            [face]="face"
+                            (assigned)="onFaceAssigned($event)"
+                          />
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+              }
             }
           </div>
         </div>

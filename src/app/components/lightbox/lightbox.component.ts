@@ -15,8 +15,9 @@ import {
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
-import { Image, SearchResult, Face } from '../../models/models';
+import { Image, SearchResult, Face, Subject } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
+import { FaceAssignPopoverComponent } from '../face-assign-popover/face-assign-popover.component';
 import { startViewTransition } from '../../utils/view-transition';
 
 interface FaceOverlayStyle {
@@ -30,7 +31,7 @@ interface FaceOverlayStyle {
   selector: 'app-lightbox',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, LucideAngularModule],
+  imports: [CommonModule, LucideAngularModule, FaceAssignPopoverComponent],
   templateUrl: './lightbox.component.html',
   styleUrl: './lightbox.component.css',
 })
@@ -45,6 +46,13 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
 
   faces = signal<Face[]>([]);
   activeFaceId = signal<number | null>(null);
+
+  showFacesToAdd = signal(false);
+
+  protected assignedFaces = computed(() => this.faces().filter(f => f.subject_id !== null));
+  protected unassignedFaces = computed(() => this.faces().filter(f => f.subject_id === null));
+
+  protected localSubjects = signal<Subject[]>([]);
 
   private resizeObserver?: ResizeObserver;
 
@@ -74,8 +82,11 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
       if (this.photos.subjects().length === 0) {
         void this.photos.loadSubjects();
       }
+      this.localSubjects.set(this.photos.subjects());
+      this.showFacesToAdd.set(false);
     } else {
       this.faces.set([]);
+      this.localSubjects.set([]);
     }
     this.imgLayout.set(null);
   }
@@ -117,6 +128,19 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
       containerW: containerRect.width,
       containerH: containerRect.height,
     });
+  }
+
+  onFaceAssigned(event: { face: Face; subject: Subject }) {
+    this.faces.update(faces =>
+      faces.map(f => f.id === event.face.id ? { ...f, subject_id: event.subject.id } : f)
+    );
+    this.localSubjects.update(subjects => {
+      if (subjects.find(s => s.id === event.subject.id)) return subjects;
+      return [...subjects, event.subject];
+    });
+    if (this.unassignedFaces().length === 0) {
+      this.showFacesToAdd.set(false);
+    }
   }
 
   getSubjectName(subjectId: number | null): string {
