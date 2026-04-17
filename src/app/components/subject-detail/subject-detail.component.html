@@ -69,24 +69,9 @@
 
   <!-- Photo Grid -->
   <main class="flex-1 overflow-y-auto px-4 py-6">
-    @if (subjectPhotos().length === 0) {
-      <div class="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
-        <p class="text-lg font-medium">No photos yet</p>
-        <p class="text-sm">Photos featuring this person will appear here.</p>
-      </div>
-    } @else {
-      <div class="flex flex-col gap-1 max-w-[1600px] mx-auto">
-        @for (row of virtualRows(); track $index) {
-          @if (row.type === 'row') {
-            <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />
-          }
-        }
-      </div>
-    }
-
     <!-- Similar Subjects -->
     @if (similarSubjects().length > 0) {
-      <div class="border-t border-border mt-6 pt-4 max-w-[1600px] mx-auto">
+      <div class="border-b border-border pb-6 mb-6 max-w-[1600px] mx-auto">
         <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Similar Subjects</h2>
         <div class="flex flex-col gap-2">
           @for (suggestion of similarSubjects(); track suggestion.id) {
@@ -120,6 +105,21 @@
             </div>
           }
         </div>
+      </div>
+    }
+
+    @if (subjectPhotos().length === 0) {
+      <div class="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+        <p class="text-lg font-medium">No photos yet</p>
+        <p class="text-sm">Photos featuring this person will appear here.</p>
+      </div>
+    } @else {
+      <div class="flex flex-col gap-1 max-w-[1600px] mx-auto">
+        @for (row of virtualRows(); track $index) {
+          @if (row.type === 'row') {
+            <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />
+          }
+        }
       </div>
     }
   </main>
