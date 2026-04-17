@@ -17,12 +17,13 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
         });
     }
 
-    let face_ids: Vec<i64> = faces.iter().map(|(id, _, _)| *id).collect();
-    let old_subject_ids: Vec<Option<i64>> = faces.iter().map(|(_, sid, _)| *sid).collect();
+    let face_ids: Vec<i64> = faces.iter().map(|(id, _, _, _)| *id).collect();
+    let old_subject_ids: Vec<Option<i64>> = faces.iter().map(|(_, sid, _, _)| *sid).collect();
+    let is_manual_flags: Vec<bool> = faces.iter().map(|(_, _, _, m)| *m).collect();
 
     let embeddings: Vec<Vec<f32>> = faces
         .iter()
-        .filter_map(|(_, _, emb_blob)| crate::embedder::bytes_to_f32_vec(emb_blob).ok())
+        .filter_map(|(_, _, emb_blob, _)| crate::embedder::bytes_to_f32_vec(emb_blob).ok())
         .collect();
 
     if embeddings.len() != face_ids.len() {
@@ -43,6 +44,9 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
 
     let mut cluster_to_face_indices: HashMap<i32, Vec<usize>> = HashMap::new();
     for (idx, &label) in labels.iter().enumerate() {
+        if is_manual_flags[idx] {
+            continue;
+        }
         cluster_to_face_indices.entry(label).or_default().push(idx);
     }
 
