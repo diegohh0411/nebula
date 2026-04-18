@@ -46,9 +46,20 @@ impl VisionEngine {
             .lock()
             .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
         if lock.is_none() {
+            #[cfg(debug_assertions)]
+            eprintln!("[vision-engine] loading session for '{}' from HF repo '{}'", filename, SIGLIP_REPO);
+
             let api = hf_hub::api::sync::Api::new()?;
             let repo = api.model(SIGLIP_REPO.to_string());
-            let model_path = repo.get(filename)?;
+
+            #[cfg(debug_assertions)]
+            eprintln!("[vision-engine] fetching '{}' from HuggingFace Hub…", filename);
+
+            let model_path = repo.get(filename)
+                .map_err(|e| anyhow::anyhow!("HuggingFace download of '{}' from repo '{}' failed: {}", filename, SIGLIP_REPO, e))?;
+
+            #[cfg(debug_assertions)]
+            eprintln!("[vision-engine] model cached at: {}", model_path.display());
 
             let session = Session::builder()
                 .map_err(|e| anyhow::anyhow!("failed to create session builder: {e}"))?
@@ -56,8 +67,11 @@ impl VisionEngine {
                 .map_err(|e| anyhow::anyhow!("failed to set optimization level: {e}"))?
                 .with_intra_threads(4)
                 .map_err(|e| anyhow::anyhow!("failed to set intra threads: {e}"))?
-                .commit_from_file(model_path)
-                .map_err(|e| anyhow::anyhow!("failed to load model from file: {e}"))?;
+                .commit_from_file(&model_path)
+                .map_err(|e| anyhow::anyhow!("failed to load ONNX model '{}': {e}", model_path.display()))?;
+
+            #[cfg(debug_assertions)]
+            eprintln!("[vision-engine] session ready for '{}'", filename);
 
             *lock = Some(session);
         }

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
+use std::error::Error as StdError;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -165,6 +166,14 @@ async fn process_one(
         Err(e) => {
             let err_str = e.to_string();
             eprintln!("Embedding failed for image {}: {}", image_id, err_str);
+            #[cfg(debug_assertions)]
+            {
+                let mut src = e.source();
+                while let Some(cause) = src {
+                    eprintln!("  caused by: {}", cause);
+                    src = cause.source();
+                }
+            }
             if db::mark_failed(pool, queue_id, attempts, &err_str).await.is_ok() {
                 let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
             }
