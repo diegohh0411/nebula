@@ -3,6 +3,7 @@
 # AI
 .claude/
 .superpowers/
+.opencode/
 
 # Compiled output
 /dist
@@ -44,3 +45,7 @@ testem.log
 # System files
 .DS_Store
 Thumbs.db
+.worktrees/
+
+# Local ONNX model files (generated via optimum-cli export)
+models/

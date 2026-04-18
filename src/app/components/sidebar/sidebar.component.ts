@@ -5,6 +5,7 @@ import {
   signal,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Router, RouterLink } from '@angular/router';
 import { open } from '@tauri-apps/plugin-dialog';
 import { PhotoService } from '../../services/photo.service';
 
@@ -12,12 +13,13 @@ import { PhotoService } from '../../services/photo.service';
   selector: 'app-sidebar',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, RouterLink],
   templateUrl: './sidebar.component.html',
   styleUrl: './sidebar.component.css',
 })
 export class SidebarComponent {
   protected photos = inject(PhotoService);
+  protected router = inject(Router);
   protected apiKeyDraft = signal('');
 
   protected folderBasename(path: string): string {
@@ -37,7 +39,18 @@ export class SidebarComponent {
   }
 
   protected selectFolder(id: number | null): void {
+    if (this.router.url !== '/') {
+      void this.router.navigate(['/']);
+    }
     this.photos.selectFolder(id);
+  }
+
+  protected isGalleryActive(): boolean {
+    return this.router.url === '/' || this.router.url === '';
+  }
+
+  protected isPeopleActive(): boolean {
+    return this.router.url === '/people';
   }
 
   protected toggleApiKeyInput(): void {

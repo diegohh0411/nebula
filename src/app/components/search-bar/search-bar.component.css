@@ -16,6 +16,28 @@
   @apply relative flex-1 flex items-center;
 }
 
+.search-input-wrap.drag-over {
+  @apply ring-2 ring-primary/50 bg-primary/5;
+}
+
+.image-chip {
+  @apply flex items-center gap-2 px-2 py-1 rounded-lg bg-accent border border-border w-full;
+}
+
+.image-chip-thumb {
+  @apply w-7 h-7 rounded object-cover flex-shrink-0;
+}
+
+.image-chip-label {
+  @apply text-xs text-muted-foreground flex-1 truncate;
+}
+
+.image-chip-clear {
+  @apply p-1 rounded text-muted-foreground
+         hover:text-foreground hover:bg-accent transition-colors
+         cursor-pointer bg-transparent border-0 flex-shrink-0;
+}
+
 .search-icon {
   @apply absolute left-3 text-muted-foreground pointer-events-none;
 }

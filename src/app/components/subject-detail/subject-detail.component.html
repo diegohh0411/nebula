@@ -1,0 +1,154 @@
+<div class="subject-detail-container flex flex-col overflow-hidden bg-background">
+  <!-- Header -->
+  <header class="flex items-center justify-between px-6 py-4 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-10">
+    <div class="flex items-center gap-6">
+      <button (click)="goBack()" class="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground" title="Back">
+        <lucide-icon name="arrow-left" size="20"></lucide-icon>
+      </button>
+
+      <div class="flex items-center gap-4">
+        <div class="w-16 h-16 rounded-full overflow-hidden border-2 border-accent shrink-0 bg-muted flex items-center justify-center">
+          @if (faceCropUrl()) {
+            <img [src]="faceCropUrl()" alt="Face Crop" class="w-full h-full object-cover" />
+          } @else {
+            <span class="text-2xl text-muted-foreground">👤</span>
+          }
+        </div>
+
+        <div class="flex flex-col">
+          <div class="flex items-center gap-2 group">
+            @if (isEditingName()) {
+              <input
+                #nameInput
+                type="text"
+                [(ngModel)]="editedName"
+                (keyup.enter)="saveName()"
+                (keyup.escape)="cancelEdit()"
+                (blur)="saveName()"
+                class="text-2xl font-bold bg-transparent border-b border-primary outline-none py-0.5 min-w-[200px]"
+                autofocus
+              />
+            } @else {
+              <h1 class="text-2xl font-bold tracking-tight select-none">
+                {{ detail()?.subject?.name || 'Unnamed Person' }}
+              </h1>
+              <button (click)="startEdit()" class="p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground transition-all">
+                <lucide-icon name="pencil" size="14"></lucide-icon>
+              </button>
+            }
+          </div>
+          <div class="text-sm text-muted-foreground flex items-center gap-3">
+            <span>{{ detail()?.photo_count || 0 }} photos</span>
+            <span class="w-1 h-1 rounded-full bg-border"></span>
+            <span>{{ detail()?.face_count || 0 }} faces</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="relative">
+      <button (click)="toggleMenu()" class="p-2 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground">
+        <lucide-icon name="ellipsis-vertical" size="20"></lucide-icon>
+      </button>
+
+      @if (isMenuOpen()) {
+        <div class="absolute right-0 mt-2 w-56 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg z-20 animate-in fade-in zoom-in-95 duration-100">
+          <button
+            class="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+            [routerLink]="['/subject', subjectId(), 'face-picker']"
+            (click)="closeMenu()"
+          >
+            <lucide-icon name="star" size="14"></lucide-icon>
+            Choose Representative Face
+          </button>
+        </div>
+        <div class="fixed inset-0 z-10" (click)="closeMenu()"></div>
+      }
+    </div>
+  </header>
+
+  <!-- Photo Grid -->
+  <main class="flex-1 overflow-y-auto px-4 py-6 min-h-0">
+    <!-- Similar Subjects -->
+    @if (similarSubjects().length > 0) {
+      <div class="border-b border-border pb-6 mb-6 max-w-[1600px] mx-auto">
+        <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Similar Subjects</h2>
+        <div class="flex flex-col gap-2">
+          @for (suggestion of similarSubjects(); track suggestion.id) {
+            @let other = getOtherSubject(suggestion);
+            <div class="flex items-center gap-3 p-2 rounded-md border border-border bg-card">
+              <a
+                [routerLink]="['/subject', other.id]"
+                class="flex items-center gap-3 flex-1 min-w-0 hover:bg-muted/50 rounded-md p-1 transition-colors"
+              >
+                <div class="w-10 h-10 rounded-full overflow-hidden border border-border bg-muted flex items-center justify-center shrink-0">
+                  @if (getSimilarThumbUrl(other)) {
+                    <img [src]="getSimilarThumbUrl(other)" alt="" class="w-full h-full object-cover" />
+                  } @else {
+                    <span class="text-sm text-muted-foreground">👤</span>
+                  }
+                </div>
+                <span class="font-medium text-sm truncate">{{ other.name || 'Unnamed' }}</span>
+              </a>
+              <button
+                class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                (click)="mergeSimilar(suggestion)"
+              >
+                Merge
+              </button>
+              <button
+                class="px-2 py-1 text-xs rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+                (click)="dismissSimilar(suggestion)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
+        </div>
+      </div>
+    }
+
+    @if (subjectPhotos().length === 0) {
+      <div class="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+        <p class="text-lg font-medium">No photos yet</p>
+        <p class="text-sm">Photos featuring this person will appear here.</p>
+      </div>
+    } @else {
+      <div class="flex flex-col gap-1 max-w-[1600px] mx-auto">
+        @for (row of virtualRows(); track $index) {
+          @if (row.type === 'row') {
+            <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />
+          }
+        }
+      </div>
+    }
+  </main>
+
+  <!-- Name Conflict Dialog -->
+  @if (showNameConflict()) {
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div class="bg-card border border-border rounded-lg p-6 max-w-sm mx-4 shadow-xl">
+        <h3 class="text-lg font-semibold mb-2">Duplicate Name</h3>
+        <p class="text-sm text-muted-foreground mb-4">
+          A subject with this name already exists. Would you like to merge them?
+        </p>
+        <div class="flex justify-end gap-2">
+          <button
+            class="px-4 py-2 text-sm rounded-md border border-border hover:bg-muted transition-colors"
+            (click)="cancelMerge()"
+          >
+            Keep Separate
+          </button>
+          <button
+            class="px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            (click)="confirmMerge()"
+          >
+            Merge
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <app-lightbox [image]="photos.selectedImage()" />
+</div>

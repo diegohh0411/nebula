@@ -23,15 +23,38 @@
           <lucide-icon name="chevron-left" size="32"></lucide-icon>
         </button>
 
-        <div class="image-container">
+        <div #imgContainer class="image-container" style="position: relative;">
           <img
+            #mainImg
             [src]="originalUrl(image)"
             [alt]="filename(image)"
             class="main-image"
             [style.view-transition-name]="'photo-' + ('id' in image ? image.id : image.image_id)"
             [style.background-image]="'url(' + thumbUrl(image) + ')'"
             style="background-size: contain; background-repeat: no-repeat; background-position: center;"
+            (load)="onImageLoad()"
           />
+          @if (showSidebar() && faceOverlayStyles().size > 0) {
+            @for (face of faces(); track face.id) {
+              @if (faceOverlayStyles().get(face.id); as style) {
+                <div 
+                  class="face-overlay"
+                  [class.active]="activeFaceId() === face.id"
+                  [class.clickable]="!!face.subject_id"
+                  [style.left.%]="style.left"
+                  [style.top.%]="style.top"
+                  [style.width.%]="style.width"
+                  [style.height.%]="style.height"
+                  (mouseenter)="setActiveFace(face.id)"
+                  (mouseleave)="setActiveFace(null)"
+                  (click)="navigateToSubject(face.subject_id)">
+                  @if (activeFaceId() === face.id) {
+                    <div class="face-label">{{ getSubjectName(face.subject_id) }}</div>
+                  }
+                </div>
+              }
+            }
+          }
         </div>
 
         <button class="nav-btn next" (click)="next()" title="Next">
@@ -65,6 +88,70 @@
           <div class="meta-item">
             <label>Status</label>
             <div class="value capitalize">{{ image.embed_status }}</div>
+          </div>
+
+          <div class="meta-section">
+            <h3>People</h3>
+            @if (assignedFaces().length === 0 && unassignedFaces().length === 0) {
+              <div class="value">No people detected</div>
+            } @else {
+              <div class="people-list">
+                @for (face of assignedFaces(); track face.id) {
+                  <div
+                    class="person-item"
+                    [class.active]="activeFaceId() === face.id"
+                    (mouseenter)="setActiveFace(face.id)"
+                    (mouseleave)="setActiveFace(null)">
+                    <div class="person-avatar" (click)="navigateToSubject(face.subject_id)">👤</div>
+                    <div class="person-name" (click)="navigateToSubject(face.subject_id)">{{ getSubjectName(face.subject_id) }}</div>
+                    <app-face-assign-popover
+                      class="ml-auto"
+                      [face]="face"
+                      (assigned)="onFaceAssigned($event)"
+                      (removed)="onFaceRemoved($event)" />
+                  </div>
+                }
+              </div>
+
+              @if (unassignedFaces().length > 0) {
+                @if (!showFacesToAdd()) {
+                  <button
+                    type="button"
+                    class="mt-2 text-xs text-muted-foreground underline cursor-pointer hover:text-foreground transition-colors bg-transparent border-none p-0"
+                    (click)="showFacesToAdd.set(true)"
+                  >
+                    There are some faces to add
+                  </button>
+                } @else {
+                  <div class="mt-3 pt-3 border-t border-border">
+                    <div class="flex items-center justify-between mb-2">
+                      <span class="text-xs uppercase tracking-wide text-muted-foreground">Faces to add</span>
+                      <button
+                        type="button"
+                        class="text-xs text-muted-foreground cursor-pointer hover:text-foreground transition-colors bg-transparent border-none p-0"
+                        (click)="showFacesToAdd.set(false)"
+                      >
+                        ▴ hide
+                      </button>
+                    </div>
+                    <div class="flex flex-col gap-1">
+                      @for (face of unassignedFaces(); track face.id) {
+                        <div class="flex items-center gap-2"
+                          (mouseenter)="setActiveFace(face.id)"
+                          (mouseleave)="setActiveFace(null)">
+                          <div class="w-8 h-8 rounded-full bg-muted border border-dashed border-muted-foreground shrink-0 overflow-hidden">
+                          </div>
+                          <app-face-assign-popover
+                            [face]="face"
+                            (assigned)="onFaceAssigned($event)"
+                          />
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+              }
+            }
           </div>
         </div>
       </div>

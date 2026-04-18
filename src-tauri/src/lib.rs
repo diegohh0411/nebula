@@ -1,3 +1,4 @@
+mod clustering;
 mod commands;
 mod config;
 mod db;
@@ -5,11 +6,12 @@ mod embedder;
 mod models;
 mod search;
 mod thumbnail;
+mod vision_engine;
 mod watcher;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 
@@ -20,6 +22,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub api_key: Arc<Mutex<Option<String>>>,
     pub watcher: Arc<Mutex<FolderWatcher>>,
+    pub vision_engine: Arc<vision_engine::VisionEngine>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,6 +34,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             std::fs::create_dir_all(thumbnail::thumbnail_cache_dir(&data_dir))?;
+            std::fs::create_dir_all(thumbnail::face_crop_cache_dir(&data_dir))?;
 
             // Initialize DB
             let pool = tauri::async_runtime::block_on(db::init_db(&data_dir))?;
@@ -61,12 +65,16 @@ pub fn run() {
                 });
             }
 
+            // Create VisionEngine
+            let vision_engine = Arc::new(vision_engine::VisionEngine::new(data_dir.clone()));
+
             // Register app state
             app.manage(AppState {
                 pool: pool.clone(),
                 data_dir: data_dir.clone(),
                 api_key: api_key.clone(),
                 watcher: watcher_arc,
+                vision_engine,
             });
 
             // Spawn watcher event consumer
@@ -108,12 +116,32 @@ pub fn run() {
                 }
             });
 
+            // Ensure model files are present (downloads from HF on first run).
+            // The embedding worker waits on this before processing any images.
+            let vision_engine_model = Arc::clone(&app.state::<AppState>().vision_engine);
+            let app_handle_model = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = vision_engine_model.ensure_model_ready(&app_handle_model).await {
+                    eprintln!("Model setup failed: {}", e);
+                    let _ = app_handle_model.emit(
+                        "model_download_progress",
+                        crate::models::ModelDownloadPayload {
+                            file: String::new(),
+                            bytes_done: 0,
+                            bytes_total: None,
+                            done: false,
+                            error: Some(e.to_string()),
+                        },
+                    );
+                }
+            });
+
             // Spawn embedding worker
             let pool_embed = pool.clone();
             let app_handle_embed = app.handle().clone();
-            let api_key_embed = api_key.clone();
+            let vision_engine_embed = Arc::clone(&app.state::<AppState>().vision_engine);
             tauri::async_runtime::spawn(async move {
-                embedder::run_embedding_worker(pool_embed, app_handle_embed, api_key_embed).await;
+                embedder::run_embedding_worker(pool_embed, app_handle_embed, vision_engine_embed).await;
             });
 
             Ok(())
@@ -123,12 +151,26 @@ pub fn run() {
             commands::remove_folder,
             commands::list_folders,
             commands::list_images,
-            commands::search_images,
-            commands::search_similar_images,
+            commands::search,
             commands::get_embed_status,
             commands::set_api_key,
             commands::get_api_key,
             commands::regenerate_all_thumbnails,
+            commands::list_subjects,
+            commands::name_subject,
+            commands::list_faces,
+            commands::list_faces_for_image,
+            commands::get_face_crop,
+            commands::set_subject_thumbnail,
+            commands::get_subject_photos,
+            commands::get_subject_detail,
+            commands::recluster_faces,
+            commands::get_merge_suggestions,
+            commands::merge_subjects,
+            commands::dismiss_merge_suggestion,
+            commands::assign_face_to_subject,
+            commands::create_subject_for_face,
+            commands::unassign_face,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

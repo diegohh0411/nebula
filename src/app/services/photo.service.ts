@@ -7,6 +7,11 @@ import {
   Image,
   SearchResult,
   VirtualRow,
+  Subject,
+  Face,
+  MergeSuggestion,
+  NameSubjectResult,
+  SubjectDetail,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -19,12 +24,15 @@ export class PhotoService {
   readonly viewportWidth = signal<number>(1000);
   readonly targetRowHeight = signal<number>(220);
   readonly folders = signal<Folder[]>([]);
+  readonly subjects = signal<Subject[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
   readonly embedStatus = signal<EmbedStatus>({ pending: 0, done: 0 });
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
   readonly searchError = signal<string | null>(null);
+  readonly searchImage = signal<{ thumbnailUrl: string; type: 'library' | 'external' } | null>(null);
+  readonly searchText = signal<string>('');
   readonly apiKey = signal<string | null>(null);
   readonly showApiKeyInput = signal(false);
 
@@ -130,6 +138,41 @@ export class PhotoService {
     this.folders.set(folders);
   }
 
+  async loadSubjects(): Promise<void> {
+    const subjects = await invoke<Subject[]>('list_subjects');
+    this.subjects.set(subjects);
+  }
+
+  async nameSubject(id: number, name: string | null): Promise<NameSubjectResult> {
+    const result = await invoke<NameSubjectResult>('name_subject', { id, name });
+    await this.loadSubjects();
+    return result;
+  }
+
+  async loadFaces(subjectId: number): Promise<Face[]> {
+    return await invoke<Face[]>('list_faces', { subjectId });
+  }
+
+  async loadFacesForImage(imageId: number): Promise<Face[]> {
+    return await invoke<Face[]>('list_faces_for_image', { imageId });
+  }
+
+  async getSubjectDetail(subjectId: number): Promise<SubjectDetail> {
+    return await invoke<SubjectDetail>('get_subject_detail', { subjectId });
+  }
+
+  async getSubjectPhotos(subjectId: number): Promise<SearchResult[]> {
+    return await invoke<SearchResult[]>('get_subject_photos', { subjectId });
+  }
+
+  async setSubjectThumbnail(subjectId: number, faceId: number): Promise<void> {
+    await invoke('set_subject_thumbnail', { subjectId, faceId });
+  }
+
+  async getFaceCrop(faceId: number): Promise<string> {
+    return await invoke<string>('get_face_crop', { faceId });
+  }
+
   async addFolder(path: string): Promise<void> {
     await invoke<Folder>('add_folder', { path });
     await this.loadFolders();
@@ -158,15 +201,18 @@ export class PhotoService {
     this.embedStatus.set(status);
   }
 
-  async search(query: string): Promise<void> {
+  async searchByText(query: string): Promise<void> {
     if (!query.trim()) {
       this.clearSearch();
       return;
     }
+    this.revokeExternalImage();
+    this.searchText.set(query);
+    this.searchImage.set(null);
     this.isSearching.set(true);
     this.searchError.set(null);
     try {
-      const results = await invoke<SearchResult[]>('search_images', { query });
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'text', query } });
       this.searchResults.set(results);
     } catch (e: unknown) {
       const msg =
@@ -182,10 +228,14 @@ export class PhotoService {
 
   async searchByImage(image: Image | SearchResult): Promise<void> {
     const id = 'id' in image ? image.id : image.image_id;
+    const thumbUrl = this.thumbnailUrl(image.thumbnail_path);
+    this.revokeExternalImage();
+    this.searchImage.set(thumbUrl ? { thumbnailUrl: thumbUrl, type: 'library' } : null);
+    this.searchText.set('');
     this.isSearching.set(true);
     this.searchError.set(null);
     try {
-      const results = await invoke<SearchResult[]>('search_similar_images', { imageId: id });
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageId', image_id: id } });
       this.searchResults.set(results);
     } catch (e: unknown) {
       this.searchError.set(typeof e === 'string' ? e : 'Visual search failed.');
@@ -195,9 +245,29 @@ export class PhotoService {
     }
   }
 
+  async searchByExternalImage(base64Data: string, mimeType: string, objectUrl: string): Promise<void> {
+    this.revokeExternalImage();
+    this.searchImage.set({ thumbnailUrl: objectUrl, type: 'external' });
+    this.searchText.set('');
+    this.isSearching.set(true);
+    this.searchError.set(null);
+    try {
+      const results = await invoke<SearchResult[]>('search', { query: { type: 'imageBytes', data: base64Data, mime_type: mimeType } });
+      this.searchResults.set(results);
+    } catch (e: unknown) {
+      this.searchError.set(typeof e === 'string' ? e : 'Image search failed.');
+      this.searchResults.set(null);
+    } finally {
+      this.isSearching.set(false);
+    }
+  }
+
   clearSearch(): void {
+    this.revokeExternalImage();
     this.searchResults.set(null);
     this.searchError.set(null);
+    this.searchImage.set(null);
+    this.searchText.set('');
   }
 
   selectFolder(id: number | null): void {
@@ -219,6 +289,47 @@ export class PhotoService {
   async regenerateThumbnails(): Promise<void> {
     await invoke('regenerate_all_thumbnails');
     // The image_updated events from Rust will trigger refreshing the grid automatically
+  }
+
+  async reclusterFaces(): Promise<{ clusters: number; noise: number; merged: number; deleted: number }> {
+    return await invoke<{ clusters: number; noise: number; merged: number; deleted: number }>('recluster_faces');
+  }
+
+  async getMergeSuggestions(): Promise<MergeSuggestion[]> {
+    return await invoke<MergeSuggestion[]>('get_merge_suggestions');
+  }
+
+  async mergeSubjects(targetId: number, sourceId: number): Promise<void> {
+    await invoke('merge_subjects', { targetId, sourceId });
+    await this.loadSubjects();
+  }
+
+  async dismissMergeSuggestion(id: number): Promise<void> {
+    await invoke('dismiss_merge_suggestion', { id });
+  }
+
+  async assignFaceToSubject(faceId: number, subjectId: number): Promise<void> {
+    await invoke('assign_face_to_subject', { faceId, subjectId });
+  }
+
+  async createSubjectForFace(faceId: number, name?: string): Promise<Subject> {
+    const subject = await invoke<Subject>('create_subject_for_face', {
+      faceId,
+      name: name ?? null,
+    });
+    this.subjects.update(subjects => [...subjects, subject]);
+    return subject;
+  }
+
+  async unassignFace(faceId: number): Promise<void> {
+    await invoke('unassign_face', { faceId });
+  }
+
+  private revokeExternalImage(): void {
+    const img = this.searchImage();
+    if (img?.type === 'external' && img.thumbnailUrl) {
+      URL.revokeObjectURL(img.thumbnailUrl);
+    }
   }
 
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */

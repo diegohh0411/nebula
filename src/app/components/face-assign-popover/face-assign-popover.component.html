@@ -1,0 +1,68 @@
+<div brnPopover #pop="brnPopover">
+  @if (isReassignMode()) {
+    <button brnPopoverTrigger [brnPopoverTriggerFor]="pop"
+            class="text-muted-foreground hover:text-foreground hover:bg-accent transition-colors bg-transparent border-none p-1 rounded cursor-pointer"
+            (click)="open()">
+      <lucide-icon name="pencil" [size]="14" class="shrink-0" />
+    </button>
+  } @else {
+    <button brnPopoverTrigger [brnPopoverTriggerFor]="pop"
+            class="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors cursor-pointer bg-transparent border-none p-0"
+            (click)="open()">
+      Tap to add
+    </button>
+  }
+
+  <ng-template brnPopoverContent>
+    <div hlmPopoverContent class="w-60 p-0 overflow-hidden">
+      @if (isReassignMode()) {
+        <div class="px-3 py-2 border-b border-border">
+          <div class="text-xs text-muted-foreground mb-1">Currently:</div>
+          <div class="text-sm font-medium">{{ currentSubjectName() }}</div>
+        </div>
+        <button
+          class="w-full flex items-center gap-2 px-3 py-2 text-sm text-destructive hover:bg-accent transition-colors bg-transparent border-none cursor-pointer text-left"
+          (click)="removeFace()">
+          <lucide-icon name="x" [size]="14" class="shrink-0" />
+          Remove from subject
+        </button>
+        <div class="border-t border-border"></div>
+      }
+      <hlm-command (searchChange)="query.set($event)">
+        <hlm-command-input placeholder="Search subjects..." />
+
+        <hlm-command-list>
+          @if (!query()) {
+            <button hlmCommandItem value="__create__" (selected)="createSubject()"
+                    class="gap-2">
+              <lucide-icon name="plus" [size]="16" class="shrink-0" />
+              Create new subject
+            </button>
+            @if (filteredSubjects().length > 0) {
+              <div class="border-t my-1"></div>
+            }
+          }
+
+          @for (subject of filteredSubjects(); track subject.id) {
+            <button hlmCommandItem [value]="subject.name ?? 'unnamed-' + subject.id"
+                    (selected)="selectSubject(subject)">
+              @if (subject.name) {
+                {{ subject.name }}
+              } @else {
+                <em class="text-muted-foreground">Unnamed subject</em>
+              }
+            </button>
+          }
+
+          @if (query()) {
+            <button hlmCommandItem [value]="'__create__' + query()" (selected)="createSubject()"
+                    class="gap-2 mt-1 border-t pt-1">
+              <lucide-icon name="plus" [size]="16" class="shrink-0" />
+              Create "{{ query() }}"
+            </button>
+          }
+        </hlm-command-list>
+      </hlm-command>
+    </div>
+  </ng-template>
+</div>

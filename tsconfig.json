@@ -1,5 +1,3 @@
-/* To learn more about Typescript configuration file: https://www.typescriptlang.org/docs/handbook/tsconfig-json.html. */
-/* To learn more about Angular compiler options: https://angular.dev/reference/configs/angular-compiler-options. */
 {
   "compileOnSave": false,
   "compilerOptions": {
@@ -13,7 +11,24 @@
     "experimentalDecorators": true,
     "importHelpers": true,
     "target": "ES2022",
-    "module": "preserve"
+    "module": "preserve",
+    "paths": {
+      "@spartan-ng/helm/popover": [
+        "./src/app/libs/ui/popover/src/index.ts"
+      ],
+      "@spartan-ng/helm/utils": [
+        "./src/app/libs/ui/utils/src/index.ts"
+      ],
+      "@spartan-ng/helm/command": [
+        "./src/app/libs/ui/command/src/index.ts"
+      ],
+      "@spartan-ng/helm/button": [
+        "./src/app/libs/ui/button/src/index.ts"
+      ],
+      "@spartan-ng/helm/icon": [
+        "./src/app/libs/ui/icon/src/index.ts"
+      ]
+    }
   },
   "angularCompilerOptions": {
     "enableI18nLegacyMessageIdFormat": false,
@@ -22,5 +37,9 @@
     "typeCheckHostBindings": true,
     "strictTemplates": true
   },
-  "references": [{ "path": "./tsconfig.app.json" }]
+  "references": [
+    {
+      "path": "./tsconfig.app.json"
+    }
+  ]
 }

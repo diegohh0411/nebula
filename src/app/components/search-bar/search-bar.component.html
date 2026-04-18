@@ -8,25 +8,42 @@
   </span>
 
   <!-- Search input -->
-  <div class="search-input-wrap">
-    <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-    </svg>
-    <input
-      type="search"
-      class="search-input"
-      placeholder="Search photos…"
-      autocomplete="off"
-      [value]="query()"
-      (input)="query.set($any($event.target).value)"
-      (keyup.enter)="onSearch()"
-    />
-    @if ((photos.searchResults() !== null || query()) && !photos.isSearching()) {
-      <button class="search-clear" (click)="onClear()" title="Clear search">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
+  <div class="search-input-wrap"
+       [class.drag-over]="isDragOver()"
+       (dragover)="onDragOver($event)"
+       (dragleave)="onDragLeave($event)"
+       (drop)="onDrop($event)"
+       (paste)="onPaste($event)">
+    @if (photos.searchImage(); as img) {
+      <div class="image-chip">
+        <img [src]="img.thumbnailUrl" class="image-chip-thumb" alt="Search image" />
+        <span class="image-chip-label">{{ img.type === 'library' ? 'Library' : 'External' }}</span>
+        <button class="image-chip-clear" (click)="clearImageSearch()" title="Clear image search">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    } @else {
+      <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input
+        type="search"
+        class="search-input"
+        placeholder="Search photos…"
+        autocomplete="off"
+        [value]="query()"
+        (input)="query.set($any($event.target).value)"
+        (keyup.enter)="onSearch()"
+      />
+      @if ((photos.searchResults() !== null || query()) && !photos.isSearching()) {
+        <button class="search-clear" (click)="onClear()" title="Clear search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      }
     }
     @if (photos.isSearching()) {
       <span class="search-spinner" aria-label="Searching…"></span>

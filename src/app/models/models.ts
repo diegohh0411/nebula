@@ -59,6 +59,44 @@ export interface DayGroup {
   images: (Image | SearchResult)[];
 }
 
+export interface Subject {
+  id: number;
+  name: string | null;
+  thumbnail_face_id: number | null;
+  type: string;
+  added_at: number;
+}
+
+export interface Face {
+  id: number;
+  image_id: number;
+  subject_id: number | null;
+  bbox_x: number;
+  bbox_y: number;
+  bbox_w: number;
+  bbox_h: number;
+  added_at: number;
+  is_manual: boolean;
+}
+
+export interface SubjectDetail {
+  subject: Subject;
+  photo_count: number;
+  face_count: number;
+}
+
+export interface MergeSuggestion {
+  id: number;
+  subject_a: Subject;
+  subject_b: Subject;
+  cross_match_count: number;
+  total_pairs: number;
+}
+
+export interface NameSubjectResult {
+  duplicate_subject_id: number | null;
+}
+
 /** A virtual scroll row: either a day header or a row of images */
 export type VirtualRow =
   | { type: 'header'; label: string; date: string }

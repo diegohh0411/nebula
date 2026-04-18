@@ -18,11 +18,15 @@
     "@angular/forms": "^20.1.4",
     "@angular/platform-browser": "^20.1.4",
     "@angular/router": "^20.1.4",
+    "@ng-icons/core": ">=32.0.0 <34.0.0",
+    "@ng-icons/lucide": ">=32.0.0 <34.0.0",
     "@spartan-ng/brain": "0.0.1-alpha.668",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "autoprefixer": "^10.5.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
     "lucide-angular": "^1.0.0",
     "rxjs": "~7.8.2",
     "tailwind-merge": "^3.5.0",
@@ -31,11 +35,15 @@
     "zone.js": "~0.15.1"
   },
   "devDependencies": {
+    "@analogjs/vite-plugin-angular": "^2.4.7",
+    "@analogjs/vitest-angular": "^2.4.7",
     "@angular/build": "^20.1.4",
     "@angular/cli": "^20.1.4",
     "@angular/compiler-cli": "^20.1.4",
     "@spartan-ng/cli": "0.0.1-alpha.668",
     "@tauri-apps/cli": "^2",
-    "typescript": "~5.8.3"
+    "jsdom": "^29.0.2",
+    "typescript": "~5.8.3",
+    "vitest": "^4.1.4"
   }
 }
