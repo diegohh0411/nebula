@@ -3479,6 +3479,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "face_id",
+ "futures",
  "hdbscan",
  "hf-hub",
  "image",

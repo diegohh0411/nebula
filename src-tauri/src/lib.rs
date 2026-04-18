@@ -11,7 +11,7 @@ mod watcher;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 
@@ -113,6 +113,26 @@ pub fn run() {
                             }
                         }
                     }
+                }
+            });
+
+            // Ensure model files are present (downloads from HF on first run).
+            // The embedding worker waits on this before processing any images.
+            let vision_engine_model = Arc::clone(&app.state::<AppState>().vision_engine);
+            let app_handle_model = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = vision_engine_model.ensure_model_ready(&app_handle_model).await {
+                    eprintln!("Model setup failed: {}", e);
+                    let _ = app_handle_model.emit(
+                        "model_download_progress",
+                        crate::models::ModelDownloadPayload {
+                            file: String::new(),
+                            bytes_done: 0,
+                            bytes_total: None,
+                            done: false,
+                            error: Some(e.to_string()),
+                        },
+                    );
                 }
             });
 

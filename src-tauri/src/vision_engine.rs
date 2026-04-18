@@ -1,28 +1,156 @@
 use anyhow::Result;
-use ndarray::Array4;
+use futures::StreamExt;
+use ndarray::{Array2, Array4};
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 use std::path::PathBuf;
+use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWriteExt;
 
-const SIGLIP_REPO: &str = "google/siglip2-so400m-patch14-384";
+use crate::models::ModelDownloadPayload;
+
+// TODO: update to your published HuggingFace repo after running:
+//   huggingface-cli repo create nebula-siglip2-base-224 --type model
+//   huggingface-cli upload nebula-siglip2-base-224 ./models/google_siglip2-base-patch16-224_onnx/model.onnx model.onnx
+//   huggingface-cli upload nebula-siglip2-base-224 ./models/google_siglip2-base-patch16-224_onnx/tokenizer.json tokenizer.json
+const HF_REPO: &str = "diegohh0411/nebula-siglip2-base-224";
+
+const MODEL_SUBDIR: &str = "siglip2-base-224";
+const IMAGE_SIZE: usize = 224;
+const MODEL_FILES: &[&str] = &["model.onnx", "tokenizer.json"];
 
 pub struct VisionEngine {
     pub data_dir: PathBuf,
-    image_session: std::sync::Mutex<Option<Session>>,
-    text_session: std::sync::Mutex<Option<Session>>,
+    session: std::sync::Mutex<Option<Session>>,
     tokenizer: std::sync::Mutex<Option<tokenizers::Tokenizer>>,
     face_analyzer: tokio::sync::OnceCell<face_id::analyzer::FaceAnalyzer>,
+    model_ready_tx: tokio::sync::watch::Sender<bool>,
+    model_ready_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 impl VisionEngine {
     pub fn new(data_dir: PathBuf) -> Self {
+        let (tx, rx) = tokio::sync::watch::channel(false);
         Self {
             data_dir,
-            image_session: std::sync::Mutex::new(None),
-            text_session: std::sync::Mutex::new(None),
+            session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
             face_analyzer: tokio::sync::OnceCell::new(),
+            model_ready_tx: tx,
+            model_ready_rx: rx,
+        }
+    }
+
+    fn model_dir(&self) -> PathBuf {
+        self.data_dir.join("models").join(MODEL_SUBDIR)
+    }
+
+    /// Downloads any missing model files from HuggingFace, then signals readiness.
+    /// Emits `model_download_progress` events while downloading.
+    /// Should be spawned once at startup before the embedding worker runs.
+    pub async fn ensure_model_ready(&self, app: &AppHandle) -> Result<()> {
+        let model_dir = self.model_dir();
+
+        // If everything is already on disk, signal immediately and return.
+        if MODEL_FILES.iter().all(|f| model_dir.join(f).exists()) {
+            self.signal_ready();
+            return Ok(());
+        }
+
+        tokio::fs::create_dir_all(&model_dir).await?;
+
+        let client = reqwest::Client::new();
+
+        for filename in MODEL_FILES {
+            let dest = model_dir.join(filename);
+            if dest.exists() {
+                continue;
+            }
+
+            let url = format!(
+                "https://huggingface.co/{}/resolve/main/{}",
+                HF_REPO, filename
+            );
+
+            #[cfg(debug_assertions)]
+            eprintln!("[vision-engine] downloading {} from {}", filename, url);
+
+            let resp = client
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()
+                .map_err(|e| anyhow::anyhow!("failed to fetch '{}': {}", filename, e))?;
+
+            let total_bytes = resp.content_length();
+            let mut downloaded: u64 = 0;
+
+            // Write to a .tmp file first to avoid leaving partial files on crash/cancel.
+            let tmp_path = model_dir.join(format!("{}.tmp", filename));
+            let mut file = tokio::fs::File::create(&tmp_path).await?;
+            let mut stream = resp.bytes_stream();
+
+            while let Some(chunk) = stream.next().await {
+                let chunk =
+                    chunk.map_err(|e| anyhow::anyhow!("download stream error: {}", e))?;
+                downloaded += chunk.len() as u64;
+                file.write_all(&chunk).await?;
+
+                let _ = app.emit(
+                    "model_download_progress",
+                    ModelDownloadPayload {
+                        file: filename.to_string(),
+                        bytes_done: downloaded,
+                        bytes_total: total_bytes,
+                        done: false,
+                        error: None,
+                    },
+                );
+            }
+
+            file.flush().await?;
+            drop(file);
+            tokio::fs::rename(&tmp_path, &dest).await?;
+
+            let _ = app.emit(
+                "model_download_progress",
+                ModelDownloadPayload {
+                    file: filename.to_string(),
+                    bytes_done: downloaded,
+                    bytes_total: total_bytes,
+                    done: true,
+                    error: None,
+                },
+            );
+
+            #[cfg(debug_assertions)]
+            eprintln!("[vision-engine] saved {} ({} bytes)", filename, downloaded);
+        }
+
+        self.signal_ready();
+        Ok(())
+    }
+
+    fn signal_ready(&self) {
+        let _ = self.model_ready_tx.send(true);
+    }
+
+    /// Resolves as soon as the model files are confirmed present on disk.
+    /// Returns immediately if they were already ready when called.
+    pub async fn wait_until_ready(&self) {
+        let mut rx = self.model_ready_rx.clone();
+        // Already ready — fast path.
+        if *rx.borrow() {
+            return;
+        }
+        loop {
+            if rx.changed().await.is_err() {
+                break; // sender dropped — shouldn't happen in normal operation
+            }
+            if *rx.borrow() {
+                return;
+            }
         }
     }
 
@@ -37,29 +165,16 @@ impl VisionEngine {
             .await
     }
 
-    fn load_session<'a>(
-        &'a self,
-        filename: &str,
-        session_mutex: &'a std::sync::Mutex<Option<Session>>,
-    ) -> Result<std::sync::MutexGuard<'a, Option<Session>>> {
-        let mut lock = session_mutex
+    fn get_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
+        let mut lock = self
+            .session
             .lock()
             .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
         if lock.is_none() {
-            #[cfg(debug_assertions)]
-            eprintln!("[vision-engine] loading session for '{}' from HF repo '{}'", filename, SIGLIP_REPO);
-
-            let api = hf_hub::api::sync::Api::new()?;
-            let repo = api.model(SIGLIP_REPO.to_string());
+            let model_path = self.model_dir().join("model.onnx");
 
             #[cfg(debug_assertions)]
-            eprintln!("[vision-engine] fetching '{}' from HuggingFace Hub…", filename);
-
-            let model_path = repo.get(filename)
-                .map_err(|e| anyhow::anyhow!("HuggingFace download of '{}' from repo '{}' failed: {}", filename, SIGLIP_REPO, e))?;
-
-            #[cfg(debug_assertions)]
-            eprintln!("[vision-engine] model cached at: {}", model_path.display());
+            eprintln!("[vision-engine] loading session from: {}", model_path.display());
 
             let session = Session::builder()
                 .map_err(|e| anyhow::anyhow!("failed to create session builder: {e}"))?
@@ -68,48 +183,54 @@ impl VisionEngine {
                 .with_intra_threads(4)
                 .map_err(|e| anyhow::anyhow!("failed to set intra threads: {e}"))?
                 .commit_from_file(&model_path)
-                .map_err(|e| anyhow::anyhow!("failed to load ONNX model '{}': {e}", model_path.display()))?;
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to load ONNX model '{}': {e}",
+                        model_path.display()
+                    )
+                })?;
 
             #[cfg(debug_assertions)]
-            eprintln!("[vision-engine] session ready for '{}'", filename);
+            eprintln!("[vision-engine] session ready");
 
             *lock = Some(session);
         }
         Ok(lock)
     }
 
-    pub fn get_image_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
-        self.load_session("model.onnx", &self.image_session)
-    }
-
-    pub fn get_text_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
-        self.load_session("text_model.onnx", &self.text_session)
-    }
-
     pub fn embed_image(&self, img: &image::DynamicImage) -> Result<Vec<f32>> {
-        let mut lock = self.get_image_session()?;
-        let session = lock
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("image session not initialized"))?;
-
-        // Preprocess: resize to 384x384 for so400m model
-        let resized = img.resize_exact(384, 384, image::imageops::FilterType::Lanczos3);
+        let resized = img.resize_exact(
+            IMAGE_SIZE as u32,
+            IMAGE_SIZE as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
         let rgb = resized.to_rgb8();
 
-        let mut input = Array4::<f32>::zeros((1, 3, 384, 384));
+        let mut pixel_values = Array4::<f32>::zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE));
         for (x, y, pixel) in rgb.enumerate_pixels() {
             for c in 0..3 {
-                // Normalization: (x - mean) / std with mean=0.5, std=0.5
                 let val = pixel[c] as f32 / 255.0;
-                input[[0, c, y as usize, x as usize]] = (val - 0.5) / 0.5;
+                pixel_values[[0, c, y as usize, x as usize]] = (val - 0.5) / 0.5;
             }
         }
 
-        let tensor = TensorRef::from_array_view(input.view())
-            .map_err(|e| anyhow::anyhow!("failed to create tensor: {e}"))?;
+        // Dummy input_ids (batch=1, seq_len=1) — text encoder output is discarded
+        let dummy_ids = Array2::<i64>::zeros((1, 1));
+
+        let mut lock = self.get_session()?;
+        let session = lock
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("session not initialized"))?;
+
+        let pv_ref = TensorRef::from_array_view(pixel_values.view())
+            .map_err(|e| anyhow::anyhow!("failed to create pixel_values tensor: {e}"))?;
+        let ids_ref = TensorRef::from_array_view(dummy_ids.view())
+            .map_err(|e| anyhow::anyhow!("failed to create dummy input_ids tensor: {e}"))?;
+
         let outputs = session
-            .run(ort::inputs!["pixel_values" => tensor])
+            .run(ort::inputs!["pixel_values" => pv_ref, "input_ids" => ids_ref])
             .map_err(|e| anyhow::anyhow!("image inference failed: {e}"))?;
+
         let (_shape, data) = outputs["image_embeds"]
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("failed to extract image embedding: {e}"))?;
@@ -119,16 +240,20 @@ impl VisionEngine {
     pub fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
         const MAX_SEQ_LEN: usize = 64;
 
-        // 1. Load tokenizer lazily and encode in one lock acquisition
         let encoding = {
             let mut tok_lock = self
                 .tokenizer
                 .lock()
                 .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
             if tok_lock.is_none() {
-                let api = hf_hub::api::sync::Api::new()?;
-                let repo = api.model(SIGLIP_REPO.to_string());
-                let tok_path = repo.get("tokenizer.json")?;
+                let tok_path = self.model_dir().join("tokenizer.json");
+
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[vision-engine] loading tokenizer from: {}",
+                    tok_path.display()
+                );
+
                 *tok_lock = Some(
                     tokenizers::Tokenizer::from_file(tok_path)
                         .map_err(|e| anyhow::anyhow!("{e}"))?,
@@ -139,9 +264,8 @@ impl VisionEngine {
                 .unwrap()
                 .encode(text, true)
                 .map_err(|e| anyhow::anyhow!("{e}"))?
-        }; // tokenizer lock released
+        }; // tokenizer lock released before acquiring session lock
 
-        // 2. Build input tensors, truncating to MAX_SEQ_LEN
         let input_ids: Vec<i64> = encoding
             .get_ids()
             .iter()
@@ -149,34 +273,28 @@ impl VisionEngine {
             .map(|&id| id as i64)
             .collect();
         let seq_len = input_ids.len();
-        let input_ids_tensor =
-            ndarray::Array2::from_shape_vec((1, seq_len), input_ids)?;
+        let input_ids_arr = Array2::from_shape_vec((1, seq_len), input_ids)?;
 
-        let attention_mask: Vec<i64> = vec![1i64; seq_len];
-        let attention_mask_arr =
-            ndarray::Array2::from_shape_vec((1, seq_len), attention_mask)?;
+        // Dummy pixel_values — image encoder output is discarded
+        let dummy_pixels = Array4::<f32>::zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE));
 
-        // 3. Run text model
-        let mut session_lock = self.get_text_session()?;
-        let session = session_lock
+        let mut lock = self.get_session()?;
+        let session = lock
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("text session not initialized"))?;
+            .ok_or_else(|| anyhow::anyhow!("session not initialized"))?;
 
-        let ids_tensor_ref =
-            ort::value::TensorRef::from_array_view(input_ids_tensor.view())
-                .map_err(|e| anyhow::anyhow!("failed to create input_ids tensor: {e}"))?;
-        let mask_ref =
-            ort::value::TensorRef::from_array_view(attention_mask_arr.view())
-                .map_err(|e| anyhow::anyhow!("failed to create attention_mask tensor: {e}"))?;
+        let ids_ref = TensorRef::from_array_view(input_ids_arr.view())
+            .map_err(|e| anyhow::anyhow!("failed to create input_ids tensor: {e}"))?;
+        let pv_ref = TensorRef::from_array_view(dummy_pixels.view())
+            .map_err(|e| anyhow::anyhow!("failed to create dummy pixel_values tensor: {e}"))?;
 
         let outputs = session
-            .run(ort::inputs!["input_ids" => ids_tensor_ref, "attention_mask" => mask_ref])
+            .run(ort::inputs!["input_ids" => ids_ref, "pixel_values" => pv_ref])
             .map_err(|e| anyhow::anyhow!("text inference failed: {e}"))?;
 
         let (_shape, data) = outputs["text_embeds"]
             .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("failed to extract text embedding: {e}"))?;
-
         Ok(data.to_vec())
     }
 }

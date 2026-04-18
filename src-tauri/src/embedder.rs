@@ -198,6 +198,9 @@ pub async fn run_embedding_worker(
     app: AppHandle,
     vision_engine: Arc<crate::vision_engine::VisionEngine>,
 ) {
+    // Block until model files are downloaded and ready.
+    vision_engine.wait_until_ready().await;
+
     let semaphore = Arc::new(Semaphore::new(CONCURRENT_WORKERS));
     let clustering_lock = Arc::new(tokio::sync::Mutex::new(()));
 
