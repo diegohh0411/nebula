@@ -10,11 +10,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::models::ModelDownloadPayload;
 
-// TODO: update to your published HuggingFace repo after running:
-//   huggingface-cli repo create nebula-siglip2-base-224 --type model
-//   huggingface-cli upload nebula-siglip2-base-224 ./models/google_siglip2-base-patch16-224_onnx/model.onnx model.onnx
-//   huggingface-cli upload nebula-siglip2-base-224 ./models/google_siglip2-base-patch16-224_onnx/tokenizer.json tokenizer.json
-const HF_REPO: &str = "diegohh0411/nebula-siglip2-base-224";
+const HF_REPO: &str = "diegohh/siglip2-base-patch16-224";
 
 const MODEL_SUBDIR: &str = "siglip2-base-224";
 const IMAGE_SIZE: usize = 224;
