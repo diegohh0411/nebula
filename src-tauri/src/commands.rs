@@ -1,5 +1,4 @@
 use base64::Engine;
-use reqwest::Client;
 use sha2::{Sha256, Digest};
 use std::collections::HashSet;
 use tauri::{AppHandle, Emitter};
@@ -115,27 +114,16 @@ pub async fn search(
                 }
             }
 
-            let api_key = {
-                let lock = state.api_key.lock().await;
-                lock.clone()
-            };
-
-            let Some(api_key) = api_key else {
-                return Ok(results);
-            };
-
             let cache_key = {
                 let mut hasher = Sha256::new();
                 hasher.update(query.as_bytes());
                 format!("{:x}", hasher.finalize())
             };
 
-            let client = Client::new();
-
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
                 crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let emb = crate::embedder::embed_text(&client, &api_key, query).await.map_err(map_err)?;
+                let emb = state.vision_engine.embed_text(query).map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
@@ -171,7 +159,7 @@ pub async fn search(
             search::build_search_results(pool, scored).await.map_err(map_err)
         }
 
-        SearchQuery::ImageBytes { ref data, ref mime_type } => {
+        SearchQuery::ImageBytes { ref data, mime_type: _ } => {
             let raw_bytes = base64::engine::general_purpose::STANDARD
                 .decode(data)
                 .map_err(map_err)?;
@@ -182,23 +170,11 @@ pub async fn search(
                 format!("{:x}", hasher.finalize())
             };
 
-            let api_key = {
-                let lock = state.api_key.lock().await;
-                lock.clone()
-            };
-
-            let Some(api_key) = api_key else {
-                return Err("API key required for image search".to_string());
-            };
-
-            let client = Client::new();
-
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
                 crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let emb = crate::embedder::embed_image_bytes(&client, &api_key, raw_bytes, mime_type)
-                    .await
-                    .map_err(map_err)?;
+                let img = image::load_from_memory(&raw_bytes).map_err(map_err)?;
+                let emb = state.vision_engine.embed_image(&img).map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb
