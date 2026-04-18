@@ -5,7 +5,7 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 use std::path::PathBuf;
 
-const SIGLIP_REPO: &str = "google/siglip-so400m-patch14-384";
+const SIGLIP_REPO: &str = "google/siglip2-so400m-patch14-384";
 
 pub struct VisionEngine {
     pub data_dir: PathBuf,
