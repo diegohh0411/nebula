@@ -38,11 +38,10 @@
       <!-- Processing stage dot — visible on hover -->
       <span
         class="status-dot"
-        [class.status-dot--subject-pending]="processingStage(img) === 'subject_pending'"
-        [class.status-dot--semantic-pending]="processingStage(img) === 'semantic_pending'"
+        [class.status-dot--pending]="processingStage(img) === 'pending'"
         [class.status-dot--ready]="processingStage(img) === 'ready'"
         [class.animate-pulse]="processingStage(img) !== 'ready'"
-        [title]="processingStage(img) === 'subject_pending' ? 'Recognizing people…' : processingStage(img) === 'semantic_pending' ? 'Indexing for search…' : 'Ready'"
+        [title]="processingStage(img) === 'pending' ? 'Analyzing, come back soon' : 'Ready'"
       ></span>
     </div>
   }

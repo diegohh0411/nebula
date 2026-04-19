@@ -87,11 +87,9 @@
           </div>
           <div class="meta-item">
             <label>Status</label>
-            <div class="value">
-              @if (!image.subject_analysis_done) {
-                Recognizing people…
-              } @else if (!image.semantic_analysis_done) {
-                Indexing for search…
+            <div class="value" [class.text-amber-400]="stage === 'pending'" [class.text-green-400]="stage === 'ready'">
+              @if (stage === 'pending') {
+                Analyzing, come back soon
               } @else {
                 Ready
               }
@@ -99,8 +97,26 @@
           </div>
 
           <div class="meta-section">
-            <h3>People</h3>
-            @if (assignedFaces().length === 0 && unassignedFaces().length === 0) {
+            <div class="flex items-center justify-between mb-2">
+              <h3>People</h3>
+              @if (stage === 'pending') {
+                <span class="text-[10px] text-amber-400 animate-pulse font-medium uppercase tracking-wider">Analyzing...</span>
+              }
+            </div>
+
+            @if (stage === 'pending') {
+              <!-- Ghost Slots Loading State -->
+              <div class="people-list">
+                <div class="ghost-item animate-pulse">
+                  <div class="ghost-avatar"></div>
+                  <div class="ghost-name w-24"></div>
+                </div>
+                <div class="ghost-item animate-pulse" style="animation-delay: 0.2s">
+                  <div class="ghost-avatar"></div>
+                  <div class="ghost-name w-32"></div>
+                </div>
+              </div>
+            } @else if (assignedFaces().length === 0 && unassignedFaces().length === 0) {
               <div class="value">No people detected</div>
             } @else {
               <div class="people-list">

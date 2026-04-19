@@ -52,12 +52,8 @@
          ring-1 ring-black/20;
 }
 
-.status-dot--subject-pending {
+.status-dot--pending {
   @apply bg-amber-400;
-}
-
-.status-dot--semantic-pending {
-  @apply bg-purple-400;
 }
 
 .status-dot--ready {

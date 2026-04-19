@@ -157,74 +157,82 @@ async fn process_subject_one(
 
     match open_result {
         Ok(dynamic_img) => {
-            if let Ok(faces) = analyzer.analyze(&dynamic_img) {
-                for face_analysis in faces {
-                    let bbox = face_analysis.detection.bbox;
-                    let face_emb = face_analysis.embedding;
+            match analyzer.analyze(&dynamic_img) {
+                Ok(faces) => {
+                    for face_analysis in faces {
+                        let bbox = face_analysis.detection.bbox;
+                        let face_emb = face_analysis.embedding;
 
-                    let (subject_id, face_id) = {
-                        let _guard = clustering_lock.lock().await;
+                        let (subject_id, face_id) = {
+                            let _guard = clustering_lock.lock().await;
 
-                        let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
-                        let mut best_subject_id = None;
-                        let mut best_score = 0.0f32;
+                            let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
+                            let mut best_subject_id = None;
+                            let mut best_score = 0.0f32;
 
-                        for (sid, emb_blob) in existing_subjects {
-                            if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
-                                let score = cosine_similarity(&face_emb, &emb);
-                                if score > best_score {
-                                    best_score = score;
-                                    if score > CLUSTERING_THRESHOLD {
-                                        best_subject_id = Some(sid);
+                            for (sid, emb_blob) in existing_subjects {
+                                if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
+                                    let score = cosine_similarity(&face_emb, &emb);
+                                    if score > best_score {
+                                        best_score = score;
+                                        if score > CLUSTERING_THRESHOLD {
+                                            best_subject_id = Some(sid);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if best_score > 0.0 {
+                                eprintln!(
+                                    "[face-cluster] image_id={} best_score={:.4} threshold={} matched={}",
+                                    image_id, best_score, CLUSTERING_THRESHOLD, best_subject_id.is_some()
+                                );
+                            }
+
+                            let subject_id = if let Some(sid) = best_subject_id {
+                                Some(sid)
+                            } else {
+                                db::insert_subject(pool, None, "person").await.ok()
+                            };
+
+                            let face_blob = f32_slice_to_bytes(&face_emb);
+                            let face_id = db::insert_face(
+                                pool,
+                                image_id,
+                                subject_id,
+                                (
+                                    bbox.x1 as f64,
+                                    bbox.y1 as f64,
+                                    (bbox.x2 - bbox.x1) as f64,
+                                    (bbox.y2 - bbox.y1) as f64,
+                                ),
+                                Some(&face_blob),
+                            ).await.ok();
+
+                            (subject_id, face_id)
+                        };
+
+                        if let (Some(sid), Some(fid)) = (subject_id, face_id) {
+                            if let Ok(subjects) = db::list_all_subjects(pool).await {
+                                if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
+                                    if sub.thumbnail_face_id.is_none() {
+                                        let _ = db::update_subject_thumbnail_face(pool, sid, fid).await;
                                     }
                                 }
                             }
                         }
-
-                        if best_score > 0.0 {
-                            eprintln!(
-                                "[face-cluster] image_id={} best_score={:.4} threshold={} matched={}",
-                                image_id, best_score, CLUSTERING_THRESHOLD, best_subject_id.is_some()
-                            );
-                        }
-
-                        let subject_id = if let Some(sid) = best_subject_id {
-                            Some(sid)
-                        } else {
-                            db::insert_subject(pool, None, "person").await.ok()
-                        };
-
-                        let face_blob = f32_slice_to_bytes(&face_emb);
-                        let face_id = db::insert_face(
-                            pool,
-                            image_id,
-                            subject_id,
-                            (
-                                bbox.x1 as f64,
-                                bbox.y1 as f64,
-                                (bbox.x2 - bbox.x1) as f64,
-                                (bbox.y2 - bbox.y1) as f64,
-                            ),
-                            Some(&face_blob),
-                        ).await.ok();
-
-                        (subject_id, face_id)
-                    };
-
-                    if let (Some(sid), Some(fid)) = (subject_id, face_id) {
-                        if let Ok(subjects) = db::list_all_subjects(pool).await {
-                            if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
-                                if sub.thumbnail_face_id.is_none() {
-                                    let _ = db::update_subject_thumbnail_face(pool, sid, fid).await;
-                                }
-                            }
-                        }
+                    }
+                    if db::mark_subject_analysis_done(pool, image_id).await.is_ok() {
+                        let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
                     }
                 }
-            }
-
-            if db::mark_subject_analysis_done(pool, image_id).await.is_ok() {
-                let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
+                Err(e) => {
+                    let err_str = e.to_string();
+                    eprintln!("Face analysis failed for image {}: {}", image_id, err_str);
+                    if db::mark_failed(pool, queue_id, attempts, &err_str).await.is_ok() {
+                        let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
+                    }
+                }
             }
         }
         Err(e) => {

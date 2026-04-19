@@ -15,7 +15,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { LucideAngularModule } from 'lucide-angular';
-import { Image, SearchResult, Face, Subject } from '../../models/models';
+import { Image, SearchResult, Face, Subject, getProcessingStage, ProcessingStage } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 import { FaceAssignPopoverComponent } from '../face-assign-popover/face-assign-popover.component';
 import { startViewTransition } from '../../utils/view-transition';
@@ -57,6 +57,10 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
   private resizeObserver?: ResizeObserver;
 
   private imgLayout = signal<{ offsetX: number; offsetY: number; renderedW: number; renderedH: number; containerW: number; containerH: number } | null>(null);
+
+  protected get stage(): ProcessingStage {
+    return this.image ? getProcessingStage(this.image) : 'ready';
+  }
 
   protected faceOverlayStyles = computed(() => {
     const layout = this.imgLayout();
