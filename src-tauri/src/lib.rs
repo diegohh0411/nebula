@@ -23,6 +23,7 @@ pub struct AppState {
     pub api_key: Arc<Mutex<Option<String>>>,
     pub indexer: Arc<indexer::Indexer>,
     pub vision_engine: Arc<vision_engine::VisionEngine>,
+    pub index: vector_index::IndexStore,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +38,11 @@ pub fn run() {
             std::fs::create_dir_all(thumbnail::face_crop_cache_dir(&data_dir))?;
 
             let pool = tauri::async_runtime::block_on(db::init_db(&data_dir))?;
+
+            let flat_index = tauri::async_runtime::block_on(
+                vector_index::FlatIndex::load_or_rebuild(&data_dir, &pool)
+            )?;
+            let index: vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
             let api_key = config::read_api_key(&data_dir);
             let api_key = Arc::new(Mutex::new(api_key));
@@ -53,6 +59,7 @@ pub fn run() {
                 api_key: api_key.clone(),
                 indexer,
                 vision_engine: vision_engine.clone(),
+                index: index.clone(),
             });
 
             let indexer_rescan = app.state::<AppState>().indexer.clone();
