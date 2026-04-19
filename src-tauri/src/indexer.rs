@@ -22,6 +22,7 @@ pub struct Indexer {
     app: AppHandle,
     watcher: Arc<Mutex<FolderWatcher>>,
     hash_semaphore: Arc<Semaphore>,
+    scan_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 fn is_image(path: &Path) -> bool {
@@ -104,7 +105,9 @@ impl Indexer {
             for folder in &folders {
                 let path = PathBuf::from(&folder.path);
                 if path.exists() {
-                    let _ = w.watch(path.clone(), folder.id);
+                    if let Err(e) = w.watch(path.clone(), folder.id) {
+                    eprintln!("Failed to watch folder {}: {}", folder.path, e);
+                }
                 }
                 folder_map.push((path, folder.id));
             }
@@ -118,6 +121,7 @@ impl Indexer {
             app,
             watcher,
             hash_semaphore: Arc::new(Semaphore::new(4)),
+            scan_mutex: Arc::new(tokio::sync::Mutex::new(())),
         });
 
         let debounce_indexer = indexer.clone();
@@ -194,7 +198,9 @@ impl Indexer {
                     }
                 };
 
-                let _ = db::enqueue_image(&self.pool, image_id).await;
+                if let Err(e) = db::enqueue_image(&self.pool, image_id).await {
+                    eprintln!("Failed to enqueue image {}: {}", image_id, e);
+                }
                 self.spawn_thumbnail(image_id, path.to_path_buf());
 
                 let _ = self.app.emit(
@@ -250,7 +256,9 @@ impl Indexer {
                         mtime,
                     )
                     .await;
-                    let _ = db::enqueue_image(&self.pool, existing.id).await;
+                    if let Err(e) = db::enqueue_image(&self.pool, existing.id).await {
+                        eprintln!("Failed to enqueue image {}: {}", existing.id, e);
+                    }
                     self.spawn_thumbnail(existing.id, path.to_path_buf());
                     let _ = self.app.emit(
                         "image_updated",
@@ -286,6 +294,8 @@ impl Indexer {
     }
 
     pub async fn start_rescan(&self) {
+        let _guard = self.scan_mutex.lock().await;
+
         let folder_map = self.folder_map.read().await;
         let folders: Vec<(PathBuf, i64)> = folder_map
             .iter()
@@ -353,7 +363,9 @@ impl Indexer {
 
         {
             let mut w = self.watcher.lock().await;
-            let _ = w.watch(PathBuf::from(&path), folder_id);
+            if let Err(e) = w.watch(PathBuf::from(&path), folder_id) {
+                eprintln!("Failed to watch folder {}: {}", path, e);
+            }
         }
 
         self.sync_folder_map().await;
@@ -404,6 +416,8 @@ impl Indexer {
     }
 
     async fn start_folder_scan(&self, folder_path: &Path, folder_id: i64) {
+        let _guard = self.scan_mutex.lock().await;
+
         let folder_path_owned = folder_path.to_path_buf();
         let entries: Vec<PathBuf> = match tokio::task::spawn_blocking(move || {
             let mut results = Vec::new();
@@ -413,11 +427,23 @@ impl Indexer {
         .await
         {
             Ok(e) => e,
-            Err(_) => return,
+            _ => return,
         };
 
+        let db_map = db::get_all_images_for_rescan(&self.pool)
+            .await
+            .ok()
+            .map(|imgs| {
+                imgs.into_iter()
+                    .map(|i| (i.path.clone(), i))
+                    .collect::<HashMap<String, db::DbImage>>()
+            })
+            .unwrap_or_default();
+
         for path in entries {
-            self.process_file(&path, folder_id, None).await;
+            let path_str = path.to_string_lossy().to_string();
+            let known = db_map.get(&path_str).cloned();
+            self.process_file(&path, folder_id, known).await;
         }
     }
 }
