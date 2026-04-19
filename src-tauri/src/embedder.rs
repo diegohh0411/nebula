@@ -71,6 +71,8 @@ async fn process_semantic_one(
     queue_id: i64,
     image_id: i64,
     attempts: i32,
+    index: &crate::vector_index::IndexStore,
+    _data_dir: &std::path::Path,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
@@ -92,6 +94,7 @@ async fn process_semantic_one(
         Ok(values) => {
             let blob = f32_slice_to_bytes(&values);
             if db::mark_semantic_analysis_done(pool, image_id, &blob).await.is_ok() {
+                index.write().unwrap().add(image_id, &values);
                 let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
             }
         }
@@ -242,6 +245,8 @@ pub async fn run_semantic_worker(
     pool: SqlitePool,
     app: AppHandle,
     vision_engine: Arc<crate::vision_engine::VisionEngine>,
+    index: crate::vector_index::IndexStore,
+    data_dir: std::path::PathBuf,
 ) {
     vision_engine.wait_until_ready().await;
 
@@ -268,13 +273,26 @@ pub async fn run_semantic_worker(
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
+            let index_c = Arc::clone(&index);
+            let data_dir_c = data_dir.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_semantic_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts).await;
+                process_semantic_one(
+                    &pool_c, &app_c, ve_c.as_ref(),
+                    queue_id, image_id, attempts,
+                    &index_c, &data_dir_c,
+                ).await;
             }));
         }
         for h in handles {
             let _ = h.await;
+        }
+
+        // Persist index snapshot after each batch
+        let snap_path = data_dir.join("nebula.idx");
+        let guard = index.read().unwrap();
+        if let Err(e) = guard.save(&snap_path) {
+            eprintln!("[semantic-worker] Failed to save index snapshot: {e}");
         }
     }
 }

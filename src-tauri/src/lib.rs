@@ -88,8 +88,16 @@ pub fn run() {
             let pool_semantic = pool.clone();
             let app_handle_semantic = app.handle().clone();
             let vision_engine_semantic = Arc::clone(&vision_engine);
+            let index_semantic = index.clone();
+            let data_dir_semantic = data_dir.clone();
             tauri::async_runtime::spawn(async move {
-                embedder::run_semantic_worker(pool_semantic, app_handle_semantic, vision_engine_semantic).await;
+                embedder::run_semantic_worker(
+                    pool_semantic,
+                    app_handle_semantic,
+                    vision_engine_semantic,
+                    index_semantic,
+                    data_dir_semantic,
+                ).await;
             });
 
             let pool_subject = pool.clone();
