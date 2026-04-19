@@ -45,21 +45,17 @@
   @apply absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 text-[10px] font-bold text-white rounded-sm backdrop-blur-sm z-10;
 }
 
-/* Embed status dot */
+/* Processing stage dot */
 .status-dot {
   @apply absolute bottom-1.5 right-1.5 w-2 h-2 rounded-full
          opacity-0 group-hover:opacity-100 transition-opacity duration-150
-         ring-1 ring-black/20;
+         ring-1 ring-black/20 animate-pulse;
 }
 
-.status-dot--done {
-  @apply bg-green-500;
-}
-
-.status-dot--pending {
+.status-dot--indexing {
   @apply bg-amber-400;
 }
 
-.status-dot--failed {
-  @apply bg-red-500;
+.status-dot--analyzing {
+  @apply bg-purple-400;
 }

@@ -49,7 +49,7 @@ export class AppComponent implements OnInit, OnDestroy {
     // Bootstrap data
     void this.photos.loadFolders();
     void this.photos.refreshImages();
-    void this.photos.refreshEmbedStatus();
+    void this.photos.refreshProcessingStatus();
     void this.photos.loadApiKey();
   }
 

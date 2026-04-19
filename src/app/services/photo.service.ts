@@ -2,7 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import {
   DayGroup,
-  EmbedStatus,
+  ProcessingStatus,
   Folder,
   Image,
   SearchResult,
@@ -27,7 +27,7 @@ export class PhotoService {
   readonly subjects = signal<Subject[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
-  readonly embedStatus = signal<EmbedStatus>({ pending: 0, done: 0 });
+  readonly processingStatus = signal<ProcessingStatus>({ semantic_pending: 0, subject_pending: 0, done: 0 });
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
   readonly searchError = signal<string | null>(null);
@@ -113,8 +113,8 @@ export class PhotoService {
   );
 
   constructor() {
-    this.events.embedProgress$.subscribe((e) => {
-      this.embedStatus.set(e);
+    this.events.processingProgress$.subscribe((e) => {
+      this.processingStatus.set(e);
     });
 
     this.events.imageAdded$.subscribe(() => {
@@ -123,6 +123,7 @@ export class PhotoService {
 
     this.events.imageUpdated$.subscribe(() => {
       void this.refreshImages();
+      void this.refreshSearchResults();
     });
 
     this.events.imageRemoved$.subscribe(() => {
@@ -196,9 +197,22 @@ export class PhotoService {
     this.images.set(imgs);
   }
 
-  async refreshEmbedStatus(): Promise<void> {
-    const status = await invoke<EmbedStatus>('get_embed_status');
-    this.embedStatus.set(status);
+  async refreshProcessingStatus(): Promise<void> {
+    const status = await invoke<ProcessingStatus>('get_processing_status');
+    this.processingStatus.set(status);
+  }
+
+  async refreshSearchResults(): Promise<void> {
+    const results = this.searchResults();
+    if (results === null) return;
+    const query = this.searchText();
+    if (!query.trim()) return;
+    try {
+      const updated = await invoke<SearchResult[]>('search', { query: { type: 'text', query } });
+      this.searchResults.set(updated);
+    } catch {
+      // Silently ignore search refresh errors — stale results are better than an error
+    }
   }
 
   async searchByText(query: string): Promise<void> {

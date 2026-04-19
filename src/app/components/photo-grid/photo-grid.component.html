@@ -35,14 +35,15 @@
         </div>
       }
 
-      <!-- Embed status dot — visible on hover -->
-      <span
-        class="status-dot"
-        [class.status-dot--done]="embedStatus(img) === 'done'"
-        [class.status-dot--pending]="embedStatus(img) === 'pending'"
-        [class.status-dot--failed]="embedStatus(img) === 'failed'"
-        [title]="embedStatus(img)"
-      ></span>
+      <!-- Processing stage dot — visible on hover, hidden when ready -->
+      @if (processingStage(img) !== 'ready') {
+        <span
+          class="status-dot"
+          [class.status-dot--indexing]="processingStage(img) === 'indexing'"
+          [class.status-dot--analyzing]="processingStage(img) === 'analyzing_faces'"
+          [title]="processingStage(img) === 'indexing' ? 'Indexing…' : 'Analyzing faces…'"
+        ></span>
+      }
     </div>
   }
 </div>

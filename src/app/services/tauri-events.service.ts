@@ -2,7 +2,7 @@ import { Injectable, OnDestroy } from '@angular/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Subject } from 'rxjs';
 import {
-  EmbedProgressEvent,
+  ProcessingProgressEvent,
   ImageAddedEvent,
   ImageRemovedEvent,
   ImageUpdatedEvent,
@@ -10,7 +10,7 @@ import {
 
 @Injectable({ providedIn: 'root' })
 export class TauriEventsService implements OnDestroy {
-  readonly embedProgress$ = new Subject<EmbedProgressEvent>();
+  readonly processingProgress$ = new Subject<ProcessingProgressEvent>();
   readonly imageAdded$ = new Subject<ImageAddedEvent>();
   readonly imageUpdated$ = new Subject<ImageUpdatedEvent>();
   readonly imageRemoved$ = new Subject<ImageRemovedEvent>();
@@ -23,8 +23,8 @@ export class TauriEventsService implements OnDestroy {
 
   private async setupListeners(): Promise<void> {
     this.unlisteners.push(
-      await listen<EmbedProgressEvent>('embed_progress', (e) =>
-        this.embedProgress$.next(e.payload)
+      await listen<ProcessingProgressEvent>('processing_progress', (e) =>
+        this.processingProgress$.next(e.payload)
       ),
       await listen<ImageAddedEvent>('image_added', (e) =>
         this.imageAdded$.next(e.payload)

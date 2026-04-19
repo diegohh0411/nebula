@@ -13,7 +13,8 @@ export interface Image {
   date_taken: number | null;
   date_file: number;
   thumbnail_path: string | null;
-  embed_status: 'pending' | 'done' | 'failed';
+  semantic_analysis_done: boolean;
+  subject_analysis_done: boolean;
   added_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -26,16 +27,29 @@ export interface SearchResult {
   score: number;
   date_taken: number | null;
   date_file: number;
-  embed_status: 'pending' | 'done' | 'failed';
+  semantic_analysis_done: boolean;
+  subject_analysis_done: boolean;
 }
 
-export interface EmbedStatus {
-  pending: number;
+export type ProcessingStage = 'indexing' | 'analyzing_faces' | 'ready';
+
+export function getProcessingStage(
+  img: Pick<Image | SearchResult, 'semantic_analysis_done' | 'subject_analysis_done'>
+): ProcessingStage {
+  if (!img.semantic_analysis_done) return 'indexing';
+  if (!img.subject_analysis_done) return 'analyzing_faces';
+  return 'ready';
+}
+
+export interface ProcessingStatus {
+  semantic_pending: number;
+  subject_pending: number;
   done: number;
 }
 
-export interface EmbedProgressEvent {
-  pending: number;
+export interface ProcessingProgressEvent {
+  semantic_pending: number;
+  subject_pending: number;
   done: number;
 }
 

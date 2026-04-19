@@ -87,7 +87,15 @@
           </div>
           <div class="meta-item">
             <label>Status</label>
-            <div class="value capitalize">{{ image.embed_status }}</div>
+            <div class="value">
+              @if (!image.semantic_analysis_done) {
+                Indexing…
+              } @else if (!image.subject_analysis_done) {
+                Analyzing faces…
+              } @else {
+                Ready
+              }
+            </div>
           </div>
 
           <div class="meta-section">

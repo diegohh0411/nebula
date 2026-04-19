@@ -50,11 +50,17 @@
     }
   </div>
 
-  <!-- Embedding status badge -->
-  @if (photos.embedStatus().pending > 0) {
-    <span class="embed-badge" title="Photos still being indexed">
+  <!-- Processing status badge -->
+  @if (photos.processingStatus().semantic_pending > 0 || photos.processingStatus().subject_pending > 0) {
+    <span class="embed-badge" title="Photos still being processed">
       <span class="embed-badge-dot"></span>
-      {{ photos.embedStatus().pending }} indexing
+      @if (photos.processingStatus().semantic_pending > 0 && photos.processingStatus().subject_pending > 0) {
+        {{ photos.processingStatus().semantic_pending }} indexing · {{ photos.processingStatus().subject_pending }} analyzing
+      } @else if (photos.processingStatus().semantic_pending > 0) {
+        {{ photos.processingStatus().semantic_pending }} indexing
+      } @else {
+        {{ photos.processingStatus().subject_pending }} analyzing
+      }
     </span>
   }
 </header>

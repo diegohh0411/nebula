@@ -4,7 +4,7 @@ import {
   ChangeDetectionStrategy,
   inject,
 } from '@angular/core';
-import { Image, SearchResult } from '../../models/models';
+import { Image, SearchResult, ProcessingStage, getProcessingStage } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 import { startViewTransition } from '../../utils/view-transition';
 
@@ -49,8 +49,8 @@ export class PhotoGridComponent {
     return this.photos.thumbnailUrl(img.thumbnail_path);
   }
 
-  protected embedStatus(img: Image | SearchResult): 'pending' | 'done' | 'failed' {
-    return img.embed_status;
+  protected processingStage(img: Image | SearchResult): ProcessingStage {
+    return getProcessingStage(img);
   }
 
   protected filename(img: Image | SearchResult): string {
