@@ -11,7 +11,7 @@ export interface Image {
   path: string;
   file_hash: string;
   date_taken: number | null;
-  date_file: number;
+  mtime: number;
   thumbnail_path: string | null;
   semantic_analysis_done: boolean;
   subject_analysis_done: boolean;
@@ -26,7 +26,7 @@ export interface SearchResult {
   thumbnail_path: string | null;
   score: number;
   date_taken: number | null;
-  date_file: number;
+  mtime: number;
   semantic_analysis_done: boolean;
   subject_analysis_done: boolean;
 }

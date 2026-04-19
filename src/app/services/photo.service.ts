@@ -346,7 +346,7 @@ export class PhotoService {
 // ---- Utility functions ----
 
 function getTimestamp(img: Image | SearchResult): number {
-  return img.date_taken ?? img.date_file;
+  return img.date_taken ?? img.mtime;
 }
 
 function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
@@ -360,6 +360,7 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
   for (const img of images) {
     const ts = getTimestamp(img);
     const d = new Date(ts * 1000);
+    if (isNaN(d.getTime())) continue;
     d.setHours(0, 0, 0, 0);
     const key = d.toISOString().slice(0, 10);
 

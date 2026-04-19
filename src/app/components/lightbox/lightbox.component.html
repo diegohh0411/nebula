@@ -83,7 +83,7 @@
           </div>
           <div class="meta-item">
             <label>Date</label>
-            <div class="value">{{ (image.date_taken ?? image.date_file) * 1000 | date:'medium' }}</div>
+            <div class="value">{{ (image.date_taken ?? image.mtime) * 1000 | date:'medium' }}</div>
           </div>
           <div class="meta-item">
             <label>Status</label>
