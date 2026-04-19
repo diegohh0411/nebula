@@ -2,7 +2,7 @@ use anyhow::Result;
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
 use std::path::Path;
 
-use crate::models::{EmbedStatus, Folder, FolderWithCount, Image, Face, Subject};
+use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
 
 const MIGRATIONS: &str = r#"
 CREATE TABLE IF NOT EXISTS folders (
@@ -12,26 +12,29 @@ CREATE TABLE IF NOT EXISTS folders (
 );
 
 CREATE TABLE IF NOT EXISTS images (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    folder_id      INTEGER NOT NULL REFERENCES folders(id),
-    path           TEXT UNIQUE NOT NULL,
-    file_hash      TEXT NOT NULL,
-    date_taken     INTEGER,
-    date_file      INTEGER NOT NULL,
-    thumbnail_path TEXT,
-    embed_status   TEXT NOT NULL DEFAULT 'pending',
-    embedding      BLOB,
-    added_at       INTEGER NOT NULL,
-    updated_at     INTEGER NOT NULL,
-    deleted_at     INTEGER
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id              INTEGER NOT NULL REFERENCES folders(id),
+    path                   TEXT UNIQUE NOT NULL,
+    file_hash              TEXT NOT NULL,
+    date_taken             INTEGER,
+    date_file              INTEGER NOT NULL,
+    thumbnail_path         TEXT,
+    semantic_analysis_done INTEGER NOT NULL DEFAULT 0,
+    subject_analysis_done  INTEGER NOT NULL DEFAULT 0,
+    embedding              BLOB,
+    added_at               INTEGER NOT NULL,
+    updated_at             INTEGER NOT NULL,
+    deleted_at             INTEGER
 );
 
-CREATE INDEX IF NOT EXISTS idx_images_folder ON images(folder_id);
-CREATE INDEX IF NOT EXISTS idx_images_embed ON images(embed_status) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_images_folder   ON images(folder_id);
+CREATE INDEX IF NOT EXISTS idx_images_semantic ON images(semantic_analysis_done) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_images_subject  ON images(subject_analysis_done) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS embedding_queue (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     image_id     INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    pipeline     TEXT NOT NULL DEFAULT 'semantic',
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
     scheduled_at INTEGER NOT NULL
@@ -213,7 +216,8 @@ fn row_to_image(r: &sqlx::sqlite::SqliteRow) -> Image {
         date_taken: r.get("date_taken"),
         date_file: r.get("date_file"),
         thumbnail_path: r.get("thumbnail_path"),
-        embed_status: r.get("embed_status"),
+        semantic_analysis_done: r.get::<i32, _>("semantic_analysis_done") != 0,
+        subject_analysis_done: r.get::<i32, _>("subject_analysis_done") != 0,
         added_at: r.get("added_at"),
         updated_at: r.get("updated_at"),
         deleted_at: r.get("deleted_at"),
@@ -243,8 +247,8 @@ pub async fn upsert_image(
 
         if hash_changed || was_deleted {
             sqlx::query(
-                "UPDATE images SET file_hash = ?, date_file = ?, embed_status = 'pending',
-                 embedding = NULL, updated_at = ?, deleted_at = NULL WHERE id = ?",
+                "UPDATE images SET file_hash = ?, date_file = ?, semantic_analysis_done = 0,
+                 subject_analysis_done = 0, embedding = NULL, updated_at = ?, deleted_at = NULL WHERE id = ?",
             )
             .bind(file_hash)
             .bind(date_file)
@@ -257,8 +261,8 @@ pub async fn upsert_image(
         Ok((image_id, false))
     } else {
         let result = sqlx::query(
-            "INSERT INTO images (folder_id, path, file_hash, date_file, embed_status, added_at, updated_at)
-             VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+            "INSERT INTO images (folder_id, path, file_hash, date_file, added_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(folder_id)
         .bind(path)
@@ -295,7 +299,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
     let rows = if let Some(fid) = folder_id {
         sqlx::query(
             "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
-                    embed_status, added_at, updated_at, deleted_at
+                    semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE folder_id = ? AND deleted_at IS NULL
              ORDER BY COALESCE(date_taken, date_file) DESC",
         )
@@ -305,7 +309,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
     } else {
         sqlx::query(
             "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
-                    embed_status, added_at, updated_at, deleted_at
+                    semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE deleted_at IS NULL
              ORDER BY COALESCE(date_taken, date_file) DESC",
         )
@@ -319,7 +323,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
 pub async fn get_image_by_path(pool: &SqlitePool, path: &str) -> Result<Option<Image>> {
     let row = sqlx::query(
         "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
-                embed_status, added_at, updated_at, deleted_at
+                semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
          FROM images WHERE path = ?",
     )
     .bind(path)
@@ -331,7 +335,7 @@ pub async fn get_image_by_path(pool: &SqlitePool, path: &str) -> Result<Option<I
 pub async fn get_image_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Image>> {
     let row = sqlx::query(
         "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
-                embed_status, added_at, updated_at, deleted_at
+                semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
          FROM images WHERE id = ?",
     )
     .bind(id)
@@ -346,7 +350,12 @@ pub async fn enqueue_image(pool: &SqlitePool, image_id: i64) -> Result<()> {
         .bind(image_id)
         .execute(pool)
         .await?;
-    sqlx::query("INSERT INTO embedding_queue (image_id, attempts, scheduled_at) VALUES (?, 0, ?)")
+    sqlx::query("INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at) VALUES (?, 'semantic', 0, ?)")
+        .bind(image_id)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    sqlx::query("INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at) VALUES (?, 'subject', 0, ?)")
         .bind(image_id)
         .bind(now)
         .execute(pool)
@@ -354,12 +363,13 @@ pub async fn enqueue_image(pool: &SqlitePool, image_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_queue_batch(pool: &SqlitePool, limit: i64) -> Result<Vec<(i64, i64, i32)>> {
+pub async fn get_queue_batch(pool: &SqlitePool, pipeline: &str, limit: i64) -> Result<Vec<(i64, i64, i32)>> {
     let now = chrono::Utc::now().timestamp();
     let rows = sqlx::query(
         "SELECT id, image_id, attempts FROM embedding_queue
-         WHERE scheduled_at <= ? ORDER BY scheduled_at ASC LIMIT ?",
+         WHERE pipeline = ? AND scheduled_at <= ? ORDER BY scheduled_at ASC LIMIT ?",
     )
+    .bind(pipeline)
     .bind(now)
     .bind(limit)
     .fetch_all(pool)
@@ -370,17 +380,31 @@ pub async fn get_queue_batch(pool: &SqlitePool, limit: i64) -> Result<Vec<(i64, 
         .collect())
 }
 
-pub async fn mark_embedded(pool: &SqlitePool, image_id: i64, embedding: &[u8]) -> Result<()> {
+pub async fn mark_semantic_analysis_done(pool: &SqlitePool, image_id: i64, embedding: &[u8]) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
-        "UPDATE images SET embedding = ?, embed_status = 'done', updated_at = ? WHERE id = ?",
+        "UPDATE images SET embedding = ?, semantic_analysis_done = 1, updated_at = ? WHERE id = ?",
     )
     .bind(embedding)
     .bind(now)
     .bind(image_id)
     .execute(pool)
     .await?;
-    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ?")
+    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ? AND pipeline = 'semantic'")
+        .bind(image_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn mark_subject_analysis_done(pool: &SqlitePool, image_id: i64) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("UPDATE images SET subject_analysis_done = 1, updated_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(image_id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ? AND pipeline = 'subject'")
         .bind(image_id)
         .execute(pool)
         .await?;
@@ -415,7 +439,7 @@ pub async fn get_image_embedding(pool: &SqlitePool, id: i64) -> Result<Option<Ve
 pub async fn get_all_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
     let rows = sqlx::query(
         "SELECT id, embedding FROM images
-         WHERE embed_status = 'done' AND deleted_at IS NULL AND embedding IS NOT NULL",
+         WHERE semantic_analysis_done = 1 AND deleted_at IS NULL AND embedding IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;
@@ -429,16 +453,18 @@ pub async fn get_all_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>
         .collect())
 }
 
-pub async fn get_embed_counts(pool: &SqlitePool) -> Result<EmbedStatus> {
+pub async fn get_processing_counts(pool: &SqlitePool) -> Result<ProcessingStatus> {
     let row = sqlx::query(
         "SELECT
-           (SELECT COUNT(*) FROM embedding_queue) as pending,
-           (SELECT COUNT(*) FROM images WHERE embed_status = 'done' AND deleted_at IS NULL) as done",
+           (SELECT COUNT(*) FROM embedding_queue WHERE pipeline = 'semantic') as semantic_pending,
+           (SELECT COUNT(*) FROM embedding_queue WHERE pipeline = 'subject') as subject_pending,
+           (SELECT COUNT(*) FROM images WHERE semantic_analysis_done = 1 AND subject_analysis_done = 1 AND deleted_at IS NULL) as done",
     )
     .fetch_one(pool)
     .await?;
-    Ok(EmbedStatus {
-        pending: row.get("pending"),
+    Ok(ProcessingStatus {
+        semantic_pending: row.get("semantic_pending"),
+        subject_pending: row.get("subject_pending"),
         done: row.get("done"),
     })
 }
@@ -616,7 +642,7 @@ pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Resul
 pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Image>> {
     let rows = sqlx::query(
         r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.date_taken, i.date_file, i.thumbnail_path,
-                           i.embed_status, i.added_at, i.updated_at, i.deleted_at
+                           i.semantic_analysis_done, i.subject_analysis_done, i.added_at, i.updated_at, i.deleted_at
            FROM images i
            JOIN faces f ON f.image_id = i.id
            WHERE f.subject_id = ? AND i.deleted_at IS NULL
@@ -997,23 +1023,25 @@ pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
 pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    // 1. Clear image embeddings (Gemini space) - filter soft-deleted images
-    sqlx::query("UPDATE images SET embedding = NULL, embed_status = 'pending' WHERE deleted_at IS NULL")
+    sqlx::query("UPDATE images SET embedding = NULL, semantic_analysis_done = 0, subject_analysis_done = 0 WHERE deleted_at IS NULL")
         .execute(&mut *tx)
         .await?;
 
-    // 2. Clear embedding queue to prevent retries of old tasks
     sqlx::query("DELETE FROM embedding_queue")
         .execute(&mut *tx)
         .await?;
 
-    // 3. Re-enqueue all images for the new local engine
     let now = chrono::Utc::now().timestamp();
-    sqlx::query("INSERT INTO embedding_queue (image_id, attempts, scheduled_at)
-                 SELECT id, 0, ? FROM images WHERE deleted_at IS NULL")
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
+         SELECT id, 'semantic', 0, ? FROM images WHERE deleted_at IS NULL
+         UNION ALL
+         SELECT id, 'subject', 0, ? FROM images WHERE deleted_at IS NULL",
+    )
+    .bind(now)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
     Ok(())

@@ -83,7 +83,8 @@ pub async fn build_search_results(
                 score,
                 date_taken: img.date_taken,
                 date_file: img.date_file,
-                embed_status: img.embed_status,
+                semantic_analysis_done: img.semantic_analysis_done,
+                subject_analysis_done: img.subject_analysis_done,
             });
         }
     }
