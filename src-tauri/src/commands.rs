@@ -100,7 +100,7 @@ pub async fn search(
                 emb
             };
 
-            if let Ok(scored) = search::search_images(pool, query_embedding, 50).await {
+            if let Ok(scored) = search::search_images(&state.index, query_embedding, 50).await {
                 if let Ok(rag_results) = search::build_search_results(pool, scored).await {
                     for res in rag_results {
                         if !subject_image_ids.contains(&res.image_id) {
@@ -122,7 +122,7 @@ pub async fn search(
             let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding_blob)
                 .map_err(map_err)?;
 
-            let mut scored = search::search_images(pool, embedding_f32, 50)
+            let mut scored = search::search_images(&state.index, embedding_f32, 50)
                 .await
                 .map_err(map_err)?;
             scored.retain(|(id, _)| *id != image_id);
@@ -151,7 +151,7 @@ pub async fn search(
                 emb
             };
 
-            let scored = search::search_images(pool, query_embedding, 50)
+            let scored = search::search_images(&state.index, query_embedding, 50)
                 .await
                 .map_err(map_err)?;
 
