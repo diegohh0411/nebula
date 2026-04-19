@@ -50,6 +50,25 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
         cluster_to_face_indices.entry(label).or_default().push(idx);
     }
 
+    // Build anchor centroids from manual corrections + all-face fallback.
+    let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
+    let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
+        .into_iter()
+        .filter_map(|(sid, blob)| {
+            crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e))
+        })
+        .collect();
+
+    let all_raw = db::get_subject_embeddings(pool).await?;
+    let all_decoded: Vec<(i64, Vec<f32>)> = all_raw
+        .into_iter()
+        .filter_map(|(sid, blob)| {
+            crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e))
+        })
+        .collect();
+
+    let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
+
     let mut subjects_merged = 0i64;
 
     for (&label, face_indices) in &cluster_to_face_indices {
@@ -57,24 +76,25 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
             continue;
         }
 
-        let existing_subject_ids: Vec<Option<i64>> = face_indices
-            .iter()
-            .map(|&idx| old_subject_ids[idx])
-            .collect();
-
-        let non_none: Vec<i64> = existing_subject_ids.iter().filter_map(|&s| s).collect();
-
-        let chosen_subject_id = if !non_none.is_empty() {
-            let mut counts: HashMap<i64, usize> = HashMap::new();
-            for &sid in &non_none {
-                *counts.entry(sid).or_default() += 1;
+        let cluster_centroid = {
+            let vecs: Vec<&Vec<f32>> = face_indices.iter().map(|&i| &embeddings[i]).collect();
+            let dim = vecs[0].len();
+            let mut c = vec![0.0f32; dim];
+            for v in &vecs {
+                for (i, &x) in v.iter().enumerate() {
+                    c[i] += x;
+                }
             }
-            let best = counts.into_iter().max_by_key(|(_, c)| *c).map(|(s, _)| s).unwrap();
-            subjects_merged += non_none.iter().filter(|&&s| s != best).count() as i64;
-            best
-        } else {
-            db::insert_subject(pool, None, "person").await?
+            let n = vecs.len() as f32;
+            c.iter_mut().for_each(|v| *v /= n);
+            c
         };
+
+        let chosen_subject_id =
+            match find_nearest_anchor(&cluster_centroid, &anchor_centroids, ANCHOR_MATCH_THRESHOLD) {
+                Some(sid) => sid,
+                None => db::insert_subject(pool, None, "person").await?,
+            };
 
         for &idx in face_indices {
             db::update_face_subject(pool, face_ids[idx], Some(chosen_subject_id)).await?;
@@ -315,5 +335,19 @@ mod tests {
         let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD);
 
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn anchor_guided_assignment_prefers_anchor_over_majority() {
+        let mut anchors = HashMap::new();
+        anchors.insert(1i64, emb(&[1.0, 0.0, 0.0]));
+
+        // Cluster A centroid: near subject 1 anchor
+        let a = find_nearest_anchor(&emb(&[0.95, 0.05, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD);
+        assert_eq!(a, Some(1), "cluster A should match subject 1");
+
+        // Cluster B centroid: orthogonal — no match
+        let b = find_nearest_anchor(&emb(&[0.0, 1.0, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD);
+        assert_eq!(b, None, "cluster B should get no match (creates new subject)");
     }
 }
