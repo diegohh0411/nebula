@@ -75,49 +75,13 @@
     }
   </nav>
 
-  <!-- Footer: Add folder + API key -->
+  <!-- Footer: Add folder -->
   <div class="sidebar-footer">
-    @if (photos.showApiKeyInput()) {
-      <div class="api-key-area">
-        <input
-          type="password"
-          class="api-key-input"
-          placeholder="Paste Gemini API key…"
-          [value]="apiKeyDraft()"
-          (input)="apiKeyDraft.set($any($event.target).value)"
-          (keyup.enter)="saveApiKey()"
-        />
-        <button class="btn-save" (click)="saveApiKey()">Save</button>
-      </div>
-    } @else if (photos.apiKey()) {
-      <div class="api-key-set">
-        <span class="api-key-dot"></span>
-        <span class="api-key-label">API key set</span>
-        <button class="btn-gear" (click)="toggleApiKeyInput()" title="Change API key">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-        </button>
-      </div>
-    } @else {
-      <button class="btn-set-api-key" (click)="toggleApiKeyInput()">
-        Set API key
-      </button>
-    }
-
-    <div class="sidebar-footer-actions">
-      <button class="btn-secondary" (click)="regenerateThumbnails()" title="Regenerate all thumbnails">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-        </svg>
-      </button>
-
-      <button class="btn-add-folder" (click)="addFolder()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        Add Folder
-      </button>
-    </div>
+    <button class="btn-add-folder" (click)="addFolder()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+      Add Folder
+    </button>
   </div>
 </aside>

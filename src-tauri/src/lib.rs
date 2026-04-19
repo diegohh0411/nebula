@@ -1,6 +1,5 @@
 mod clustering;
 mod commands;
-mod config;
 mod db;
 mod embedder;
 mod models;
@@ -14,13 +13,10 @@ mod watcher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
-use tokio::sync::Mutex;
-
 
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub data_dir: PathBuf,
-    pub api_key: Arc<Mutex<Option<String>>>,
     pub indexer: Arc<indexer::Indexer>,
     pub vision_engine: Arc<vision_engine::VisionEngine>,
     pub index: vector_index::IndexStore,
@@ -44,9 +40,6 @@ pub fn run() {
             )?;
             let index: vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
-            let api_key = config::read_api_key(&data_dir);
-            let api_key = Arc::new(Mutex::new(api_key));
-
             let vision_engine = Arc::new(vision_engine::VisionEngine::new(data_dir.clone()));
 
             let indexer = tauri::async_runtime::block_on(
@@ -56,7 +49,6 @@ pub fn run() {
             app.manage(AppState {
                 pool: pool.clone(),
                 data_dir: data_dir.clone(),
-                api_key: api_key.clone(),
                 indexer,
                 vision_engine: vision_engine.clone(),
                 index: index.clone(),
@@ -116,9 +108,6 @@ pub fn run() {
             commands::list_images,
             commands::search,
             commands::get_processing_status,
-            commands::set_api_key,
-            commands::get_api_key,
-            commands::regenerate_all_thumbnails,
             commands::list_subjects,
             commands::name_subject,
             commands::list_faces,
