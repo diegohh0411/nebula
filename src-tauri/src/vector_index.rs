@@ -15,12 +15,12 @@ pub trait VectorIndex: Send + Sync {
 
 pub type IndexStore = Arc<std::sync::RwLock<Box<dyn VectorIndex>>>;
 
-fn normalize(v: &[f32]) -> Vec<f32> {
+fn normalize(v: &[f32]) -> Option<Vec<f32>> {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm == 0.0 {
-        return v.to_vec();
+    if norm < 1e-10 {
+        return None;
     }
-    v.iter().map(|x| x / norm).collect()
+    Some(v.iter().map(|x| x / norm).collect())
 }
 
 pub struct FlatIndex {
@@ -31,6 +31,7 @@ pub struct FlatIndex {
 
 impl FlatIndex {
     pub fn new(dim: usize) -> Self {
+        assert!(dim > 0, "FlatIndex dim must be positive");
         Self {
             dim,
             ids: Vec::new(),
@@ -57,6 +58,7 @@ impl FlatIndex {
 
     /// Add a pre-normalized vector directly (used by load/compact paths to skip re-normalization).
     pub(crate) fn add_raw(&mut self, id: i64, normalized: &[f32]) {
+        debug_assert_eq!(normalized.len(), self.dim, "embedding dim mismatch");
         if let Some(pos) = self.ids.iter().position(|&x| x == id) {
             let start = pos * self.dim;
             self.vecs[start..start + self.dim].copy_from_slice(normalized);
@@ -75,8 +77,9 @@ impl FlatIndex {
 
 impl VectorIndex for FlatIndex {
     fn add(&mut self, id: i64, embedding: &[f32]) {
-        let normalized = normalize(embedding);
-        self.add_raw(id, &normalized);
+        if let Some(normalized) = normalize(embedding) {
+            self.add_raw(id, &normalized);
+        }
     }
 
     fn remove(&mut self, id: i64) {
@@ -91,7 +94,10 @@ impl VectorIndex for FlatIndex {
 
     fn search(&self, query: &[f32], limit: usize) -> Vec<(i64, f32)> {
         use rayon::prelude::*;
-        let query_norm = normalize(query);
+        let query_norm = match normalize(query) {
+            Some(n) => n,
+            None => return vec![],
+        };
         let dim = self.dim;
         let mut scored: Vec<(i64, f32)> = self
             .ids
@@ -143,6 +149,7 @@ mod tests {
         idx.add(1, &[1.0, 0.0, 0.0]);
         idx.add(2, &[0.0, 1.0, 0.0]);
         let results = idx.search(&[1.0, 0.0, 0.0], 2);
+        assert_eq!(results.len(), 2, "expected 2 results");
         assert_eq!(results[0].0, 1);
         assert!(results[0].1 > 0.99, "expected cosine ~1.0, got {}", results[0].1);
         assert_eq!(results[1].0, 2);
@@ -152,11 +159,18 @@ mod tests {
     #[test]
     fn search_respects_limit() {
         let mut idx = make_index();
-        for i in 0..10i64 {
-            idx.add(i, &[i as f32, 0.0, 0.0]);
-        }
+        idx.add(1, &[1.0, 0.0, 0.0]);
+        idx.add(2, &[0.9, 0.1, 0.0]);
+        idx.add(3, &[0.8, 0.2, 0.0]);
+        idx.add(4, &[0.0, 1.0, 0.0]);
+        idx.add(5, &[0.0, 0.0, 1.0]);
         let results = idx.search(&[1.0, 0.0, 0.0], 3);
         assert_eq!(results.len(), 3);
+        // Top 3 should be ids 1, 2, 3 (closest to query direction)
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+        assert!(ids.contains(&3));
     }
 
     #[test]
