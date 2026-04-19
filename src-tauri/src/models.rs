@@ -16,7 +16,8 @@ pub struct Image {
     pub date_taken: Option<i64>,
     pub date_file: i64,
     pub thumbnail_path: Option<String>,
-    pub embed_status: String, // "pending" | "done" | "failed"
+    pub semantic_analysis_done: bool,
+    pub subject_analysis_done: bool,
     pub added_at: i64,
     pub updated_at: i64,
     pub deleted_at: Option<i64>,
@@ -31,8 +32,9 @@ pub struct FolderWithCount {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EmbedStatus {
-    pub pending: i64,
+pub struct ProcessingStatus {
+    pub semantic_pending: i64,
+    pub subject_pending: i64,
     pub done: i64,
 }
 
@@ -50,8 +52,9 @@ pub struct ModelDownloadPayload {
 }
 
 #[derive(Debug, Serialize, Clone)]
-pub struct EmbedProgressPayload {
-    pub pending: i64,
+pub struct ProcessingProgressPayload {
+    pub semantic_pending: i64,
+    pub subject_pending: i64,
     pub done: i64,
 }
 
@@ -79,7 +82,8 @@ pub struct SearchResult {
     pub score: f32,
     pub date_taken: Option<i64>,
     pub date_file: i64,
-    pub embed_status: String,
+    pub semantic_analysis_done: bool,
+    pub subject_analysis_done: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
