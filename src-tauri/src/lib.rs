@@ -136,12 +136,20 @@ pub fn run() {
                 }
             });
 
-            // Spawn embedding worker
-            let pool_embed = pool.clone();
-            let app_handle_embed = app.handle().clone();
-            let vision_engine_embed = Arc::clone(&app.state::<AppState>().vision_engine);
+            // Spawn semantic (SigLIP) embedding worker
+            let pool_semantic = pool.clone();
+            let app_handle_semantic = app.handle().clone();
+            let vision_engine_semantic = Arc::clone(&app.state::<AppState>().vision_engine);
             tauri::async_runtime::spawn(async move {
-                embedder::run_embedding_worker(pool_embed, app_handle_embed, vision_engine_embed).await;
+                embedder::run_semantic_worker(pool_semantic, app_handle_semantic, vision_engine_semantic).await;
+            });
+
+            // Spawn subject (ArcFace + clustering) worker
+            let pool_subject = pool.clone();
+            let app_handle_subject = app.handle().clone();
+            let vision_engine_subject = Arc::clone(&app.state::<AppState>().vision_engine);
+            tauri::async_runtime::spawn(async move {
+                embedder::run_subject_worker(pool_subject, app_handle_subject, vision_engine_subject).await;
             });
 
             Ok(())
@@ -152,7 +160,7 @@ pub fn run() {
             commands::list_folders,
             commands::list_images,
             commands::search,
-            commands::get_embed_status,
+            commands::get_processing_status,
             commands::set_api_key,
             commands::get_api_key,
             commands::regenerate_all_thumbnails,

@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     config, db,
-    models::{EmbedStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
+    models::{ProcessingStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
     search, thumbnail, watcher, AppState,
 };
 
@@ -109,7 +109,8 @@ pub async fn search(
                         score: 1.0,
                         date_taken: img.date_taken,
                         date_file: img.date_file,
-                        embed_status: img.embed_status,
+                        semantic_analysis_done: img.semantic_analysis_done,
+                        subject_analysis_done: img.subject_analysis_done,
                     });
                 }
             }
@@ -191,10 +192,10 @@ pub async fn search(
 }
 
 #[tauri::command]
-pub async fn get_embed_status(
+pub async fn get_processing_status(
     state: tauri::State<'_, AppState>,
-) -> Result<EmbedStatus, String> {
-    db::get_embed_counts(&state.pool).await.map_err(map_err)
+) -> Result<ProcessingStatus, String> {
+    db::get_processing_counts(&state.pool).await.map_err(map_err)
 }
 
 #[tauri::command]
@@ -344,10 +345,11 @@ pub async fn get_subject_photos(subject_id: i64, state: tauri::State<'_, AppStat
         image_id: img.id,
         path: img.path,
         thumbnail_path: img.thumbnail_path,
-        score: 1.0, // Subjects are perfect matches
+        score: 1.0,
         date_taken: img.date_taken,
         date_file: img.date_file,
-        embed_status: img.embed_status,
+        semantic_analysis_done: img.semantic_analysis_done,
+        subject_analysis_done: img.subject_analysis_done,
     }).collect())
 }
 
