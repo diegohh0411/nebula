@@ -69,8 +69,6 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
 
     let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
 
-    let mut subjects_merged = 0i64;
-
     for (&label, face_indices) in &cluster_to_face_indices {
         if label < 0 {
             continue;
@@ -117,7 +115,7 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
     Ok(ReclusterResult {
         clusters: cluster_to_face_indices.keys().filter(|&&l| l >= 0).count(),
         noise: noise_count,
-        merged: subjects_merged,
+        merged: 0,
         deleted,
     })
 }
