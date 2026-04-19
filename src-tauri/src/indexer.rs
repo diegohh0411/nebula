@@ -22,6 +22,7 @@ pub struct Indexer {
     app: AppHandle,
     watcher: Arc<Mutex<FolderWatcher>>,
     hash_semaphore: Arc<Semaphore>,
+    thumb_semaphore: Arc<Semaphore>,
     scan_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -120,6 +121,7 @@ impl Indexer {
             app,
             watcher,
             hash_semaphore: Arc::new(Semaphore::new(4)),
+            thumb_semaphore: Arc::new(Semaphore::new(8)),
             scan_mutex: Arc::new(tokio::sync::Mutex::new(())),
         });
 
@@ -287,7 +289,9 @@ impl Indexer {
         let thumb_path_str = thumb_path.to_string_lossy().to_string();
         let pool = self.pool.clone();
         let app = self.app.clone();
+        let sem = self.thumb_semaphore.clone();
         tokio::spawn(async move {
+            let _permit = sem.acquire().await;
             if let Err(e) = thumbnail::generate_thumbnail(src, thumb_path).await {
                 eprintln!("Thumbnail generation failed: {}", e);
                 return;
