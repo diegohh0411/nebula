@@ -157,10 +157,10 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let current = match current {
         Some(v) => v,
         None => {
-            let has_old_column: bool = sqlx::query_scalar(
+            let has_old_column: bool = sqlx::query_scalar::<sqlx::Sqlite, i64>(
                 "SELECT COUNT(*) FROM pragma_table_info('images') WHERE name = 'date_file'",
             )
-            .fetch_one::<i64, _>(&pool)
+            .fetch_one(&pool)
             .await?
                 > 0;
             let version = if has_old_column { 0u32 } else { LATEST_VERSION };
@@ -356,6 +356,7 @@ pub async fn clear_image_deleted(pool: &SqlitePool, image_id: i64) -> Result<()>
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct DbImage {
     pub id: i64,
     pub path: String,

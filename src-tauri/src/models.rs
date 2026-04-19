@@ -142,6 +142,18 @@ pub struct NameSubjectResult {
     pub duplicate_subject_id: Option<i64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SearchResult {
+    pub image_id: i64,
+    pub path: String,
+    pub thumbnail_path: Option<String>,
+    pub score: f32,
+    pub date_taken: Option<i64>,
+    pub mtime: i64,
+    pub semantic_analysis_done: bool,
+    pub subject_analysis_done: bool,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SearchQuery {

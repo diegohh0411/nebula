@@ -1,7 +1,7 @@
 use base64::Engine;
 use sha2::{Sha256, Digest};
 use std::collections::HashSet;
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
 
 use crate::{
     config, db,

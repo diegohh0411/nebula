@@ -67,11 +67,8 @@ fn find_folder_id(folder_map: &[(PathBuf, i64)], path: &Path) -> Option<i64> {
 }
 
 fn walk_dir(dir: &Path, results: &mut Vec<(PathBuf, i64, i64, i64)>, folder_id: i64) {
-    for entry in std::fs::read_dir(dir).ok() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             walk_dir(&path, results, folder_id);
@@ -84,11 +81,8 @@ fn walk_dir(dir: &Path, results: &mut Vec<(PathBuf, i64, i64, i64)>, folder_id: 
 }
 
 fn walk_dir_for_scan(dir: &Path, results: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).ok() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             walk_dir_for_scan(&path, results);
@@ -418,8 +412,8 @@ impl Indexer {
         })
         .await
         {
-            Ok(Ok(e)) => e,
-            _ => return,
+            Ok(e) => e,
+            Err(_) => return,
         };
 
         for path in entries {
