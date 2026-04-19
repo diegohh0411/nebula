@@ -18,11 +18,28 @@ pub async fn add_folder(
     path: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<FolderWithCount, String> {
-    state
+    let folder = state
         .indexer
-        .add_folder(path)
+        .add_folder(path.clone())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let indexer = state.indexer.clone();
+    let pool = state.pool.clone();
+    let scan_path = std::path::PathBuf::from(&path);
+    let folder_id = folder.id;
+
+    tauri::async_runtime::spawn(async move {
+        let folder_still_exists = db::list_folders_with_counts(&pool)
+            .await
+            .map(|folders| folders.iter().any(|f| f.id == folder_id))
+            .unwrap_or(false);
+
+        if folder_still_exists {
+            indexer.spawn_folder_scan(scan_path, folder_id);
+        }
+    });
+
+    Ok(folder)
 }
 
 #[tauri::command]
