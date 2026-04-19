@@ -177,3 +177,85 @@ pub struct ReclusterResult {
     pub merged: i64,
     pub deleted: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn emb(vals: &[f32]) -> Vec<f32> {
+        vals.to_vec()
+    }
+
+    #[test]
+    fn anchor_centroid_is_mean_of_manual_faces() {
+        // Subject 1 has two manual faces; centroid should be their mean.
+        let manual = vec![
+            (1i64, emb(&[1.0, 0.0])),
+            (1i64, emb(&[0.0, 1.0])),
+        ];
+        let all: Vec<(i64, Vec<f32>)> = vec![];
+
+        let centroids = compute_anchor_centroids(&manual, &all);
+
+        let c = centroids.get(&1).expect("subject 1 should have a centroid");
+        assert!((c[0] - 0.5).abs() < 1e-6);
+        assert!((c[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anchor_centroid_falls_back_to_all_faces_when_no_manual() {
+        // Subject 2 has no manual faces — should fall back to all-faces mean.
+        let manual: Vec<(i64, Vec<f32>)> = vec![];
+        let all = vec![
+            (2i64, emb(&[0.0, 1.0])),
+            (2i64, emb(&[1.0, 0.0])),
+        ];
+
+        let centroids = compute_anchor_centroids(&manual, &all);
+
+        let c = centroids.get(&2).expect("subject 2 should have a centroid");
+        assert!((c[0] - 0.5).abs() < 1e-6);
+        assert!((c[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn manual_faces_take_priority_over_all_faces() {
+        // Subject 3 has one manual face at [1,0] and one non-manual at [0,1].
+        // Centroid should be [1,0] (manual only), not [0.5, 0.5].
+        let manual = vec![(3i64, emb(&[1.0, 0.0]))];
+        let all = vec![
+            (3i64, emb(&[1.0, 0.0])),
+            (3i64, emb(&[0.0, 1.0])),
+        ];
+
+        let centroids = compute_anchor_centroids(&manual, &all);
+
+        let c = centroids.get(&3).expect("subject 3 should have a centroid");
+        assert!((c[0] - 1.0).abs() < 1e-6);
+        assert!((c[1] - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn nearest_anchor_assigns_cluster_to_matching_subject() {
+        // Anchor for subject 10 is [1,0,0], cluster centroid is close to it.
+        let mut anchors = HashMap::new();
+        anchors.insert(10i64, emb(&[1.0, 0.0, 0.0]));
+
+        let cluster_centroid = emb(&[0.9, 0.1, 0.0]);
+        let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD);
+
+        assert_eq!(result, Some(10));
+    }
+
+    #[test]
+    fn nearest_anchor_returns_none_when_below_threshold() {
+        // Cluster centroid is orthogonal to anchor — should not match.
+        let mut anchors = HashMap::new();
+        anchors.insert(10i64, emb(&[1.0, 0.0, 0.0]));
+
+        let cluster_centroid = emb(&[0.0, 1.0, 0.0]);
+        let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD);
+
+        assert_eq!(result, None);
+    }
+}
