@@ -8,6 +8,7 @@ mod search;
 mod thumbnail;
 mod vision_engine;
 mod indexer;
+mod vector_index;
 mod watcher;
 
 use std::path::PathBuf;
