@@ -13,8 +13,9 @@ pub struct Image {
     pub folder_id: i64,
     pub path: String,
     pub file_hash: String,
+    pub file_size: i64,
     pub date_taken: Option<i64>,
-    pub date_file: i64,
+    pub mtime: i64,
     pub thumbnail_path: Option<String>,
     pub semantic_analysis_done: bool,
     pub subject_analysis_done: bool,
@@ -74,16 +75,26 @@ pub struct ImageRemovedPayload {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SearchResult {
-    pub image_id: i64,
-    pub path: String,
-    pub thumbnail_path: Option<String>,
-    pub score: f32,
-    pub date_taken: Option<i64>,
-    pub date_file: i64,
-    pub semantic_analysis_done: bool,
-    pub subject_analysis_done: bool,
+#[derive(Clone, serde::Serialize)]
+pub struct SyncProgressPayload {
+    pub done: u32,
+    pub total: u32,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct SyncCompletePayload {}
+
+#[derive(Clone, Debug)]
+pub enum DebouncedEventKind {
+    Create,
+    Modify,
+    Remove,
+}
+
+#[derive(Clone, Debug)]
+pub struct DebouncedEvent {
+    pub path: std::path::PathBuf,
+    pub kind: DebouncedEventKind,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
