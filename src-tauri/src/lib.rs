@@ -7,6 +7,7 @@ mod models;
 mod search;
 mod thumbnail;
 mod vision_engine;
+mod indexer;
 mod watcher;
 
 use std::path::PathBuf;
@@ -15,13 +16,11 @@ use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 
-use watcher::FolderWatcher;
-
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub data_dir: PathBuf,
     pub api_key: Arc<Mutex<Option<String>>>,
-    pub watcher: Arc<Mutex<FolderWatcher>>,
+    pub indexer: Arc<indexer::Indexer>,
     pub vision_engine: Arc<vision_engine::VisionEngine>,
 }
 
@@ -36,89 +35,31 @@ pub fn run() {
             std::fs::create_dir_all(thumbnail::thumbnail_cache_dir(&data_dir))?;
             std::fs::create_dir_all(thumbnail::face_crop_cache_dir(&data_dir))?;
 
-            // Initialize DB
             let pool = tauri::async_runtime::block_on(db::init_db(&data_dir))?;
 
-            // Load API key from config
             let api_key = config::read_api_key(&data_dir);
             let api_key = Arc::new(Mutex::new(api_key));
 
-            // Set up the file watcher channel
-            let (watcher_tx, watcher_rx) = tokio::sync::mpsc::unbounded_channel();
-            let folder_watcher = FolderWatcher::new(watcher_tx)?;
-            let watcher_arc = Arc::new(Mutex::new(folder_watcher));
-
-            // Re-register watchers for already-stored folders
-            {
-                let pool_init = pool.clone();
-                let watcher_init = watcher_arc.clone();
-                tauri::async_runtime::block_on(async move {
-                    if let Ok(folders) = db::list_all_folders(&pool_init).await {
-                        let mut w = watcher_init.lock().await;
-                        for folder in folders {
-                            let path = PathBuf::from(&folder.path);
-                            if path.exists() {
-                                let _ = w.watch(path, folder.id);
-                            }
-                        }
-                    }
-                });
-            }
-
-            // Create VisionEngine
             let vision_engine = Arc::new(vision_engine::VisionEngine::new(data_dir.clone()));
 
-            // Register app state
+            let indexer = tauri::async_runtime::block_on(
+                indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone())
+            )?;
+
             app.manage(AppState {
                 pool: pool.clone(),
                 data_dir: data_dir.clone(),
                 api_key: api_key.clone(),
-                watcher: watcher_arc,
-                vision_engine,
+                indexer,
+                vision_engine: vision_engine.clone(),
             });
 
-            // Spawn watcher event consumer
-            let pool_watcher = pool.clone();
-            let app_handle_watcher = app.handle().clone();
-            let data_dir_watcher = data_dir.clone();
+            let indexer_rescan = app.state::<AppState>().indexer.clone();
             tauri::async_runtime::spawn(async move {
-                watcher::run_event_consumer(
-                    watcher_rx,
-                    pool_watcher,
-                    app_handle_watcher,
-                    data_dir_watcher,
-                )
-                .await;
+                indexer_rescan.start_rescan().await;
             });
 
-            // Startup rescan: pick up images added while the app was offline
-            let pool_rescan = pool.clone();
-            let app_handle_rescan = app.handle().clone();
-            let data_dir_rescan = data_dir.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Ok(folders) = db::list_all_folders(&pool_rescan).await {
-                    for folder in folders {
-                        let path = PathBuf::from(&folder.path);
-                        if path.exists() {
-                            if let Err(e) = watcher::scan_folder(
-                                &pool_rescan,
-                                &app_handle_rescan,
-                                folder.id,
-                                &path,
-                                &data_dir_rescan,
-                            )
-                            .await
-                            {
-                                eprintln!("Startup rescan failed for {}: {}", folder.path, e);
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Ensure model files are present (downloads from HF on first run).
-            // The embedding worker waits on this before processing any images.
-            let vision_engine_model = Arc::clone(&app.state::<AppState>().vision_engine);
+            let vision_engine_model = Arc::clone(&vision_engine);
             let app_handle_model = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = vision_engine_model.ensure_model_ready(&app_handle_model).await {
@@ -136,18 +77,16 @@ pub fn run() {
                 }
             });
 
-            // Spawn semantic (SigLIP) embedding worker
             let pool_semantic = pool.clone();
             let app_handle_semantic = app.handle().clone();
-            let vision_engine_semantic = Arc::clone(&app.state::<AppState>().vision_engine);
+            let vision_engine_semantic = Arc::clone(&vision_engine);
             tauri::async_runtime::spawn(async move {
                 embedder::run_semantic_worker(pool_semantic, app_handle_semantic, vision_engine_semantic).await;
             });
 
-            // Spawn subject (ArcFace + clustering) worker
             let pool_subject = pool.clone();
             let app_handle_subject = app.handle().clone();
-            let vision_engine_subject = Arc::clone(&app.state::<AppState>().vision_engine);
+            let vision_engine_subject = Arc::clone(&vision_engine);
             tauri::async_runtime::spawn(async move {
                 embedder::run_subject_worker(pool_subject, app_handle_subject, vision_engine_subject).await;
             });
