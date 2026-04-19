@@ -50,7 +50,7 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
     dot_product / (norm1 * norm2)
 }
 
-pub async fn emit_progress(pool: &SqlitePool, app: &AppHandle) {
+pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle) {
     if let Ok(status) = db::get_processing_counts(pool).await {
         let _ = app.emit(
             "processing_progress",

@@ -178,7 +178,7 @@ export class PhotoService {
     await invoke<Folder>('add_folder', { path });
     await this.loadFolders();
     await this.refreshImages();
-    void this.refreshProcessingStatus();
+    await this.refreshProcessingStatus();
   }
 
   async removeFolder(id: number): Promise<void> {

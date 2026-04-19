@@ -23,10 +23,22 @@ pub async fn add_folder(
         .add_folder(path.clone())
         .await
         .map_err(|e| e.to_string())?;
-    state
-        .indexer
-        .clone()
-        .spawn_folder_scan(std::path::PathBuf::from(&path), folder.id);
+    let indexer = state.indexer.clone();
+    let pool = state.pool.clone();
+    let scan_path = std::path::PathBuf::from(&path);
+    let folder_id = folder.id;
+
+    tauri::async_runtime::spawn(async move {
+        let folder_still_exists = db::list_folders_with_counts(&pool)
+            .await
+            .map(|folders| folders.iter().any(|f| f.id == folder_id))
+            .unwrap_or(false);
+
+        if folder_still_exists {
+            indexer.spawn_folder_scan(scan_path, folder_id);
+        }
+    });
+
     Ok(folder)
 }
 

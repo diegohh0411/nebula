@@ -389,8 +389,14 @@ impl Indexer {
     }
 
     pub fn spawn_folder_scan(self: Arc<Self>, folder_path: PathBuf, folder_id: i64) {
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             self.start_folder_scan(&folder_path, folder_id).await;
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = handle.await {
+                eprintln!("Folder scan task failed for folder_id {}: {}", folder_id, e);
+            }
         });
     }
 
