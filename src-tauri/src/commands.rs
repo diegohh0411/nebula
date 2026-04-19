@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter};
 use crate::{
     config, db,
     models::{ProcessingStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
-    search, thumbnail, watcher, AppState,
+    search, thumbnail, AppState,
 };
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {
@@ -17,34 +17,12 @@ fn map_err<E: std::fmt::Display>(e: E) -> String {
 pub async fn add_folder(
     path: String,
     state: tauri::State<'_, AppState>,
-    app: AppHandle,
 ) -> Result<FolderWithCount, String> {
-    let pool = &state.pool;
-    let data_dir = &state.data_dir;
-
-    // Insert folder into DB
-    let folder_id = db::insert_folder(pool, &path).await.map_err(map_err)?;
-
-    // Scan folder for existing images
-    let folder_path = std::path::PathBuf::from(&path);
-    watcher::scan_folder(pool, &app, folder_id, &folder_path, data_dir)
+    state
+        .indexer
+        .add_folder(path)
         .await
-        .map_err(map_err)?;
-
-    // Register the filesystem watcher
-    {
-        let mut w = state.watcher.lock().await;
-        if let Err(e) = w.watch(folder_path, folder_id) {
-            eprintln!("Failed to register watcher for folder {folder_id}: {e}");
-        }
-    }
-
-    // Return updated folder with count
-    let folders = db::list_folders_with_counts(pool).await.map_err(map_err)?;
-    folders
-        .into_iter()
-        .find(|f| f.id == folder_id)
-        .ok_or_else(|| "Folder not found after insert".to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -52,19 +30,11 @@ pub async fn remove_folder(
     id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let pool = &state.pool;
-
-    // Find the folder path before deleting
-    let folders = db::list_folders_with_counts(pool).await.map_err(map_err)?;
-    if let Some(folder) = folders.iter().find(|f| f.id == id) {
-        let path = std::path::PathBuf::from(&folder.path);
-        let mut w = state.watcher.lock().await;
-        if let Err(e) = w.unwatch(&path) {
-            eprintln!("Failed to unregister watcher for path {}: {e}", path.display());
-        }
-    }
-
-    db::delete_folder(pool, id).await.map_err(map_err)
+    state
+        .indexer
+        .remove_folder(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
