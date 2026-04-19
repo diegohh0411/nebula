@@ -72,7 +72,6 @@ async fn process_semantic_one(
     image_id: i64,
     attempts: i32,
     index: &crate::vector_index::IndexStore,
-    _data_dir: &std::path::Path,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
@@ -274,13 +273,12 @@ pub async fn run_semantic_worker(
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
             let index_c = Arc::clone(&index);
-            let data_dir_c = data_dir.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 process_semantic_one(
                     &pool_c, &app_c, ve_c.as_ref(),
                     queue_id, image_id, attempts,
-                    &index_c, &data_dir_c,
+                    &index_c,
                 ).await;
             }));
         }
@@ -288,12 +286,15 @@ pub async fn run_semantic_worker(
             let _ = h.await;
         }
 
-        // Persist index snapshot after each batch
+        // Persist index snapshot after each batch (off async thread to avoid blocking runtime)
         let snap_path = data_dir.join("nebula.idx");
-        let guard = index.read().unwrap();
-        if let Err(e) = guard.save(&snap_path) {
-            eprintln!("[semantic-worker] Failed to save index snapshot: {e}");
-        }
+        let index_snap = Arc::clone(&index);
+        tokio::task::spawn_blocking(move || {
+            let guard = index_snap.read().unwrap();
+            if let Err(e) = guard.save(&snap_path) {
+                eprintln!("[semantic-worker] Failed to save index snapshot: {e}");
+            }
+        }).await.ok();
     }
 }
 
