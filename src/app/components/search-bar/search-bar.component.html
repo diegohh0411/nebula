@@ -55,11 +55,11 @@
     <span class="embed-badge" title="Photos still being processed">
       <span class="embed-badge-dot"></span>
       @if (photos.processingStatus().semantic_pending > 0 && photos.processingStatus().subject_pending > 0) {
-        {{ photos.processingStatus().semantic_pending }} indexing · {{ photos.processingStatus().subject_pending }} analyzing
-      } @else if (photos.processingStatus().semantic_pending > 0) {
-        {{ photos.processingStatus().semantic_pending }} indexing
+        {{ photos.processingStatus().subject_pending }} recognizing · {{ photos.processingStatus().semantic_pending }} indexing
+      } @else if (photos.processingStatus().subject_pending > 0) {
+        {{ photos.processingStatus().subject_pending }} recognizing
       } @else {
-        {{ photos.processingStatus().subject_pending }} analyzing
+        {{ photos.processingStatus().semantic_pending }} indexing
       }
     </span>
   }

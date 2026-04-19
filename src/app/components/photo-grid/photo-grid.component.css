@@ -49,13 +49,17 @@
 .status-dot {
   @apply absolute bottom-1.5 right-1.5 w-2 h-2 rounded-full
          opacity-0 group-hover:opacity-100 transition-opacity duration-150
-         ring-1 ring-black/20 animate-pulse;
+         ring-1 ring-black/20;
 }
 
-.status-dot--indexing {
+.status-dot--subject-pending {
   @apply bg-amber-400;
 }
 
-.status-dot--analyzing {
+.status-dot--semantic-pending {
   @apply bg-purple-400;
+}
+
+.status-dot--ready {
+  @apply bg-green-400;
 }

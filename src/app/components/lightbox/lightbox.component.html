@@ -88,10 +88,10 @@
           <div class="meta-item">
             <label>Status</label>
             <div class="value">
-              @if (!image.semantic_analysis_done) {
-                Indexing…
-              } @else if (!image.subject_analysis_done) {
-                Analyzing faces…
+              @if (!image.subject_analysis_done) {
+                Recognizing people…
+              } @else if (!image.semantic_analysis_done) {
+                Indexing for search…
               } @else {
                 Ready
               }

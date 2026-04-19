@@ -31,13 +31,13 @@ export interface SearchResult {
   subject_analysis_done: boolean;
 }
 
-export type ProcessingStage = 'indexing' | 'analyzing_faces' | 'ready';
+export type ProcessingStage = 'subject_pending' | 'semantic_pending' | 'ready';
 
 export function getProcessingStage(
   img: Pick<Image | SearchResult, 'semantic_analysis_done' | 'subject_analysis_done'>
 ): ProcessingStage {
-  if (!img.semantic_analysis_done) return 'indexing';
-  if (!img.subject_analysis_done) return 'analyzing_faces';
+  if (!img.subject_analysis_done) return 'subject_pending';
+  if (!img.semantic_analysis_done) return 'semantic_pending';
   return 'ready';
 }
 
