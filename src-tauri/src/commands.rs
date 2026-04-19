@@ -18,11 +18,16 @@ pub async fn add_folder(
     path: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<FolderWithCount, String> {
+    let folder = state
+        .indexer
+        .add_folder(path.clone())
+        .await
+        .map_err(|e| e.to_string())?;
     state
         .indexer
-        .add_folder(path)
-        .await
-        .map_err(|e| e.to_string())
+        .clone()
+        .spawn_folder_scan(std::path::PathBuf::from(&path), folder.id);
+    Ok(folder)
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { debounceTime } from 'rxjs/operators';
 import {
   DayGroup,
   ProcessingStatus,
@@ -115,8 +116,9 @@ export class PhotoService {
       this.processingStatus.set(e);
     });
 
-    this.events.imageAdded$.subscribe(() => {
+    this.events.imageAdded$.pipe(debounceTime(300)).subscribe(() => {
       void this.refreshImages();
+      void this.loadFolders();
     });
 
     this.events.imageUpdated$.subscribe(() => {
@@ -176,6 +178,7 @@ export class PhotoService {
     await invoke<Folder>('add_folder', { path });
     await this.loadFolders();
     await this.refreshImages();
+    void this.refreshProcessingStatus();
   }
 
   async removeFolder(id: number): Promise<void> {

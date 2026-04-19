@@ -381,14 +381,17 @@ impl Indexer {
 
         self.sync_folder_map().await;
 
-        let folder_path = PathBuf::from(&path);
-        self.start_folder_scan(&folder_path, folder_id).await;
-
         let folders = db::list_folders_with_counts(&self.pool).await?;
         folders
             .into_iter()
             .find(|f| f.id == folder_id)
             .ok_or_else(|| anyhow::anyhow!("Folder not found after insert"))
+    }
+
+    pub fn spawn_folder_scan(self: Arc<Self>, folder_path: PathBuf, folder_id: i64) {
+        tokio::spawn(async move {
+            self.start_folder_scan(&folder_path, folder_id).await;
+        });
     }
 
     pub async fn remove_folder(&self, id: i64) -> Result<()> {
@@ -451,10 +454,14 @@ impl Indexer {
             })
             .unwrap_or_default();
 
-        for path in entries {
+        for (i, path) in entries.iter().enumerate() {
             let path_str = path.to_string_lossy().to_string();
             let known = db_map.get(&path_str).cloned();
-            self.process_file(&path, folder_id, known).await;
+            self.process_file(path, folder_id, known).await;
+            if (i + 1) % 10 == 0 {
+                crate::embedder::emit_progress(&self.pool, &self.app).await;
+            }
         }
+        crate::embedder::emit_progress(&self.pool, &self.app).await;
     }
 }
