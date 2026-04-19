@@ -4,7 +4,13 @@ use std::path::Path;
 
 use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
 
-const MIGRATIONS: &str = r#"
+const LATEST_VERSION: u32 = 0;
+
+const BASE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS folders (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     path     TEXT UNIQUE NOT NULL,
@@ -16,8 +22,9 @@ CREATE TABLE IF NOT EXISTS images (
     folder_id              INTEGER NOT NULL REFERENCES folders(id),
     path                   TEXT UNIQUE NOT NULL,
     file_hash              TEXT NOT NULL,
+    file_size              INTEGER NOT NULL DEFAULT 0,
     date_taken             INTEGER,
-    date_file              INTEGER NOT NULL,
+    mtime                  INTEGER NOT NULL,
     thumbnail_path         TEXT,
     semantic_analysis_done INTEGER NOT NULL DEFAULT 0,
     subject_analysis_done  INTEGER NOT NULL DEFAULT 0,
@@ -59,11 +66,22 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_w      REAL NOT NULL,
     bbox_h      REAL NOT NULL,
     embedding   BLOB,
-    added_at    INTEGER NOT NULL
+    added_at    INTEGER NOT NULL,
+    is_manual   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
 CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);
+
+CREATE TABLE IF NOT EXISTS face_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    old_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+    new_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_corrections_face ON face_corrections(face_id);
 
 CREATE TABLE IF NOT EXISTS embedding_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,19 +108,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
 );
 "#;
 
-const POST_MIGRATIONS: &str = r#"
-ALTER TABLE faces ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0;
-
-CREATE TABLE IF NOT EXISTS face_corrections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-    old_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-    new_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-    created_at INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_corrections_face ON face_corrections(face_id);
-"#;
+const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
@@ -119,17 +125,33 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     sqlx::query("PRAGMA synchronous=NORMAL;").execute(&pool).await?;
     sqlx::query("PRAGMA foreign_keys=ON;").execute(&pool).await?;
 
-    for stmt in MIGRATIONS.split(';') {
+    for stmt in BASE_SCHEMA.split(';') {
         let s = stmt.trim();
         if !s.is_empty() {
             sqlx::query(s).execute(&pool).await?;
         }
     }
 
-    for stmt in POST_MIGRATIONS.split(';') {
-        let s = stmt.trim();
-        if !s.is_empty() {
-            let _ = sqlx::query(s).execute(&pool).await;
+    sqlx::query("INSERT OR IGNORE INTO schema_version (rowid, version) VALUES (1, 0)")
+        .execute(&pool)
+        .await?;
+
+    let current: u32 = sqlx::query_scalar("SELECT version FROM schema_version WHERE rowid = 1")
+        .fetch_one(&pool)
+        .await?;
+
+    for &(version, sql) in VERSIONED_MIGRATIONS {
+        if current < version {
+            for stmt in sql.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    sqlx::query(s).execute(&pool).await?;
+                }
+            }
+            sqlx::query("UPDATE schema_version SET version = ? WHERE rowid = 1")
+                .bind(version)
+                .execute(&pool)
+                .await?;
         }
     }
 
@@ -213,8 +235,9 @@ fn row_to_image(r: &sqlx::sqlite::SqliteRow) -> Image {
         folder_id: r.get("folder_id"),
         path: r.get("path"),
         file_hash: r.get("file_hash"),
+        file_size: r.get::<i64, _>("file_size"),
         date_taken: r.get("date_taken"),
-        date_file: r.get("date_file"),
+        mtime: r.get("mtime"),
         thumbnail_path: r.get("thumbnail_path"),
         semantic_analysis_done: r.get::<i32, _>("semantic_analysis_done") != 0,
         subject_analysis_done: r.get::<i32, _>("subject_analysis_done") != 0,
@@ -224,56 +247,139 @@ fn row_to_image(r: &sqlx::sqlite::SqliteRow) -> Image {
     }
 }
 
-pub async fn upsert_image(
+pub async fn insert_image(
     pool: &SqlitePool,
     folder_id: i64,
     path: &str,
     file_hash: &str,
-    date_file: i64,
-) -> Result<(i64, bool)> {
+    file_size: i64,
+    mtime: i64,
+) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
+    let result = sqlx::query(
+        "INSERT INTO images (folder_id, path, file_hash, file_size, mtime, added_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(folder_id)
+    .bind(path)
+    .bind(file_hash)
+    .bind(file_size)
+    .bind(mtime)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(result.last_insert_rowid())
+}
 
-    let existing = sqlx::query("SELECT id, file_hash, deleted_at FROM images WHERE path = ?")
-        .bind(path)
-        .fetch_optional(pool)
-        .await?;
+pub async fn update_image_hash_changed(
+    pool: &SqlitePool,
+    image_id: i64,
+    file_hash: &str,
+    file_size: i64,
+    mtime: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "UPDATE images SET file_hash = ?, file_size = ?, mtime = ?,
+         semantic_analysis_done = 0, subject_analysis_done = 0, embedding = NULL,
+         updated_at = ?, deleted_at = NULL WHERE id = ?",
+    )
+    .bind(file_hash)
+    .bind(file_size)
+    .bind(mtime)
+    .bind(now)
+    .bind(image_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
 
-    if let Some(row) = existing {
-        let image_id: i64 = row.get("id");
-        let old_hash: String = row.get("file_hash");
-        let deleted_at: Option<i64> = row.get("deleted_at");
-        let was_deleted = deleted_at.is_some();
-        let hash_changed = old_hash != file_hash;
+pub async fn update_image_metadata(
+    pool: &SqlitePool,
+    image_id: i64,
+    file_size: i64,
+    mtime: i64,
+) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "UPDATE images SET file_size = ?, mtime = ?, updated_at = ?, deleted_at = NULL WHERE id = ?",
+    )
+    .bind(file_size)
+    .bind(mtime)
+    .bind(now)
+    .bind(image_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
 
-        if hash_changed || was_deleted {
-            sqlx::query(
-                "UPDATE images SET file_hash = ?, date_file = ?, semantic_analysis_done = 0,
-                 subject_analysis_done = 0, embedding = NULL, updated_at = ?, deleted_at = NULL WHERE id = ?",
-            )
-            .bind(file_hash)
-            .bind(date_file)
-            .bind(now)
-            .bind(image_id)
-            .execute(pool)
-            .await?;
-            return Ok((image_id, true));
-        }
-        Ok((image_id, false))
-    } else {
-        let result = sqlx::query(
-            "INSERT INTO images (folder_id, path, file_hash, date_file, added_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(folder_id)
-        .bind(path)
-        .bind(file_hash)
-        .bind(date_file)
+pub async fn clear_image_deleted(pool: &SqlitePool, image_id: i64) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("UPDATE images SET deleted_at = NULL, updated_at = ? WHERE id = ?")
         .bind(now)
-        .bind(now)
+        .bind(image_id)
         .execute(pool)
         .await?;
-        Ok((result.last_insert_rowid(), true))
-    }
+    Ok(())
+}
+
+#[derive(Clone)]
+pub struct DbImage {
+    pub id: i64,
+    pub path: String,
+    pub mtime: i64,
+    pub file_size: i64,
+    pub file_hash: String,
+    pub deleted_at: Option<i64>,
+}
+
+pub async fn get_all_images_for_rescan(pool: &SqlitePool) -> Result<Vec<DbImage>> {
+    let rows = sqlx::query(
+        "SELECT id, path, mtime, file_size, file_hash, deleted_at FROM images",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| DbImage {
+            id: r.get("id"),
+            path: r.get("path"),
+            mtime: r.get("mtime"),
+            file_size: r.get::<i64, _>("file_size"),
+            file_hash: r.get("file_hash"),
+            deleted_at: r.get("deleted_at"),
+        })
+        .collect())
+}
+
+pub async fn get_image_metadata_by_path(pool: &SqlitePool, path: &str) -> Result<Option<DbImage>> {
+    let row = sqlx::query(
+        "SELECT id, path, mtime, file_size, file_hash, deleted_at FROM images WHERE path = ?",
+    )
+    .bind(path)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| DbImage {
+        id: r.get("id"),
+        path: r.get("path"),
+        mtime: r.get("mtime"),
+        file_size: r.get::<i64, _>("file_size"),
+        file_hash: r.get("file_hash"),
+        deleted_at: r.get("deleted_at"),
+    }))
+}
+
+pub async fn soft_delete_image_by_id(pool: &SqlitePool, id: i64) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("UPDATE images SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL")
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn soft_delete_image(pool: &SqlitePool, path: &str) -> Result<()> {
@@ -298,20 +404,20 @@ pub async fn update_thumbnail_path(pool: &SqlitePool, image_id: i64, thumb_path:
 pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Vec<Image>> {
     let rows = if let Some(fid) = folder_id {
         sqlx::query(
-            "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
+            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
                     semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE folder_id = ? AND deleted_at IS NULL
-             ORDER BY COALESCE(date_taken, date_file) DESC",
+             ORDER BY COALESCE(date_taken, mtime) DESC",
         )
         .bind(fid)
         .fetch_all(pool)
         .await?
     } else {
         sqlx::query(
-            "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
+            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
                     semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE deleted_at IS NULL
-             ORDER BY COALESCE(date_taken, date_file) DESC",
+             ORDER BY COALESCE(date_taken, mtime) DESC",
         )
         .fetch_all(pool)
         .await?
@@ -322,7 +428,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
 
 pub async fn get_image_by_path(pool: &SqlitePool, path: &str) -> Result<Option<Image>> {
     let row = sqlx::query(
-        "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
+        "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
                 semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
          FROM images WHERE path = ?",
     )
@@ -334,7 +440,7 @@ pub async fn get_image_by_path(pool: &SqlitePool, path: &str) -> Result<Option<I
 
 pub async fn get_image_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Image>> {
     let row = sqlx::query(
-        "SELECT id, folder_id, path, file_hash, date_taken, date_file, thumbnail_path,
+        "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
                 semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
          FROM images WHERE id = ?",
     )
@@ -641,12 +747,12 @@ pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Resul
 
 pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Image>> {
     let rows = sqlx::query(
-        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.date_taken, i.date_file, i.thumbnail_path,
+        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.file_size, i.date_taken, i.mtime, i.thumbnail_path,
                            i.semantic_analysis_done, i.subject_analysis_done, i.added_at, i.updated_at, i.deleted_at
            FROM images i
            JOIN faces f ON f.image_id = i.id
            WHERE f.subject_id = ? AND i.deleted_at IS NULL
-           ORDER BY COALESCE(i.date_taken, i.date_file) DESC"#,
+           ORDER BY COALESCE(i.date_taken, i.mtime) DESC"#,
     )
     .bind(subject_id)
     .fetch_all(pool)

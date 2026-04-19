@@ -82,7 +82,7 @@ pub async fn build_search_results(
                 thumbnail_path: img.thumbnail_path,
                 score,
                 date_taken: img.date_taken,
-                date_file: img.date_file,
+                mtime: img.mtime,
                 semantic_analysis_done: img.semantic_analysis_done,
                 subject_analysis_done: img.subject_analysis_done,
             });
