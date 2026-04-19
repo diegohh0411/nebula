@@ -668,6 +668,18 @@ pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u
         .collect())
 }
 
+pub async fn get_manual_face_embeddings_by_subject(
+    pool: &SqlitePool,
+) -> Result<Vec<(i64, Vec<u8>)>> {
+    let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(
+        "SELECT subject_id, embedding FROM faces \
+         WHERE subject_id IS NOT NULL AND embedding IS NOT NULL AND is_manual = 1",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> {
     let row = sqlx::query(
         "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual
@@ -1151,4 +1163,60 @@ pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
 
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::SqlitePool;
+
+    async fn make_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                thumbnail_face_id INTEGER,
+                type TEXT NOT NULL DEFAULT 'person',
+                added_at INTEGER NOT NULL
+            )"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER NOT NULL,
+                subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+                bbox_x REAL NOT NULL, bbox_y REAL NOT NULL,
+                bbox_w REAL NOT NULL, bbox_h REAL NOT NULL,
+                embedding BLOB,
+                added_at INTEGER NOT NULL,
+                is_manual INTEGER NOT NULL DEFAULT 0
+            )"
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn get_manual_face_embeddings_returns_only_manual() {
+        let pool = make_pool().await;
+        let subject_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let manual_emb: Vec<u8> = vec![1u8; 8];
+        let auto_emb: Vec<u8> = vec![2u8; 8];
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) VALUES (1, ?, 0,0,1,1, ?, 0, 1)"
+        ).bind(subject_id).bind(&manual_emb).execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) VALUES (1, ?, 0,0,1,1, ?, 0, 0)"
+        ).bind(subject_id).bind(&auto_emb).execute(&pool).await.unwrap();
+
+        let results = get_manual_face_embeddings_by_subject(&pool).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, subject_id);
+        assert_eq!(results[0].1, manual_emb);
+    }
 }
