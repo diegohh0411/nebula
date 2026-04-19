@@ -47,14 +47,14 @@ pub async fn run_debounce_loop(
     loop {
         tokio::select! {
             Some(event) = rx.recv() => {
+                let kind = match event.kind {
+                    EventKind::Create(_) => DebouncedEventKind::Create,
+                    EventKind::Modify(_) => DebouncedEventKind::Modify,
+                    EventKind::Remove(_) => DebouncedEventKind::Remove,
+                    _ => continue,
+                };
                 for path in event.paths {
-                    let kind = match event.kind {
-                        EventKind::Create(_) => DebouncedEventKind::Create,
-                        EventKind::Modify(_) => DebouncedEventKind::Modify,
-                        EventKind::Remove(_) => DebouncedEventKind::Remove,
-                        _ => continue,
-                    };
-                    coalesce(&mut debounce_map, path, kind);
+                    coalesce(&mut debounce_map, path, kind.clone());
                 }
             }
             _ = interval.tick() => {

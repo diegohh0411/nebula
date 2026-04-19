@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
 
-const LATEST_VERSION: u32 = 3;
+const LATEST_VERSION: u32 = 0;
 
 const BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -108,21 +108,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
 );
 "#;
 
-const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
-    (1, "ALTER TABLE images RENAME COLUMN date_file TO mtime"),
-    (2, "ALTER TABLE images ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"),
-    (3, r#"
-ALTER TABLE faces ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0;
-CREATE TABLE IF NOT EXISTS face_corrections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-    old_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-    new_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-    created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_corrections_face ON face_corrections(face_id);
-"#),
-];
+const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
@@ -150,27 +136,9 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
 
-    let current: Option<u32> = sqlx::query_scalar("SELECT version FROM schema_version WHERE rowid = 1")
-        .fetch_optional(&pool)
+    let current: u32 = sqlx::query_scalar("SELECT version FROM schema_version WHERE rowid = 1")
+        .fetch_one(&pool)
         .await?;
-
-    let current = match current {
-        Some(v) => v,
-        None => {
-            let has_old_column: bool = sqlx::query_scalar::<sqlx::Sqlite, i64>(
-                "SELECT COUNT(*) FROM pragma_table_info('images') WHERE name = 'date_file'",
-            )
-            .fetch_one(&pool)
-            .await?
-                > 0;
-            let version = if has_old_column { 0u32 } else { LATEST_VERSION };
-            sqlx::query("UPDATE schema_version SET version = ? WHERE rowid = 1")
-                .bind(version)
-                .execute(&pool)
-                .await?;
-            version
-        }
-    };
 
     for &(version, sql) in VERSIONED_MIGRATIONS {
         if current < version {

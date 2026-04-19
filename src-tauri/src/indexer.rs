@@ -59,10 +59,9 @@ async fn compute_sha256(path: &Path) -> Result<String> {
 }
 
 fn find_folder_id(folder_map: &[(PathBuf, i64)], path: &Path) -> Option<i64> {
-    let path_str = path.to_str()?;
     folder_map
         .iter()
-        .filter(|(p, _)| path_str.starts_with(p.to_str().unwrap_or("")))
+        .filter(|(p, _)| path.starts_with(p))
         .max_by_key(|(p, _)| p.as_os_str().len())
         .map(|(_, id)| *id)
 }
@@ -172,7 +171,13 @@ impl Indexer {
 
         match existing {
             None => {
-                let _permit = self.hash_semaphore.acquire().await;
+                let _permit = match self.hash_semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(e) => {
+                        eprintln!("Failed to acquire hash semaphore for {}: {}", path_str, e);
+                        return;
+                    }
+                };
                 let hash = match compute_sha256(path).await {
                     Ok(h) => h,
                     Err(e) => {
@@ -226,7 +231,13 @@ impl Indexer {
                     return;
                 }
 
-                let _permit = self.hash_semaphore.acquire().await;
+                let _permit = match self.hash_semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(e) => {
+                        eprintln!("Failed to acquire hash semaphore for {}: {}", path_str, e);
+                        return;
+                    }
+                };
                 let hash = match compute_sha256(path).await {
                     Ok(h) => h,
                     Err(e) => {

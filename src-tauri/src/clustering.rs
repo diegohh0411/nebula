@@ -178,6 +178,64 @@ pub struct ReclusterResult {
     pub deleted: u64,
 }
 
+const ANCHOR_MATCH_THRESHOLD: f32 = 0.75;
+
+fn compute_anchor_centroids(
+    manual: &[(i64, Vec<f32>)],
+    all: &[(i64, Vec<f32>)],
+) -> HashMap<i64, Vec<f32>> {
+    let mut by_manual: HashMap<i64, Vec<&Vec<f32>>> = HashMap::new();
+    for (id, emb) in manual {
+        by_manual.entry(*id).or_default().push(emb);
+    }
+
+    let mut by_all: HashMap<i64, Vec<&Vec<f32>>> = HashMap::new();
+    for (id, emb) in all {
+        by_all.entry(*id).or_default().push(emb);
+    }
+
+    let mut subject_ids: std::collections::HashSet<i64> = by_manual.keys().copied().collect();
+    subject_ids.extend(by_all.keys().copied());
+
+    subject_ids
+        .into_iter()
+        .filter_map(|id| {
+            let faces = by_manual
+                .get(&id)
+                .map(|v| v.as_slice())
+                .or_else(|| by_all.get(&id).map(|v| v.as_slice()))?;
+            if faces.is_empty() {
+                return None;
+            }
+            let dim = faces[0].len();
+            let mut centroid = vec![0.0f32; dim];
+            for emb in faces {
+                for (i, &v) in emb.iter().enumerate() {
+                    centroid[i] += v;
+                }
+            }
+            let n = faces.len() as f32;
+            for v in &mut centroid {
+                *v /= n;
+            }
+            Some((id, centroid))
+        })
+        .collect()
+}
+
+fn find_nearest_anchor(
+    cluster_centroid: &[f32],
+    anchors: &HashMap<i64, Vec<f32>>,
+    threshold: f32,
+) -> Option<i64> {
+    anchors
+        .iter()
+        .map(|(&id, emb)| (id, crate::embedder::cosine_similarity(cluster_centroid, emb)))
+        .filter(|(_, sim)| *sim > threshold)
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(id, _)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
