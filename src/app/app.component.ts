@@ -50,7 +50,6 @@ export class AppComponent implements OnInit, OnDestroy {
     void this.photos.loadFolders();
     void this.photos.refreshImages();
     void this.photos.refreshProcessingStatus();
-    void this.photos.loadApiKey();
   }
 
   ngOnDestroy(): void {

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use tauri::Emitter;
 
 use crate::{
-    config, db,
+    db,
     models::{ProcessingStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
     search, thumbnail, AppState,
 };
@@ -166,72 +166,6 @@ pub async fn get_processing_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<ProcessingStatus, String> {
     db::get_processing_counts(&state.pool).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn set_api_key(
-    key: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    config::write_api_key(&state.data_dir, &key).map_err(map_err)?;
-    let mut lock = state.api_key.lock().await;
-    *lock = Some(key);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_api_key(
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<String>, String> {
-    let lock = state.api_key.lock().await;
-    Ok(lock.clone())
-}
-
-#[tauri::command]
-pub async fn regenerate_all_thumbnails(
-    state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    // 1. Clear database paths
-    sqlx::query("UPDATE images SET thumbnail_path = NULL")
-        .execute(&state.pool)
-        .await
-        .map_err(map_err)?;
-
-    // 2. Clear disk cache
-    let cache_dir = thumbnail::thumbnail_cache_dir(&state.data_dir);
-    if cache_dir.exists() {
-        if let Err(e) = tokio::fs::remove_dir_all(&cache_dir).await {
-            eprintln!("Failed to remove thumbnail cache directory {:?}: {}", cache_dir, e);
-        }
-        if let Err(e) = tokio::fs::create_dir_all(&cache_dir).await {
-            eprintln!("Failed to create thumbnail cache directory {:?}: {}", cache_dir, e);
-        }
-    }
-
-    // 3. Trigger background generation for all images
-    let pool = state.pool.clone();
-    let data_dir = state.data_dir.clone();
-    let images = db::list_images(&pool, None).await.map_err(map_err)?;
-
-    tokio::spawn(async move {
-        for image in images {
-            let thumb_path = thumbnail::thumbnail_path_for(&data_dir, image.id);
-            let thumb_str = thumb_path.to_string_lossy().to_string();
-            let src = std::path::PathBuf::from(&image.path);
-            
-            if let Ok(()) = thumbnail::generate_thumbnail(src, thumb_path).await {
-                if db::update_thumbnail_path(&pool, image.id, &thumb_str).await.is_ok() {
-                    let _ = app.emit(
-                        "image_updated",
-                        crate::models::ImageUpdatedPayload { image_id: image.id },
-                    );
-                }
-            }
-        }
-    });
-
-    Ok(())
 }
 
 #[tauri::command]

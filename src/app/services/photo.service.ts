@@ -33,8 +33,6 @@ export class PhotoService {
   readonly searchError = signal<string | null>(null);
   readonly searchImage = signal<{ thumbnailUrl: string; type: 'library' | 'external' } | null>(null);
   readonly searchText = signal<string>('');
-  readonly apiKey = signal<string | null>(null);
-  readonly showApiKeyInput = signal(false);
 
   // ---- Lightbox state ----
   readonly selectedImage = signal<Image | SearchResult | null>(null);
@@ -288,21 +286,6 @@ export class PhotoService {
     this.selectedFolderId.set(id);
     this.clearSearch();
     void this.refreshImages();
-  }
-
-  async loadApiKey(): Promise<void> {
-    const key = await invoke<string | null>('get_api_key');
-    this.apiKey.set(key);
-  }
-
-  async saveApiKey(key: string): Promise<void> {
-    await invoke('set_api_key', { key });
-    this.apiKey.set(key);
-  }
-
-  async regenerateThumbnails(): Promise<void> {
-    await invoke('regenerate_all_thumbnails');
-    // The image_updated events from Rust will trigger refreshing the grid automatically
   }
 
   async reclusterFaces(): Promise<{ clusters: number; noise: number; merged: number; deleted: number }> {
