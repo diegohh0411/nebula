@@ -1,0 +1,33 @@
+<div class="settings-container">
+  <header class="settings-header">
+    <lucide-icon name="settings" class="header-icon"></lucide-icon>
+    <h1>Settings</h1>
+  </header>
+
+  <section class="settings-section">
+    <div class="section-title">
+      <lucide-icon name="cpu" class="section-icon"></lucide-icon>
+      <h2>Vision Model</h2>
+    </div>
+    <p class="section-description">Select the embedding model used for image search and semantic analysis.</p>
+    
+    <div class="model-list">
+      @for (model of models(); track model.id) {
+        <div 
+          class="model-card" 
+          [class.active]="currentModel() === model.id"
+          (click)="selectModel(model.id)"
+        >
+          <div class="model-card-header">
+            <h3>{{ model.name }}</h3>
+            @if (currentModel() === model.id) {
+              <span class="badge">Active</span>
+            }
+          </div>
+          <p class="model-card-desc">{{ model.description }}</p>
+          <p class="model-card-id">{{ model.id }}</p>
+        </div>
+      }
+    </div>
+  </section>
+</div>
