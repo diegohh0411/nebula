@@ -83,5 +83,16 @@
       </svg>
       Add Folder
     </button>
+
+    <a
+      class="folder-item !rounded-md"
+      routerLink="/settings"
+      [class.folder-item--active]="isSettingsActive()"
+    >
+      <span class="folder-icon">
+        <lucide-icon name="settings" size="14"></lucide-icon>
+      </span>
+      <span class="folder-name">Settings</span>
+    </a>
   </div>
 </aside>

@@ -5,13 +5,14 @@ import {
 } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { open } from '@tauri-apps/plugin-dialog';
+import { LucideAngularModule } from 'lucide-angular';
 import { PhotoService } from '../../services/photo.service';
 
 @Component({
   selector: 'app-sidebar',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [RouterLink, LucideAngularModule],
   templateUrl: './sidebar.component.html',
   styleUrl: './sidebar.component.css',
 })
@@ -48,5 +49,9 @@ export class SidebarComponent {
 
   protected isPeopleActive(): boolean {
     return this.router.url === '/people';
+  }
+
+  protected isSettingsActive(): boolean {
+    return this.router.url === '/settings';
   }
 }
