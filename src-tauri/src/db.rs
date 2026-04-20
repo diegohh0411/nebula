@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
 
-const LATEST_VERSION: u32 = 0;
+const LATEST_VERSION: u32 = 1;
 
 const BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -97,8 +97,7 @@ CREATE TABLE IF NOT EXISTS merge_suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
     subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-    cross_match_count INTEGER NOT NULL,
-    total_pairs INTEGER NOT NULL,
+    score REAL NOT NULL,
     created_at INTEGER NOT NULL
 );
 
@@ -108,7 +107,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
 );
 "#;
 
-const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[];
+const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
+    (1, "
+        DROP TABLE IF EXISTS merge_suggestions;
+        CREATE TABLE merge_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            score REAL NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
+            CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
+            CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
+        );
+    "),
+];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
@@ -968,8 +982,7 @@ pub async fn insert_merge_suggestion(
     pool: &SqlitePool,
     subject_id_a: i64,
     subject_id_b: i64,
-    cross_match_count: i64,
-    total_pairs: i64,
+    score: f64,
 ) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     let (lo, hi) = if subject_id_a < subject_id_b {
@@ -978,12 +991,11 @@ pub async fn insert_merge_suggestion(
         (subject_id_b, subject_id_a)
     };
     sqlx::query(
-        "INSERT OR IGNORE INTO merge_suggestions (subject_id_a, subject_id_b, cross_match_count, total_pairs, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) VALUES (?, ?, ?, ?)",
     )
     .bind(lo)
     .bind(hi)
-    .bind(cross_match_count)
-    .bind(total_pairs)
+    .bind(score)
     .bind(now)
     .execute(pool)
     .await?;
@@ -992,7 +1004,7 @@ pub async fn insert_merge_suggestion(
 
 pub async fn get_merge_suggestions(pool: &SqlitePool) -> Result<Vec<crate::models::MergeSuggestion>> {
     let rows = sqlx::query(
-        r#"SELECT ms.id, ms.cross_match_count, ms.total_pairs,
+        r#"SELECT ms.id, ms.score,
                   sa.id as sa_id, sa.name as sa_name, sa.thumbnail_face_id as sa_thumbnail_face_id, sa.type as sa_type, sa.added_at as sa_added_at,
                   sb.id as sb_id, sb.name as sb_name, sb.thumbnail_face_id as sb_thumbnail_face_id, sb.type as sb_type, sb.added_at as sb_added_at
            FROM merge_suggestions ms
@@ -1020,8 +1032,7 @@ pub async fn get_merge_suggestions(pool: &SqlitePool) -> Result<Vec<crate::model
                 subject_type: r.get("sb_type"),
                 added_at: r.get("sb_added_at"),
             },
-            cross_match_count: r.get("cross_match_count"),
-            total_pairs: r.get("total_pairs"),
+            score: r.get("score"),
         })
         .collect())
 }

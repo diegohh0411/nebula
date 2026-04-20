@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::db;
 
-pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
+pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     // 1. Build anchor centroids first.
     let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
@@ -29,6 +29,8 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
     let unassigned = db::get_unassigned_faces_with_embeddings(pool).await?;
 
     let mut residual_faces = Vec::new();
+    let mut new_clusters_count = 0;
+    let mut noise_count = 0;
 
     // 3. Pass 1: Greedy Centroid Match
     for (face_id, emb_blob) in unassigned {
@@ -40,15 +42,15 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
                 // No match, keep for HDBSCAN
                 residual_faces.push((face_id, emb));
             }
+        } else {
+            eprintln!("[clustering] Failed to decode embedding for face {}", face_id);
+            noise_count += 1;
         }
     }
 
-    let mut new_clusters_count = 0;
-    let mut noise_count = 0;
-
     // 4. Pass 2: Residual HDBSCAN
     if residual_faces.len() >= 2 {
-        let embeddings: Vec<Vec<f32>> = residual_faces.iter().map(|(_, e)| e.clone()).collect();
+        let (residual_ids, embeddings): (Vec<i64>, Vec<Vec<f32>>) = residual_faces.into_iter().unzip();
         let hyper_params = HdbscanHyperParams::builder()
             .min_cluster_size(2)
             .min_samples(2)
@@ -70,17 +72,18 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
                     new_clusters_count += 1;
                     let new_subject_id = db::insert_subject(pool, None, "person").await?;
                     for &idx in indices {
-                        let face_id = residual_faces[idx].0;
+                        let face_id = residual_ids[idx];
                         db::update_face_subject(pool, face_id, Some(new_subject_id)).await?;
                     }
                 }
             }
             Err(e) => {
                 eprintln!("[clustering] HDBSCAN failed on residual faces: {}", e);
+                noise_count += embeddings.len();
             }
         }
     } else {
-        noise_count = residual_faces.len();
+        noise_count += residual_faces.len();
     }
 
     let deleted = db::delete_subjects_with_no_faces(pool).await?;
@@ -116,7 +119,8 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
 
     let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
     
-    let subject_embeddings: Vec<(i64, Vec<f32>)> = anchor_centroids.into_iter().collect();
+    let mut subject_embeddings: Vec<(i64, Vec<f32>)> = anchor_centroids.into_iter().collect();
+    subject_embeddings.sort_unstable_by_key(|(id, _)| *id);
 
     for i in 0..subject_embeddings.len() {
         for j in (i + 1)..subject_embeddings.len() {
@@ -126,13 +130,11 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
             let sim = crate::embedder::cosine_similarity(emb_a, emb_b);
 
             if sim > MERGE_CENTROID_SIMILARITY_THRESHOLD {
-                let match_score = (sim * 100.0) as i64;
                 crate::db::insert_merge_suggestion(
                     pool,
                     *id_a,
                     *id_b,
-                    match_score,
-                    100,
+                    sim as f64,
                 )
                 .await?;
             }

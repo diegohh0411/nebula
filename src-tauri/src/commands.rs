@@ -294,7 +294,12 @@ pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppStat
 pub async fn recluster_faces(
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::clustering::ReclusterResult, String> {
-    crate::clustering::recluster_all(&state.pool)
+    sqlx::query("UPDATE faces SET subject_id = NULL WHERE is_manual = 0")
+        .execute(&state.pool)
+        .await
+        .map_err(map_err)?;
+
+    crate::clustering::cluster_unassigned_faces(&state.pool)
         .await
         .map_err(map_err)
 }

@@ -356,7 +356,7 @@ pub async fn run_subject_worker(
 
         if had_items {
             eprintln!("[subject-worker] Batch complete, running auto-recluster...");
-            match crate::clustering::recluster_all(&pool).await {
+            match crate::clustering::cluster_unassigned_faces(&pool).await {
                 Ok(result) => {
                     eprintln!(
                         "[subject-worker] Recluster done: {} clusters, {} noise, {} merged, {} deleted",

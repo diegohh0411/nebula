@@ -40,7 +40,7 @@
                   {{ suggestion.subject_b.name || 'Unnamed' }}
                 </div>
                 <div class="text-xs text-muted-foreground">
-                  {{ suggestion.cross_match_count }} similar face pairs
+                  {{ suggestion.score | percent }} match
                 </div>
               </div>
             </div>
