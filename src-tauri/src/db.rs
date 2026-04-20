@@ -11,6 +11,11 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS folders (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     path     TEXT UNIQUE NOT NULL,
@@ -145,6 +150,10 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
             sqlx::query(s).execute(&pool).await?;
         }
     }
+
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('embedding_model', 'diegohh/siglip2-base-patch16-224')")
+        .execute(&pool)
+        .await?;
 
     sqlx::query("INSERT OR IGNORE INTO schema_version (rowid, version) VALUES (1, 0)")
         .execute(&pool)
