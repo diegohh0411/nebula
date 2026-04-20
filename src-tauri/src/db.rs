@@ -1153,6 +1153,14 @@ pub async fn get_face_subject_id(pool: &SqlitePool, face_id: i64) -> Result<Opti
     Ok(row.and_then(|r| r.get::<Option<i64>, _>("subject_id")))
 }
 
+pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get("value")))
+}
+
 pub async fn record_face_correction(pool: &SqlitePool, face_id: i64, old_subject_id: Option<i64>, new_subject_id: Option<i64>) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(

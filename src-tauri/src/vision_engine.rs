@@ -10,19 +10,23 @@ use tokio::io::AsyncWriteExt;
 
 use crate::models::ModelDownloadPayload;
 
-const HF_REPO: &str = "diegohh/siglip2-base-patch16-224";
-
-const MODEL_SUBDIR: &str = "siglip2-base-224";
 const IMAGE_SIZE: usize = 224;
 const MODEL_FILES: &[&str] = &["model.onnx", "tokenizer.json"];
 
 pub struct VisionEngine {
     pub data_dir: PathBuf,
-    session: std::sync::Mutex<Option<Session>>,
-    tokenizer: std::sync::Mutex<Option<tokenizers::Tokenizer>>,
+    session: std::sync::Mutex<Option<(String, Session)>>,
+    tokenizer: std::sync::Mutex<Option<(String, tokenizers::Tokenizer)>>,
     face_analyzer: tokio::sync::OnceCell<face_id::analyzer::FaceAnalyzer>,
     model_ready_tx: tokio::sync::watch::Sender<bool>,
     model_ready_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+fn get_repo_and_subdir(model_id: &str) -> (&str, &str) {
+    match model_id {
+        "onnx-community/siglip2-base-patch32-256-ONNX" => (model_id, "onnx"),
+        _ => (model_id, "siglip2-base-224"),
+    }
 }
 
 impl VisionEngine {
@@ -38,15 +42,17 @@ impl VisionEngine {
         }
     }
 
-    fn model_dir(&self) -> PathBuf {
-        self.data_dir.join("models").join(MODEL_SUBDIR)
+    fn model_dir(&self, model_id: &str) -> PathBuf {
+        let (_, subdir) = get_repo_and_subdir(model_id);
+        self.data_dir.join("models").join(subdir)
     }
 
     /// Downloads any missing model files from HuggingFace, then signals readiness.
     /// Emits `model_download_progress` events while downloading.
     /// Should be spawned once at startup before the embedding worker runs.
-    pub async fn ensure_model_ready(&self, app: &AppHandle) -> Result<()> {
-        let model_dir = self.model_dir();
+    pub async fn ensure_model_ready(&self, app: &AppHandle, model_id: &str) -> Result<()> {
+        let (repo, _) = get_repo_and_subdir(model_id);
+        let model_dir = self.model_dir(model_id);
 
         // If everything is already on disk, signal immediately and return.
         if MODEL_FILES.iter().all(|f| model_dir.join(f).exists()) {
@@ -66,7 +72,7 @@ impl VisionEngine {
 
             let url = format!(
                 "https://huggingface.co/{}/resolve/main/{}",
-                HF_REPO, filename
+                repo, filename
             );
 
             #[cfg(debug_assertions)]
@@ -161,13 +167,19 @@ impl VisionEngine {
             .await
     }
 
-    fn get_session(&self) -> Result<std::sync::MutexGuard<'_, Option<Session>>> {
+    fn get_session(&self, model_id: &str) -> Result<std::sync::MutexGuard<'_, Option<(String, Session)>>> {
         let mut lock = self
             .session
             .lock()
             .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
-        if lock.is_none() {
-            let model_path = self.model_dir().join("model.onnx");
+
+        let needs_load = match &*lock {
+            Some((current_id, _)) => current_id != model_id,
+            None => true,
+        };
+
+        if needs_load {
+            let model_path = self.model_dir(model_id).join("model.onnx");
 
             #[cfg(debug_assertions)]
             eprintln!("[vision-engine] loading session from: {}", model_path.display());
@@ -189,12 +201,12 @@ impl VisionEngine {
             #[cfg(debug_assertions)]
             eprintln!("[vision-engine] session ready");
 
-            *lock = Some(session);
+            *lock = Some((model_id.to_string(), session));
         }
         Ok(lock)
     }
 
-    pub fn embed_image(&self, img: &image::DynamicImage) -> Result<Vec<f32>> {
+    pub fn embed_image(&self, img: &image::DynamicImage, model_id: &str) -> Result<Vec<f32>> {
         let resized = img.resize_exact(
             IMAGE_SIZE as u32,
             IMAGE_SIZE as u32,
@@ -213,8 +225,8 @@ impl VisionEngine {
         // Dummy input_ids (batch=1, seq_len=1) — text encoder output is discarded
         let dummy_ids = Array2::<i64>::zeros((1, 1));
 
-        let mut lock = self.get_session()?;
-        let session = lock
+        let mut lock = self.get_session(model_id)?;
+        let (_, session) = lock
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("session not initialized"))?;
 
@@ -233,7 +245,7 @@ impl VisionEngine {
         Ok(data.to_vec())
     }
 
-    pub fn embed_text(&self, text: &str) -> Result<Vec<f32>> {
+    pub fn embed_text(&self, text: &str, model_id: &str) -> Result<Vec<f32>> {
         const MAX_SEQ_LEN: usize = 64;
 
         let encoding = {
@@ -241,8 +253,14 @@ impl VisionEngine {
                 .tokenizer
                 .lock()
                 .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
-            if tok_lock.is_none() {
-                let tok_path = self.model_dir().join("tokenizer.json");
+
+            let needs_load = match &*tok_lock {
+                Some((current_id, _)) => current_id != model_id,
+                None => true,
+            };
+
+            if needs_load {
+                let tok_path = self.model_dir(model_id).join("tokenizer.json");
 
                 #[cfg(debug_assertions)]
                 eprintln!(
@@ -250,14 +268,16 @@ impl VisionEngine {
                     tok_path.display()
                 );
 
-                *tok_lock = Some(
+                *tok_lock = Some((
+                    model_id.to_string(),
                     tokenizers::Tokenizer::from_file(tok_path)
                         .map_err(|e| anyhow::anyhow!("{e}"))?,
-                );
+                ));
             }
             tok_lock
                 .as_ref()
                 .unwrap()
+                .1
                 .encode(text, true)
                 .map_err(|e| anyhow::anyhow!("{e}"))?
         }; // tokenizer lock released before acquiring session lock
@@ -274,8 +294,8 @@ impl VisionEngine {
         // Dummy pixel_values — image encoder output is discarded
         let dummy_pixels = Array4::<f32>::zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE));
 
-        let mut lock = self.get_session()?;
-        let session = lock
+        let mut lock = self.get_session(model_id)?;
+        let (_, session) = lock
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("session not initialized"))?;
 

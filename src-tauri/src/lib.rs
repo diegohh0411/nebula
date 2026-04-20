@@ -62,8 +62,14 @@ pub fn run() {
 
             let vision_engine_model = Arc::clone(&vision_engine);
             let app_handle_model = app.handle().clone();
+            let pool_model = pool.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = vision_engine_model.ensure_model_ready(&app_handle_model).await {
+                let model_id = db::get_setting(&pool_model, "embedding_model")
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
+
+                if let Err(e) = vision_engine_model.ensure_model_ready(&app_handle_model, &model_id).await {
                     eprintln!("Model setup failed: {}", e);
                     let _ = app_handle_model.emit(
                         "model_download_progress",

@@ -111,7 +111,11 @@ pub async fn search(
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
                 crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let emb = state.vision_engine.embed_text(query).map_err(map_err)?;
+                let model_id = db::get_setting(pool, "embedding_model")
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
+                let emb = state.vision_engine.embed_text(query, &model_id).map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
@@ -161,8 +165,12 @@ pub async fn search(
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
                 crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
+                let model_id = db::get_setting(pool, "embedding_model")
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
                 let img = image::load_from_memory(&raw_bytes).map_err(map_err)?;
-                let emb = state.vision_engine.embed_image(&img).map_err(map_err)?;
+                let emb = state.vision_engine.embed_image(&img, &model_id).map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb
