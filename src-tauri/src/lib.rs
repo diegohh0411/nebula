@@ -9,6 +9,7 @@ mod vision_engine;
 mod indexer;
 mod vector_index;
 mod watcher;
+mod settings;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -123,6 +124,9 @@ pub fn run() {
             commands::assign_face_to_subject,
             commands::create_subject_for_face,
             commands::unassign_face,
+            settings::get_available_models,
+            settings::get_setting,
+            settings::update_setting,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
