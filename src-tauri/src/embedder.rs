@@ -10,7 +10,6 @@ use tauri::Emitter;
 use crate::{db, models::{ProcessingProgressPayload, ImageUpdatedPayload}};
 
 const CONCURRENT_WORKERS: usize = 3;
-const CLUSTERING_THRESHOLD: f32 = 0.4;
 
 /// Encode a Vec<f32> to raw little-endian bytes for storage as BLOB.
 pub fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
@@ -122,7 +121,6 @@ async fn process_subject_one(
     pool: &SqlitePool,
     app: &AppHandle,
     vision_engine: &crate::vision_engine::VisionEngine,
-    clustering_lock: &tokio::sync::Mutex<()>,
     queue_id: i64,
     image_id: i64,
     attempts: i32,
@@ -163,64 +161,19 @@ async fn process_subject_one(
                         let bbox = face_analysis.detection.bbox;
                         let face_emb = face_analysis.embedding;
 
-                        let (subject_id, face_id) = {
-                            let _guard = clustering_lock.lock().await;
-
-                            let existing_subjects = db::get_subject_embeddings(pool).await.unwrap_or_default();
-                            let mut best_subject_id = None;
-                            let mut best_score = 0.0f32;
-
-                            for (sid, emb_blob) in existing_subjects {
-                                if let Ok(emb) = bytes_to_f32_vec(&emb_blob) {
-                                    let score = cosine_similarity(&face_emb, &emb);
-                                    if score > best_score {
-                                        best_score = score;
-                                        if score > CLUSTERING_THRESHOLD {
-                                            best_subject_id = Some(sid);
-                                        }
-                                    }
-                                }
-                            }
-
-                            if best_score > 0.0 {
-                                eprintln!(
-                                    "[face-cluster] image_id={} best_score={:.4} threshold={} matched={}",
-                                    image_id, best_score, CLUSTERING_THRESHOLD, best_subject_id.is_some()
-                                );
-                            }
-
-                            let subject_id = if let Some(sid) = best_subject_id {
-                                Some(sid)
-                            } else {
-                                db::insert_subject(pool, None, "person").await.ok()
-                            };
-
-                            let face_blob = f32_slice_to_bytes(&face_emb);
-                            let face_id = db::insert_face(
-                                pool,
-                                image_id,
-                                subject_id,
-                                (
-                                    bbox.x1 as f64,
-                                    bbox.y1 as f64,
-                                    (bbox.x2 - bbox.x1) as f64,
-                                    (bbox.y2 - bbox.y1) as f64,
-                                ),
-                                Some(&face_blob),
-                            ).await.ok();
-
-                            (subject_id, face_id)
-                        };
-
-                        if let (Some(sid), Some(fid)) = (subject_id, face_id) {
-                            if let Ok(subjects) = db::list_all_subjects(pool).await {
-                                if let Some(sub) = subjects.iter().find(|s| s.id == sid) {
-                                    if sub.thumbnail_face_id.is_none() {
-                                        let _ = db::update_subject_thumbnail_face(pool, sid, fid).await;
-                                    }
-                                }
-                            }
-                        }
+                        let face_blob = f32_slice_to_bytes(&face_emb);
+                        let _ = db::insert_face(
+                            pool,
+                            image_id,
+                            None,
+                            (
+                                bbox.x1 as f64,
+                                bbox.y1 as f64,
+                                (bbox.x2 - bbox.x1) as f64,
+                                (bbox.y2 - bbox.y1) as f64,
+                            ),
+                            Some(&face_blob),
+                        ).await;
                     }
                     if db::mark_subject_analysis_done(pool, image_id).await.is_ok() {
                         let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
@@ -320,7 +273,6 @@ pub async fn run_subject_worker(
     }
 
     let semaphore = Arc::new(Semaphore::new(CONCURRENT_WORKERS));
-    let clustering_lock = Arc::new(tokio::sync::Mutex::new(()));
 
     loop {
         let batch = match db::get_queue_batch(&pool, "subject", (CONCURRENT_WORKERS * 2) as i64).await {
@@ -344,10 +296,9 @@ pub async fn run_subject_worker(
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
-            let lock_c = clustering_lock.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), &lock_c, queue_id, image_id, attempts).await;
+                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts).await;
             }));
         }
         for h in handles {
