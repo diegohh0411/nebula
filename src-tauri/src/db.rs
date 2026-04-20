@@ -870,6 +870,23 @@ pub async fn get_all_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64
         .collect())
 }
 
+pub async fn get_unassigned_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
+    let rows = sqlx::query(
+        "SELECT id, embedding FROM faces WHERE subject_id IS NULL AND embedding IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let id: i64 = r.get("id");
+            let emb: Option<Vec<u8>> = r.get("embedding");
+            emb.map(|e| (id, e))
+        })
+        .collect())
+}
+
 pub async fn update_face_subject(pool: &SqlitePool, face_id: i64, subject_id: Option<i64>) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
         .bind(subject_id)

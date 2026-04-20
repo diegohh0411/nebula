@@ -6,51 +6,7 @@ use std::collections::HashMap;
 use crate::db;
 
 pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
-    let faces = db::get_all_faces_with_embeddings(pool).await?;
-
-    if faces.is_empty() {
-        return Ok(ReclusterResult {
-            clusters: 0,
-            noise: 0,
-            merged: 0,
-            deleted: 0,
-        });
-    }
-
-    let face_ids: Vec<i64> = faces.iter().map(|(id, _, _, _)| *id).collect();
-    let old_subject_ids: Vec<Option<i64>> = faces.iter().map(|(_, sid, _, _)| *sid).collect();
-    let is_manual_flags: Vec<bool> = faces.iter().map(|(_, _, _, m)| *m).collect();
-
-    let embeddings: Vec<Vec<f32>> = faces
-        .iter()
-        .filter_map(|(_, _, emb_blob, _)| crate::embedder::bytes_to_f32_vec(emb_blob).ok())
-        .collect();
-
-    if embeddings.len() != face_ids.len() {
-        anyhow::bail!(
-            "Embedding decode mismatch: {} faces but {} decoded embeddings",
-            face_ids.len(),
-            embeddings.len()
-        );
-    }
-
-    let hyper_params = HdbscanHyperParams::builder()
-        .min_cluster_size(2)
-        .min_samples(2)
-        .build();
-
-    let clusterer = Hdbscan::new(&embeddings, hyper_params);
-    let labels = clusterer.cluster().map_err(|e| anyhow::anyhow!("HDBSCAN failed: {}", e))?;
-
-    let mut cluster_to_face_indices: HashMap<i32, Vec<usize>> = HashMap::new();
-    for (idx, &label) in labels.iter().enumerate() {
-        if is_manual_flags[idx] {
-            continue;
-        }
-        cluster_to_face_indices.entry(label).or_default().push(idx);
-    }
-
-    // Build anchor centroids from manual corrections + all-face fallback.
+    // 1. Build anchor centroids first.
     let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
         .into_iter()
@@ -69,41 +25,62 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
 
     let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
 
-    for (&label, face_indices) in &cluster_to_face_indices {
-        if label < 0 {
-            continue;
-        }
+    // 2. Fetch ONLY unassigned faces
+    let unassigned = db::get_unassigned_faces_with_embeddings(pool).await?;
 
-        let cluster_centroid = {
-            let vecs: Vec<&Vec<f32>> = face_indices.iter().map(|&i| &embeddings[i]).collect();
-            let dim = vecs[0].len();
-            let mut c = vec![0.0f32; dim];
-            for v in &vecs {
-                for (i, &x) in v.iter().enumerate() {
-                    c[i] += x;
-                }
+    let mut residual_faces = Vec::new();
+
+    // 3. Pass 1: Greedy Centroid Match
+    for (face_id, emb_blob) in unassigned {
+        if let Ok(emb) = crate::embedder::bytes_to_f32_vec(&emb_blob) {
+            if let Some(sid) = find_nearest_anchor(&emb, &anchor_centroids, ANCHOR_MATCH_THRESHOLD) {
+                // Match found, assign immediately
+                db::update_face_subject(pool, face_id, Some(sid)).await?;
+            } else {
+                // No match, keep for HDBSCAN
+                residual_faces.push((face_id, emb));
             }
-            let n = vecs.len() as f32;
-            c.iter_mut().for_each(|v| *v /= n);
-            c
-        };
-
-        let chosen_subject_id =
-            match find_nearest_anchor(&cluster_centroid, &anchor_centroids, ANCHOR_MATCH_THRESHOLD) {
-                Some(sid) => sid,
-                None => db::insert_subject(pool, None, "person").await?,
-            };
-
-        for &idx in face_indices {
-            db::update_face_subject(pool, face_ids[idx], Some(chosen_subject_id)).await?;
         }
     }
 
-    let noise_count = cluster_to_face_indices.get(&-1).map(|v| v.len()).unwrap_or(0);
-    if let Some(noise_indices) = cluster_to_face_indices.get(&-1) {
-        for &idx in noise_indices {
-            db::update_face_subject(pool, face_ids[idx], None).await?;
+    let mut new_clusters_count = 0;
+    let mut noise_count = 0;
+
+    // 4. Pass 2: Residual HDBSCAN
+    if residual_faces.len() >= 2 {
+        let embeddings: Vec<Vec<f32>> = residual_faces.iter().map(|(_, e)| e.clone()).collect();
+        let hyper_params = HdbscanHyperParams::builder()
+            .min_cluster_size(2)
+            .min_samples(2)
+            .build();
+
+        let clusterer = Hdbscan::new(&embeddings, hyper_params);
+        match clusterer.cluster() {
+            Ok(labels) => {
+                let mut cluster_to_face_indices: HashMap<i32, Vec<usize>> = HashMap::new();
+                for (idx, &label) in labels.iter().enumerate() {
+                    cluster_to_face_indices.entry(label).or_default().push(idx);
+                }
+
+                for (&label, indices) in &cluster_to_face_indices {
+                    if label < 0 {
+                        noise_count += indices.len();
+                        continue;
+                    }
+                    new_clusters_count += 1;
+                    let new_subject_id = db::insert_subject(pool, None, "person").await?;
+                    for &idx in indices {
+                        let face_id = residual_faces[idx].0;
+                        db::update_face_subject(pool, face_id, Some(new_subject_id)).await?;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[clustering] HDBSCAN failed on residual faces: {}", e);
+            }
         }
+    } else {
+        noise_count = residual_faces.len();
     }
 
     let deleted = db::delete_subjects_with_no_faces(pool).await?;
@@ -113,72 +90,49 @@ pub async fn recluster_all(pool: &SqlitePool) -> Result<ReclusterResult> {
     let _ = find_merge_suggestions(pool).await;
 
     Ok(ReclusterResult {
-        clusters: cluster_to_face_indices.keys().filter(|&&l| l >= 0).count(),
+        clusters: new_clusters_count,
         noise: noise_count,
         merged: 0,
         deleted,
     })
 }
 
-const MERGE_SIMILARITY_THRESHOLD: f32 = 0.35;
-const MERGE_MIN_CROSS_MATCHES: i64 = 2;
-const MERGE_MIN_CROSS_RATIO: f32 = 0.20;
+const MERGE_CENTROID_SIMILARITY_THRESHOLD: f32 = 0.65;
 
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
-    // TODO(perf): Throttle this to run at most once every 12-24 hours rather than
-    // after every recluster batch. For now it runs every time since the dataset is
-    // small, but as face count grows this O(n*m) per subject pair will get expensive.
-    // Consider a `last_merge_scan_at` timestamp in the DB or a dedicated periodic task.
-
-    let subjects = crate::db::list_all_subjects(pool).await?;
-
-    let subject_embeddings: Vec<(i64, Vec<Vec<f32>>)> = {
-        let mut result = Vec::new();
-        for subject in &subjects {
-            let faces = crate::db::get_faces_by_subject(pool, subject.id).await?;
-            let embeddings: Vec<Vec<f32>> = faces
-                .into_iter()
-                .filter_map(|(_, blob)| crate::embedder::bytes_to_f32_vec(&blob).ok())
-                .collect();
-            if !embeddings.is_empty() {
-                result.push((subject.id, embeddings));
-            }
-        }
-        result
-    };
-
     crate::db::clear_merge_suggestions(pool).await?;
+
+    let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
+    let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
+        .into_iter()
+        .filter_map(|(sid, blob)| crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e)))
+        .collect();
+
+    let all_raw = db::get_subject_embeddings(pool).await?;
+    let all_decoded: Vec<(i64, Vec<f32>)> = all_raw
+        .into_iter()
+        .filter_map(|(sid, blob)| crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e)))
+        .collect();
+
+    let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
+    
+    let subject_embeddings: Vec<(i64, Vec<f32>)> = anchor_centroids.into_iter().collect();
 
     for i in 0..subject_embeddings.len() {
         for j in (i + 1)..subject_embeddings.len() {
-            let (_, emb_a) = &subject_embeddings[i];
+            let (id_a, emb_a) = &subject_embeddings[i];
             let (id_b, emb_b) = &subject_embeddings[j];
 
-            let total_pairs = (emb_a.len() * emb_b.len()) as i64;
-            let mut cross_match_count: i64 = 0;
+            let sim = crate::embedder::cosine_similarity(emb_a, emb_b);
 
-            for a_face in emb_a.iter() {
-                for b_face in emb_b.iter() {
-                    let sim = crate::embedder::cosine_similarity(a_face, b_face);
-                    if sim > MERGE_SIMILARITY_THRESHOLD {
-                        cross_match_count += 1;
-                    }
-                }
-            }
-
-            let ratio = if total_pairs > 0 {
-                cross_match_count as f32 / total_pairs as f32
-            } else {
-                0.0
-            };
-
-            if cross_match_count >= MERGE_MIN_CROSS_MATCHES && ratio >= MERGE_MIN_CROSS_RATIO {
+            if sim > MERGE_CENTROID_SIMILARITY_THRESHOLD {
+                let match_score = (sim * 100.0) as i64;
                 crate::db::insert_merge_suggestion(
                     pool,
-                    subject_embeddings[i].0,
+                    *id_a,
                     *id_b,
-                    cross_match_count,
-                    total_pairs,
+                    match_score,
+                    100,
                 )
                 .await?;
             }
