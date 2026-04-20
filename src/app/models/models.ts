@@ -102,8 +102,7 @@ export interface MergeSuggestion {
   id: number;
   subject_a: Subject;
   subject_b: Subject;
-  cross_match_count: number;
-  total_pairs: number;
+  score: number;
 }
 
 export interface NameSubjectResult {

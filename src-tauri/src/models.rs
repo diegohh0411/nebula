@@ -133,8 +133,7 @@ pub struct MergeSuggestion {
     pub id: i64,
     pub subject_a: Subject,
     pub subject_b: Subject,
-    pub cross_match_count: i64,
-    pub total_pairs: i64,
+    pub score: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
