@@ -30,4 +30,40 @@
       }
     </div>
   </section>
+
+  @if (isConfirming()) {
+    <div class="modal-backdrop" (click)="cancelSelection()">
+      <div class="modal-content" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <lucide-icon name="alert-triangle" class="warning-icon"></lucide-icon>
+          <h2>Change Vision Model?</h2>
+        </div>
+        <p>Changing the model requires a <strong>full reindex</strong> of your library.</p>
+        <ul>
+          <li>All image search data will be wiped and rebuilt.</li>
+          <li>Face embeddings will be cleared and recalculated.</li>
+          <li>This may take a long time depending on your library size.</li>
+        </ul>
+        <p class="confirm-prompt">Type <strong>REINDEX</strong> to confirm:</p>
+        <input 
+          type="text" 
+          [value]="confirmInputValue()" 
+          (input)="confirmInputValue.set($any($event.target).value)"
+          placeholder="REINDEX"
+          class="confirm-input"
+          autofocus
+        >
+        <div class="modal-actions">
+          <button class="btn-secondary" (click)="cancelSelection()">Cancel</button>
+          <button 
+            class="btn-danger" 
+            [disabled]="confirmInputValue() !== 'REINDEX'"
+            (click)="confirmSelection()"
+          >
+            Confirm Reindex
+          </button>
+        </div>
+      </div>
+    </div>
+  }
 </div>

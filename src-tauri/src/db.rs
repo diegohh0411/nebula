@@ -1186,15 +1186,23 @@ pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
 pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
 
+    // Clear image embeddings and reset status
     sqlx::query("UPDATE images SET embedding = NULL, semantic_analysis_done = 0, subject_analysis_done = 0 WHERE deleted_at IS NULL")
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("DELETE FROM embedding_queue")
+    // Clear face embeddings (face detections remain, but need re-embedding)
+    sqlx::query("UPDATE faces SET embedding = NULL")
         .execute(&mut *tx)
         .await?;
 
+    // Clear model-dependent caches and suggestions
+    sqlx::query("DELETE FROM embedding_cache").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM merge_suggestions").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM embedding_queue").execute(&mut *tx).await?;
+
     let now = chrono::Utc::now().timestamp();
+    // Re-populate queue for both pipelines
     sqlx::query(
         "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
          SELECT id, 'semantic', 0, ? FROM images WHERE deleted_at IS NULL

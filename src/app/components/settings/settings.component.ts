@@ -20,6 +20,10 @@ export class SettingsComponent implements OnInit {
   models = signal<ModelInfo[]>([]);
   currentModel = signal<string | null>(null);
 
+  isConfirming = signal(false);
+  pendingModelId = signal<string | null>(null);
+  confirmInputValue = signal('');
+
   async ngOnInit() {
     await this.loadModels();
     await this.loadSettings();
@@ -36,8 +40,25 @@ export class SettingsComponent implements OnInit {
   }
 
   async selectModel(modelId: string) {
-    // For now we just update the DB. Task 5 will handle the re-index dialog.
-    await invoke('update_setting', { key: 'embedding_model', value: modelId });
-    this.currentModel.set(modelId);
+    if (modelId === this.currentModel()) return;
+    
+    this.pendingModelId.set(modelId);
+    this.confirmInputValue.set('');
+    this.isConfirming.set(true);
+  }
+
+  cancelSelection() {
+    this.isConfirming.set(false);
+    this.pendingModelId.set(null);
+  }
+
+  async confirmSelection() {
+    const modelId = this.pendingModelId();
+    if (modelId && this.confirmInputValue() === 'REINDEX') {
+      this.isConfirming.set(false);
+      await invoke('update_setting', { key: 'embedding_model', value: modelId });
+      this.currentModel.set(modelId);
+      this.pendingModelId.set(null);
+    }
   }
 }
