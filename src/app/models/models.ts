@@ -113,3 +113,11 @@ export interface NameSubjectResult {
 export type VirtualRow =
   | { type: 'header'; label: string; date: string }
   | { type: 'row'; images: (Image | SearchResult)[]; rowHeight: number };
+
+export interface ModelDownloadEvent {
+  file: string;
+  bytes_done: number;
+  bytes_total: number | null;
+  done: boolean;
+  error: string | null;
+}

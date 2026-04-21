@@ -56,6 +56,21 @@
   background-color: var(--accent) !important;
 }
 
+/* Progress Bar */
+.progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background-color: var(--muted);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background-color: var(--foreground);
+  transition: width 0.2s ease-out;
+}
+
 /* Modal */
 .modal-backdrop {
   position: fixed;
@@ -83,8 +98,11 @@
 /* Base styles to ensure consistency if variables are missing */
 :host {
   --foreground: #f8fafc;
+  --muted: #334155;
   --muted-foreground: #94a3b8;
   --border: #334155;
   --accent: #1e293b;
   --destructive: #ef4444;
+  --background: #020617;
+  --ring: #94a3b8;
 }

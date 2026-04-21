@@ -50,24 +50,36 @@
         </div>
         
         <div hlmCardContent class="space-y-4">
-          <div class="bg-muted/50 p-3 rounded text-sm space-y-2 border border-border">
-            <p>• All image search data will be wiped and rebuilt.</p>
-            <p>• Face embeddings will be cleared and recalculated.</p>
-            <p>• Large libraries may take a long time to re-process.</p>
-          </div>
-          
-          <div class="space-y-2">
-            <p class="text-xs font-medium">Type <span class="font-bold">REINDEX</span> to confirm:</p>
-            <input 
-              type="text" 
-              [value]="confirmInputValue()" 
-              (input)="confirmInputValue.set($any($event.target).value)"
-              placeholder="REINDEX"
-              class="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              [disabled]="isProcessing()"
-              autofocus
-            >
-          </div>
+          @if (isProcessing()) {
+            <div class="space-y-3 py-2">
+              <div class="flex justify-between text-xs font-medium">
+                <span>Downloading model...</span>
+                <span>{{ downloadProgress() | number:'1.0-0' }}%</span>
+              </div>
+              <div class="progress-bar-container">
+                <div class="progress-bar-fill" [style.width.%]="downloadProgress() ?? 0"></div>
+              </div>
+              <p class="text-[10px] text-muted-foreground truncate">{{ currentDownloadFile() }}</p>
+            </div>
+          } @else {
+            <div class="bg-muted/50 p-3 rounded text-sm space-y-2 border border-border">
+              <p>• All image search data will be wiped and rebuilt.</p>
+              <p>• Face embeddings will be cleared and recalculated.</p>
+              <p>• Large libraries may take a long time to re-process.</p>
+            </div>
+            
+            <div class="space-y-2">
+              <p class="text-xs font-medium">Type <span class="font-bold">REINDEX</span> to confirm:</p>
+              <input 
+                type="text" 
+                [value]="confirmInputValue()" 
+                (input)="confirmInputValue.set($any($event.target).value)"
+                placeholder="REINDEX"
+                class="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                autofocus
+              >
+            </div>
+          }
         </div>
 
         <div hlmCardFooter class="flex justify-end gap-2">

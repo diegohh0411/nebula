@@ -1,7 +1,8 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, OnInit, signal, inject, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { invoke } from '@tauri-apps/api/core';
 import { LucideAngularModule } from 'lucide-angular';
+import { Subscription } from 'rxjs';
 import {
   HlmCard,
   HlmCardHeader,
@@ -11,6 +12,8 @@ import {
   HlmCardFooter,
 } from '../../libs/ui/card/src';
 import { HlmButtonDirective } from '../../libs/ui/button/src';
+import { TauriEventsService } from '../../services/tauri-events.service';
+import { ModelDownloadEvent } from '../../models/models';
 
 interface ModelInfo {
   id: string;
@@ -35,7 +38,10 @@ interface ModelInfo {
   templateUrl: './settings.component.html',
   styleUrl: './settings.component.css'
 })
-export class SettingsComponent implements OnInit {
+export class SettingsComponent implements OnInit, OnDestroy {
+  private events = inject(TauriEventsService);
+  private sub = new Subscription();
+
   models = signal<ModelInfo[]>([]);
   currentModel = signal<string | null>(null);
 
@@ -43,10 +49,31 @@ export class SettingsComponent implements OnInit {
   pendingModelId = signal<string | null>(null);
   confirmInputValue = signal('');
   isProcessing = signal(false);
+  
+  downloadProgress = signal<number | null>(null);
+  currentDownloadFile = signal<string | null>(null);
 
   async ngOnInit() {
     await this.loadModels();
     await this.loadSettings();
+
+    this.sub.add(
+      this.events.modelDownloadProgress$.subscribe((ev: ModelDownloadEvent) => {
+        this.currentDownloadFile.set(ev.file);
+        if (ev.bytes_total) {
+          this.downloadProgress.set((ev.bytes_done / ev.bytes_total) * 100);
+        } else {
+          this.downloadProgress.set(null);
+        }
+        if (ev.done) {
+          this.downloadProgress.set(100);
+        }
+      })
+    );
+  }
+
+  ngOnDestroy() {
+    this.sub.unsubscribe();
   }
 
   async loadModels() {
@@ -85,6 +112,7 @@ export class SettingsComponent implements OnInit {
     const modelId = this.pendingModelId();
     if (modelId && this.confirmInputValue() === 'REINDEX' && !this.isProcessing()) {
       this.isProcessing.set(true);
+      this.downloadProgress.set(0);
       try {
         await invoke('update_setting', { key: 'embedding_model', value: modelId });
         this.currentModel.set(modelId);
@@ -92,9 +120,10 @@ export class SettingsComponent implements OnInit {
         this.pendingModelId.set(null);
       } catch (e) {
         console.error('Failed to update model:', e);
-        // Error handling could be improved with a toast
       } finally {
         this.isProcessing.set(false);
+        this.downloadProgress.set(null);
+        this.currentDownloadFile.set(null);
       }
     }
   }

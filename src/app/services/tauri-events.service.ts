@@ -6,6 +6,7 @@ import {
   ImageAddedEvent,
   ImageRemovedEvent,
   ImageUpdatedEvent,
+  ModelDownloadEvent,
 } from '../models/models';
 
 @Injectable({ providedIn: 'root' })
@@ -14,6 +15,7 @@ export class TauriEventsService implements OnDestroy {
   readonly imageAdded$ = new Subject<ImageAddedEvent>();
   readonly imageUpdated$ = new Subject<ImageUpdatedEvent>();
   readonly imageRemoved$ = new Subject<ImageRemovedEvent>();
+  readonly modelDownloadProgress$ = new Subject<ModelDownloadEvent>();
 
   private unlisteners: UnlistenFn[] = [];
 
@@ -34,6 +36,9 @@ export class TauriEventsService implements OnDestroy {
       ),
       await listen<ImageRemovedEvent>('image_removed', (e) =>
         this.imageRemoved$.next(e.payload)
+      ),
+      await listen<ModelDownloadEvent>('model_download_progress', (e) =>
+        this.modelDownloadProgress$.next(e.payload)
       )
     );
   }
