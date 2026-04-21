@@ -513,7 +513,7 @@ pub async fn get_queue_batch(pool: &SqlitePool, pipeline: &str, limit: i64) -> R
         .collect())
 }
 
-pub async fn mark_semantic_analysis_done(pool: &SqlitePool, image_id: i64, embedding: &[u8]) -> Result<()> {
+pub async fn mark_semantic_analysis_done(pool: &SqlitePool, queue_id: i64, image_id: i64, embedding: &[u8]) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
         "UPDATE images SET embedding = ?, semantic_analysis_done = 1, updated_at = ? WHERE id = ?",
@@ -523,22 +523,22 @@ pub async fn mark_semantic_analysis_done(pool: &SqlitePool, image_id: i64, embed
     .bind(image_id)
     .execute(pool)
     .await?;
-    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ? AND pipeline = 'semantic'")
-        .bind(image_id)
+    sqlx::query("DELETE FROM embedding_queue WHERE id = ?")
+        .bind(queue_id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
-pub async fn mark_subject_analysis_done(pool: &SqlitePool, image_id: i64) -> Result<()> {
+pub async fn mark_subject_analysis_done(pool: &SqlitePool, queue_id: i64, image_id: i64) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query("UPDATE images SET subject_analysis_done = 1, updated_at = ? WHERE id = ?")
         .bind(now)
         .bind(image_id)
         .execute(pool)
         .await?;
-    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ? AND pipeline = 'subject'")
-        .bind(image_id)
+    sqlx::query("DELETE FROM embedding_queue WHERE id = ?")
+        .bind(queue_id)
         .execute(pool)
         .await?;
     Ok(())

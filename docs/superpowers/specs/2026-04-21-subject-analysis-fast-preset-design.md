@@ -19,7 +19,7 @@ Add a `subject_model` setting to the `settings` table with two values:
 | Preset | Value | Detector Input | Gender/Age |
 |--------|-------|---------------|------------|
 | Standard | `standard` | 640x640 | Computed (current behavior) |
-| Fast | `fast` | 320x320 | Skipped |
+| Fast | `fast` | 640x640 | Skipped |
 
 Default: `standard` (preserves current behavior for existing installs).
 
@@ -38,7 +38,11 @@ face_analyzer: std::sync::Mutex<Option<(String, FaceAnalyzer)>>
 For the **Fast** preset, the builder uses:
 ```rust
 FaceAnalyzer::from_hf()
-    .detector_input_size((320, 320))
+    .detector_input_size((640, 640))
+    .detector_model(HfModel {
+        id: "RuteNL/SCRFD-face-detection-ONNX".to_string(),
+        file: "10g_bnkps.onnx".to_string(),
+    })
     .build()
     .await
 ```
@@ -71,7 +75,7 @@ Add `get_available_subject_models()` command:
 ```rust
 vec![
     ModelInfo { id: "standard".into(), name: "Standard".into(), description: "Full accuracy (640x640 detection)".into() },
-    ModelInfo { id: "fast".into(), name: "Fast".into(), description: "Optimized for consumer CPUs (320x320 detection, no gender/age)".into() },
+    ModelInfo { id: "fast".into(), name: "Fast".into(), description: "Optimized for consumer CPUs (smaller detector, no gender/age)".into() },
 ]
 ```
 
@@ -97,7 +101,6 @@ Add a second model picker to the settings component for "Face Analysis" with the
 - **Clustering** (`clustering.rs`) — untouched, same anchor-centroid + HDBSCAN logic
 - **Thumbnails** (`thumbnail.rs`) — untouched, same face crop logic
 - **Embedding model** — same `w600k_r50.onnx` ArcFace in both presets (always 512-dim)
-- **Detector model** — same `34g_gnkps.onnx` SCRFD in both presets
 - **Database schema** — no schema changes needed
 
 ### Performance Expectations

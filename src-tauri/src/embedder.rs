@@ -92,7 +92,7 @@ async fn process_semantic_one(
     match embed_result {
         Ok(values) => {
             let blob = f32_slice_to_bytes(&values);
-            if db::mark_semantic_analysis_done(pool, image_id, &blob).await.is_ok() {
+            if db::mark_semantic_analysis_done(pool, queue_id, image_id, &blob).await.is_ok() {
                 index.write().unwrap().add(image_id, &values);
                 let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
             }
@@ -175,7 +175,7 @@ async fn process_subject_one(
                             Some(&face_blob),
                         ).await;
                     }
-                    if db::mark_subject_analysis_done(pool, image_id).await.is_ok() {
+                    if db::mark_subject_analysis_done(pool, queue_id, image_id).await.is_ok() {
                         let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
                     }
                 }

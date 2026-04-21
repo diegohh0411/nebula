@@ -141,7 +141,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     const section = this.pendingSection();
     if (modelId && this.confirmInputValue() === 'REINDEX' && !this.isProcessing()) {
       this.isProcessing.set(true);
-      this.processingPhase.set('reindexing');
+      this.processingPhase.set(section === 'vision' ? 'downloading' : 'reindexing');
       this.downloadProgress.set(0);
       try {
         const key = section === 'vision' ? 'embedding_model' : 'subject_model';

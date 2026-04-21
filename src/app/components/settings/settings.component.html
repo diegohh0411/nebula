@@ -96,8 +96,13 @@
             </div>
           } @else {
             <div class="bg-muted/50 p-3 rounded text-sm space-y-2 border border-border">
-              <p>&#8226; All face and subject data will be wiped and rebuilt.</p>
-              <p>&#8226; Large libraries may take a long time to re-process.</p>
+              @if (pendingSection() === 'vision') {
+                <p>&#8226; Semantic embeddings and the search index will be rebuilt for your library.</p>
+                <p>&#8226; Large libraries may take a long time to re-process.</p>
+              } @else {
+                <p>&#8226; All face and subject data will be wiped and rebuilt.</p>
+                <p>&#8226; Large libraries may take a long time to re-process.</p>
+              }
             </div>
 
             <div class="space-y-2">
