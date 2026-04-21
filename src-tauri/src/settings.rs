@@ -39,12 +39,15 @@ pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Opti
 }
 
 #[command]
-pub async fn update_setting(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+pub async fn update_setting(app: tauri::AppHandle, state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let pool = &state.pool;
     
     if key == "embedding_model" {
         let current = crate::db::get_setting(pool, &key).await.unwrap_or(None);
         if current.as_ref() != Some(&value) {
+            // First, ensure the model is downloaded and ready
+            state.vision_engine.ensure_model_ready(&app, &value).await.map_err(|e| e.to_string())?;
+
             // Trigger full reset in DB
             crate::db::reset_all_embeddings(pool).await.map_err(|e| e.to_string())?;
             

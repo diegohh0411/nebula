@@ -4,63 +4,87 @@
     <h1>Settings</h1>
   </header>
 
-  <section class="settings-section">
-    <div class="section-title">
-      <lucide-icon name="cpu" class="section-icon"></lucide-icon>
-      <h2>Vision Model</h2>
-    </div>
-    <p class="section-description">Select the embedding model used for image search and semantic analysis.</p>
-    
-    <div class="model-list">
-      @for (model of models(); track model.id) {
-        <div 
-          class="model-card" 
-          [class.active]="currentModel() === model.id"
-          (click)="selectModel(model.id)"
-        >
-          <div class="model-card-header">
-            <h3>{{ model.name }}</h3>
-            @if (currentModel() === model.id) {
-              <span class="badge">Active</span>
-            }
+  <div class="settings-content">
+    <section class="settings-section">
+      <div class="section-title">
+        <lucide-icon name="cpu" class="section-icon"></lucide-icon>
+        <h2>Vision Model</h2>
+      </div>
+      <p class="section-description">Select the embedding model used for image search and semantic analysis.</p>
+      
+      <div class="model-list">
+        @for (model of models(); track model.id) {
+          <div 
+            hlmCard 
+            class="cursor-pointer transition-all hover:border-foreground/50"
+            [class.active-card]="currentModel() === model.id"
+            (click)="selectModel(model.id)"
+          >
+            <div hlmCardHeader>
+              <div class="flex items-center justify-between">
+                <h3 hlmCardTitle>{{ model.name }}</h3>
+                @if (currentModel() === model.id) {
+                  <span class="text-xs font-medium px-2 py-0.5 rounded-full border border-border bg-muted">Active</span>
+                }
+              </div>
+              <p hlmCardDescription>{{ model.description }}</p>
+            </div>
+            <div hlmCardContent>
+              <p class="text-[10px] font-mono opacity-40">{{ model.id }}</p>
+            </div>
           </div>
-          <p class="model-card-desc">{{ model.description }}</p>
-          <p class="model-card-id">{{ model.id }}</p>
-        </div>
-      }
-    </div>
-  </section>
+        }
+      </div>
+    </section>
+  </div>
 
   @if (isConfirming()) {
     <div class="modal-backdrop" (click)="cancelSelection()">
-      <div class="modal-content" (click)="$event.stopPropagation()">
-        <div class="modal-header">
-          <lucide-icon name="alert-triangle" class="warning-icon"></lucide-icon>
-          <h2>Change Vision Model?</h2>
+      <div hlmCard class="modal-content !p-0" (click)="$event.stopPropagation()">
+        <div hlmCardHeader>
+          <div class="flex items-center gap-2 text-destructive">
+            <lucide-icon name="alert-triangle" size="20"></lucide-icon>
+            <h2 hlmCardTitle class="text-destructive">Change Vision Model?</h2>
+          </div>
+          <p hlmCardDescription>This action will trigger a full reindex of your library.</p>
         </div>
-        <p>Changing the model requires a <strong>full reindex</strong> of your library.</p>
-        <ul>
-          <li>All image search data will be wiped and rebuilt.</li>
-          <li>Face embeddings will be cleared and recalculated.</li>
-          <li>This may take a long time depending on your library size.</li>
-        </ul>
-        <p class="confirm-prompt">Type <strong>REINDEX</strong> to confirm:</p>
-        <input 
-          type="text" 
-          [value]="confirmInputValue()" 
-          (input)="confirmInputValue.set($any($event.target).value)"
-          placeholder="REINDEX"
-          class="confirm-input"
-          autofocus
-        >
-        <div class="modal-actions">
-          <button class="btn-secondary" (click)="cancelSelection()">Cancel</button>
+        
+        <div hlmCardContent class="space-y-4">
+          <div class="bg-muted/50 p-3 rounded text-sm space-y-2 border border-border">
+            <p>• All image search data will be wiped and rebuilt.</p>
+            <p>• Face embeddings will be cleared and recalculated.</p>
+            <p>• Large libraries may take a long time to re-process.</p>
+          </div>
+          
+          <div class="space-y-2">
+            <p class="text-xs font-medium">Type <span class="font-bold">REINDEX</span> to confirm:</p>
+            <input 
+              type="text" 
+              [value]="confirmInputValue()" 
+              (input)="confirmInputValue.set($any($event.target).value)"
+              placeholder="REINDEX"
+              class="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              [disabled]="isProcessing()"
+              autofocus
+            >
+          </div>
+        </div>
+
+        <div hlmCardFooter class="flex justify-end gap-2">
+          <button hlmBtn variant="secondary" (click)="cancelSelection()" [disabled]="isProcessing()">
+            Cancel
+          </button>
           <button 
-            class="btn-danger" 
-            [disabled]="confirmInputValue() !== 'REINDEX'"
+            hlmBtn 
+            variant="destructive" 
+            [disabled]="confirmInputValue() !== 'REINDEX' || isProcessing()"
             (click)="confirmSelection()"
           >
-            Confirm Reindex
+            @if (isProcessing()) {
+              Processing...
+            } @else {
+              Confirm Reindex
+            }
           </button>
         </div>
       </div>
