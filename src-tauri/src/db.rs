@@ -155,6 +155,10 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
 
+    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('subject_model', 'standard')")
+        .execute(&pool)
+        .await?;
+
     sqlx::query("INSERT OR IGNORE INTO schema_version (rowid, version) VALUES (1, 0)")
         .execute(&pool)
         .await?;
@@ -509,7 +513,7 @@ pub async fn get_queue_batch(pool: &SqlitePool, pipeline: &str, limit: i64) -> R
         .collect())
 }
 
-pub async fn mark_semantic_analysis_done(pool: &SqlitePool, image_id: i64, embedding: &[u8]) -> Result<()> {
+pub async fn mark_semantic_analysis_done(pool: &SqlitePool, queue_id: i64, image_id: i64, embedding: &[u8]) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
         "UPDATE images SET embedding = ?, semantic_analysis_done = 1, updated_at = ? WHERE id = ?",
@@ -519,22 +523,22 @@ pub async fn mark_semantic_analysis_done(pool: &SqlitePool, image_id: i64, embed
     .bind(image_id)
     .execute(pool)
     .await?;
-    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ? AND pipeline = 'semantic'")
-        .bind(image_id)
+    sqlx::query("DELETE FROM embedding_queue WHERE id = ?")
+        .bind(queue_id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
-pub async fn mark_subject_analysis_done(pool: &SqlitePool, image_id: i64) -> Result<()> {
+pub async fn mark_subject_analysis_done(pool: &SqlitePool, queue_id: i64, image_id: i64) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query("UPDATE images SET subject_analysis_done = 1, updated_at = ? WHERE id = ?")
         .bind(now)
         .bind(image_id)
         .execute(pool)
         .await?;
-    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ? AND pipeline = 'subject'")
-        .bind(image_id)
+    sqlx::query("DELETE FROM embedding_queue WHERE id = ?")
+        .bind(queue_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -1210,6 +1214,43 @@ pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
          SELECT id, 'subject', 0, ? FROM images WHERE deleted_at IS NULL",
     )
     .bind(now)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn reset_all_subject_data(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM face_corrections")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM merge_suggestions")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM faces")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM subjects")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("UPDATE images SET subject_analysis_done = 0 WHERE deleted_at IS NULL")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("DELETE FROM embedding_queue WHERE pipeline = 'subject'")
+        .execute(&mut *tx)
+        .await?;
+
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
+         SELECT id, 'subject', 0, ? FROM images WHERE deleted_at IS NULL",
+    )
     .bind(now)
     .execute(&mut *tx)
     .await?;

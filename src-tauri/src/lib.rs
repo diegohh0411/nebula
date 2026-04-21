@@ -131,6 +131,7 @@ pub fn run() {
             commands::create_subject_for_face,
             commands::unassign_face,
             settings::get_available_models,
+            settings::get_available_subject_models,
             settings::get_setting,
             settings::update_setting,
         ])

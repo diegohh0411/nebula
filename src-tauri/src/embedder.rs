@@ -92,7 +92,7 @@ async fn process_semantic_one(
     match embed_result {
         Ok(values) => {
             let blob = f32_slice_to_bytes(&values);
-            if db::mark_semantic_analysis_done(pool, image_id, &blob).await.is_ok() {
+            if db::mark_semantic_analysis_done(pool, queue_id, image_id, &blob).await.is_ok() {
                 index.write().unwrap().add(image_id, &values);
                 let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
             }
@@ -117,7 +117,6 @@ async fn process_semantic_one(
     emit_progress(pool, app).await;
 }
 
-/// Process one image through the subject (ArcFace + clustering) pipeline.
 async fn process_subject_one(
     pool: &SqlitePool,
     app: &AppHandle,
@@ -125,13 +124,14 @@ async fn process_subject_one(
     queue_id: i64,
     image_id: i64,
     attempts: i32,
+    preset: &'static crate::vision_engine::SubjectPreset,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
         _ => return,
     };
 
-    let analyzer = match vision_engine.get_face_analyzer().await {
+    let analyzer = match vision_engine.get_face_analyzer(preset).await {
         Ok(a) => a,
         Err(e) => {
             eprintln!("Face analyzer unavailable for image {}: {}", image_id, e);
@@ -156,12 +156,11 @@ async fn process_subject_one(
 
     match open_result {
         Ok(dynamic_img) => {
-            match analyzer.analyze(&dynamic_img) {
-                Ok(faces) => {
-                    for face_analysis in faces {
-                        let bbox = face_analysis.detection.bbox;
-                        let face_emb = face_analysis.embedding;
+            let faces_result = crate::vision_engine::VisionEngine::analyze_faces(&analyzer, &dynamic_img, preset);
 
+            match faces_result {
+                Ok(faces) => {
+                    for (bbox, face_emb) in faces {
                         let face_blob = f32_slice_to_bytes(&face_emb);
                         let _ = db::insert_face(
                             pool,
@@ -176,7 +175,7 @@ async fn process_subject_one(
                             Some(&face_blob),
                         ).await;
                     }
-                    if db::mark_subject_analysis_done(pool, image_id).await.is_ok() {
+                    if db::mark_subject_analysis_done(pool, queue_id, image_id).await.is_ok() {
                         let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
                     }
                 }
@@ -267,7 +266,6 @@ pub async fn run_semantic_worker(
     }
 }
 
-/// Long-running background task for subject (ArcFace + clustering) pipeline.
 pub async fn run_subject_worker(
     pool: SqlitePool,
     app: AppHandle,
@@ -275,8 +273,13 @@ pub async fn run_subject_worker(
 ) {
     vision_engine.wait_until_ready().await;
 
-    // Prefetch face analyzer so it's loaded before queue processing
-    if let Err(e) = vision_engine.get_face_analyzer().await {
+    let preset_id = db::get_setting(&pool, "subject_model")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_else(|| crate::vision_engine::SubjectPreset::default_id().to_string());
+    let preset = crate::vision_engine::SubjectPreset::get(&preset_id)
+        .unwrap_or(&crate::vision_engine::SubjectPreset::STANDARD);
+    if let Err(e) = vision_engine.get_face_analyzer(preset).await {
         eprintln!("[subject-worker] Failed to initialize face analyzer: {}", e);
     }
 
@@ -297,6 +300,13 @@ pub async fn run_subject_worker(
             continue;
         }
 
+        let preset_id = db::get_setting(&pool, "subject_model")
+            .await
+            .unwrap_or(None)
+            .unwrap_or_else(|| crate::vision_engine::SubjectPreset::default_id().to_string());
+        let preset = crate::vision_engine::SubjectPreset::get(&preset_id)
+            .unwrap_or(&crate::vision_engine::SubjectPreset::STANDARD);
+
         let had_items = !batch.is_empty();
         let mut handles = vec![];
         for (queue_id, image_id, attempts) in batch {
@@ -306,7 +316,7 @@ pub async fn run_subject_worker(
             let ve_c = Arc::clone(&vision_engine);
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts).await;
+                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts, preset).await;
             }));
         }
         for h in handles {

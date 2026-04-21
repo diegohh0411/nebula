@@ -7,18 +7,18 @@
   <div class="settings-content">
     <section class="settings-section">
       <div class="section-title">
-        <lucide-icon name="cpu" class="section-icon"></lucide-icon>
+        <lucide-icon name="search" class="section-icon"></lucide-icon>
         <h2>Vision Model</h2>
       </div>
       <p class="section-description">Select the embedding model used for image search and semantic analysis.</p>
-      
+
       <div class="model-list">
         @for (model of models(); track model.id) {
-          <div 
-            hlmCard 
+          <div
+            hlmCard
             class="cursor-pointer transition-all hover:border-ring"
             [class.active-card]="currentModel() === model.id"
-            (click)="selectModel(model.id)"
+            (click)="selectVisionModel(model.id)"
           >
             <div hlmCardHeader>
               <div class="flex items-center justify-between">
@@ -36,6 +36,35 @@
         }
       </div>
     </section>
+
+    <section class="settings-section">
+      <div class="section-title">
+        <lucide-icon name="scan-face" class="section-icon"></lucide-icon>
+        <h2>Face Analysis</h2>
+      </div>
+      <p class="section-description">Select the model used for face detection and subject labeling.</p>
+
+      <div class="model-list">
+        @for (model of subjectModels(); track model.id) {
+          <div
+            hlmCard
+            class="cursor-pointer transition-all hover:border-ring"
+            [class.active-card]="currentSubjectModel() === model.id"
+            (click)="selectSubjectModel(model.id)"
+          >
+            <div hlmCardHeader>
+              <div class="flex items-center justify-between">
+                <h3 hlmCardTitle>{{ model.name }}</h3>
+                @if (currentSubjectModel() === model.id) {
+                  <span class="text-xs font-medium px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">Active</span>
+                }
+              </div>
+              <p hlmCardDescription>{{ model.description }}</p>
+            </div>
+          </div>
+        }
+      </div>
+    </section>
   </div>
 
   @if (isConfirming()) {
@@ -44,11 +73,11 @@
         <div hlmCardHeader>
           <div class="flex items-center gap-2 text-destructive">
             <lucide-icon name="alert-triangle" size="20"></lucide-icon>
-            <h2 hlmCardTitle class="text-destructive">Change Vision Model?</h2>
+            <h2 hlmCardTitle class="text-destructive">Change {{ pendingSection() === 'vision' ? 'Vision' : 'Face Analysis' }} Model?</h2>
           </div>
           <p hlmCardDescription>This will trigger a full reindex of your library.</p>
         </div>
-        
+
         <div hlmCardContent class="space-y-4">
           @if (isProcessing()) {
             <div class="space-y-3">
@@ -67,16 +96,20 @@
             </div>
           } @else {
             <div class="bg-muted/50 p-3 rounded text-sm space-y-2 border border-border">
-              <p>• All image search data will be wiped and rebuilt.</p>
-              <p>• Face embeddings will be cleared and recalculated.</p>
-              <p>• Large libraries may take a long time to re-process.</p>
+              @if (pendingSection() === 'vision') {
+                <p>&#8226; Semantic embeddings and the search index will be rebuilt for your library.</p>
+                <p>&#8226; Large libraries may take a long time to re-process.</p>
+              } @else {
+                <p>&#8226; All face and subject data will be wiped and rebuilt.</p>
+                <p>&#8226; Large libraries may take a long time to re-process.</p>
+              }
             </div>
-            
+
             <div class="space-y-2">
               <p class="text-xs font-medium">Type <span class="font-bold">REINDEX</span> to confirm:</p>
-              <input 
-                type="text" 
-                [value]="confirmInputValue()" 
+              <input
+                type="text"
+                [value]="confirmInputValue()"
                 (input)="confirmInputValue.set($any($event.target).value)"
                 placeholder="REINDEX"
                 class="confirm-input"
@@ -90,9 +123,9 @@
           <button hlmBtn variant="secondary" (click)="cancelSelection()" [disabled]="isProcessing()">
             Cancel
           </button>
-          <button 
-            hlmBtn 
-            variant="destructive" 
+          <button
+            hlmBtn
+            variant="destructive"
             [disabled]="confirmInputValue() !== 'REINDEX' || isProcessing()"
             (click)="confirmSelection()"
           >
