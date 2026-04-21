@@ -10,8 +10,14 @@ use tokio::io::AsyncWriteExt;
 
 use crate::models::ModelDownloadPayload;
 
-const IMAGE_SIZE: usize = 224;
 const MODEL_FILES: &[&str] = &["model.onnx", "tokenizer.json"];
+
+fn get_image_size(model_id: &str) -> usize {
+    match model_id {
+        "onnx-community/siglip2-base-patch32-256-ONNX" => 256,
+        _ => 224,
+    }
+}
 
 pub struct VisionEngine {
     pub data_dir: PathBuf,
@@ -215,14 +221,15 @@ impl VisionEngine {
     }
 
     pub fn embed_image(&self, img: &image::DynamicImage, model_id: &str) -> Result<Vec<f32>> {
+        let size = get_image_size(model_id);
         let resized = img.resize_exact(
-            IMAGE_SIZE as u32,
-            IMAGE_SIZE as u32,
+            size as u32,
+            size as u32,
             image::imageops::FilterType::Lanczos3,
         );
         let rgb = resized.to_rgb8();
 
-        let mut pixel_values = Array4::<f32>::zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE));
+        let mut pixel_values = Array4::<f32>::zeros((1, 3, size, size));
         for (x, y, pixel) in rgb.enumerate_pixels() {
             for c in 0..3 {
                 let val = pixel[c] as f32 / 255.0;
@@ -300,7 +307,7 @@ impl VisionEngine {
         let input_ids_arr = Array2::from_shape_vec((1, seq_len), input_ids)?;
 
         // Dummy pixel_values — image encoder output is discarded
-        let dummy_pixels = Array4::<f32>::zeros((1, 3, IMAGE_SIZE, IMAGE_SIZE));
+        let dummy_pixels = Array4::<f32>::zeros((1, 3, get_image_size(model_id), get_image_size(model_id)));
 
         let mut lock = self.get_session(model_id)?;
         let (_, session) = lock
