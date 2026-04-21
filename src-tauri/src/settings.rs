@@ -27,6 +27,18 @@ pub fn get_available_models() -> Vec<ModelInfo> {
 }
 
 #[command]
+pub fn get_available_subject_models() -> Vec<ModelInfo> {
+    crate::vision_engine::SubjectPreset::ALL
+        .iter()
+        .map(|p| ModelInfo {
+            id: p.id.to_string(),
+            name: p.name.to_string(),
+            description: p.description.to_string(),
+        })
+        .collect()
+}
+
+#[command]
 pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let pool = &state.pool;
     let row = sqlx::query("SELECT value FROM settings WHERE key = ?")
@@ -60,6 +72,13 @@ pub async fn update_setting(app: tauri::AppHandle, state: State<'_, AppState>, k
             // Delete persisted index file to force rebuild from new embeddings
             let idx_path = state.data_dir.join("nebula.idx");
             let _ = std::fs::remove_file(idx_path);
+        }
+    }
+
+    if key == "subject_model" {
+        let current = crate::db::get_setting(pool, &key).await.unwrap_or(None);
+        if current.as_ref() != Some(&value) {
+            crate::db::reset_all_subject_data(pool).await.map_err(|e| e.to_string())?;
         }
     }
 
