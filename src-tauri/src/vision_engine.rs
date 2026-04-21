@@ -18,6 +18,8 @@ pub struct SubjectPreset {
     pub description: &'static str,
     pub detector_input_size: (u32, u32),
     pub skip_gender_age: bool,
+    pub detector_hf_id: &'static str,
+    pub detector_hf_file: &'static str,
 }
 
 impl SubjectPreset {
@@ -27,14 +29,18 @@ impl SubjectPreset {
         description: "Full accuracy (640\u{00d7}640 detection)",
         detector_input_size: (640, 640),
         skip_gender_age: false,
+        detector_hf_id: "",
+        detector_hf_file: "",
     };
 
     pub const FAST: SubjectPreset = SubjectPreset {
         id: "fast",
         name: "Fast",
-        description: "Skips gender/age inference for faster processing",
+        description: "Uses smaller detector and skips gender/age for maximum speed",
         detector_input_size: (640, 640),
         skip_gender_age: true,
+        detector_hf_id: "RuteNL/SCRFD-face-detection-ONNX",
+        detector_hf_file: "10g_bnkps.onnx",
     };
 
     pub const ALL: &[SubjectPreset] = &[Self::STANDARD, Self::FAST];
