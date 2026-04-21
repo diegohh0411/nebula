@@ -45,11 +45,15 @@ export class SettingsComponent implements OnInit, OnDestroy {
   models = signal<ModelInfo[]>([]);
   currentModel = signal<string | null>(null);
 
+  subjectModels = signal<ModelInfo[]>([]);
+  currentSubjectModel = signal<string | null>(null);
+
   isConfirming = signal(false);
   pendingModelId = signal<string | null>(null);
+  pendingSection = signal<'vision' | 'subject'>('vision');
   confirmInputValue = signal('');
   isProcessing = signal(false);
-  
+
   processingPhase = signal<'downloading' | 'reindexing'>('downloading');
   downloadProgress = signal<number | null>(null);
   currentDownloadFile = signal<string | null>(null);
@@ -87,6 +91,12 @@ export class SettingsComponent implements OnInit, OnDestroy {
     } catch (e) {
       console.error('Failed to load models:', e);
     }
+    try {
+      const subjectModels = await invoke<ModelInfo[]>('get_available_subject_models');
+      this.subjectModels.set(subjectModels);
+    } catch (e) {
+      console.error('Failed to load subject models:', e);
+    }
   }
 
   async loadSettings() {
@@ -96,12 +106,26 @@ export class SettingsComponent implements OnInit, OnDestroy {
     } catch (e) {
       console.error('Failed to load settings:', e);
     }
+    try {
+      const subjectModel = await invoke<string | null>('get_setting', { key: 'subject_model' });
+      this.currentSubjectModel.set(subjectModel || 'standard');
+    } catch (e) {
+      console.error('Failed to load subject model setting:', e);
+    }
   }
 
-  async selectModel(modelId: string) {
+  selectVisionModel(modelId: string) {
     if (modelId === this.currentModel() || this.isProcessing()) return;
-    
     this.pendingModelId.set(modelId);
+    this.pendingSection.set('vision');
+    this.confirmInputValue.set('');
+    this.isConfirming.set(true);
+  }
+
+  selectSubjectModel(modelId: string) {
+    if (modelId === this.currentSubjectModel() || this.isProcessing()) return;
+    this.pendingModelId.set(modelId);
+    this.pendingSection.set('subject');
     this.confirmInputValue.set('');
     this.isConfirming.set(true);
   }
@@ -114,13 +138,19 @@ export class SettingsComponent implements OnInit, OnDestroy {
 
   async confirmSelection() {
     const modelId = this.pendingModelId();
+    const section = this.pendingSection();
     if (modelId && this.confirmInputValue() === 'REINDEX' && !this.isProcessing()) {
       this.isProcessing.set(true);
-      this.processingPhase.set('downloading');
+      this.processingPhase.set('reindexing');
       this.downloadProgress.set(0);
       try {
-        await invoke('update_setting', { key: 'embedding_model', value: modelId });
-        this.currentModel.set(modelId);
+        const key = section === 'vision' ? 'embedding_model' : 'subject_model';
+        await invoke('update_setting', { key, value: modelId });
+        if (section === 'vision') {
+          this.currentModel.set(modelId);
+        } else {
+          this.currentSubjectModel.set(modelId);
+        }
         this.isConfirming.set(false);
         this.pendingModelId.set(null);
       } catch (e) {
