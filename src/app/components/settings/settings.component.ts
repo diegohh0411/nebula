@@ -11,7 +11,7 @@ import {
   HlmCardContent,
   HlmCardFooter,
 } from '../../libs/ui/card/src';
-import { HlmButtonDirective } from '../../libs/ui/button/src';
+import { HlmButton } from '../../libs/ui/button/src';
 import { TauriEventsService } from '../../services/tauri-events.service';
 import { ModelDownloadEvent } from '../../models/models';
 
@@ -33,7 +33,7 @@ interface ModelInfo {
     HlmCardDescription,
     HlmCardContent,
     HlmCardFooter,
-    HlmButtonDirective,
+    HlmButton,
   ],
   templateUrl: './settings.component.html',
   styleUrl: './settings.component.css'
