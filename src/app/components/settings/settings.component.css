@@ -1,108 +1,65 @@
 .settings-container {
-  padding: 2rem;
-  max-width: 800px;
-  margin: 0 auto;
-  color: var(--foreground);
+  @apply p-8 max-w-[640px] mx-auto;
 }
 
 .settings-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 2rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 1.5rem;
+  @apply flex items-center gap-3 mb-8 pb-4 border-b border-border;
 }
 
 .settings-header h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  margin: 0;
+  @apply text-xl font-semibold m-0;
 }
 
-.settings-content {
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
+.header-icon {
+  @apply text-muted-foreground;
 }
 
 .section-title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  @apply flex items-center gap-2 mb-1;
 }
 
 .section-title h2 {
-  font-size: 1.125rem;
-  font-weight: 600;
-  margin: 0;
+  @apply text-[0.9375rem] font-semibold m-0;
+}
+
+.section-icon {
+  @apply text-muted-foreground;
 }
 
 .section-description {
-  color: var(--muted-foreground);
-  margin-bottom: 1.5rem;
-  font-size: 0.875rem;
+  @apply text-muted-foreground text-[0.8125rem] mb-4;
 }
 
 .model-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+  @apply flex flex-col gap-2;
 }
 
 .active-card {
-  border-color: var(--foreground) !important;
-  background-color: var(--accent) !important;
+  @apply !border-ring;
 }
 
-/* Progress Bar */
 .progress-bar-container {
-  width: 100%;
-  height: 6px;
-  background-color: var(--muted);
-  border-radius: 999px;
-  overflow: hidden;
+  @apply w-full h-1 bg-muted rounded-full overflow-hidden;
 }
 
 .progress-bar-fill {
-  height: 100%;
-  background-color: var(--foreground);
-  transition: width 0.2s ease-out;
+  @apply h-full bg-foreground rounded-full transition-[width] duration-200 ease-out;
 }
 
-/* Modal */
 .modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  z-index: 50;
+  @apply fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50;
 }
 
 .modal-content {
-  width: 100%;
-  max-width: 450px;
-  animation: modal-in 0.2s ease-out;
+  @apply w-full max-w-[420px];
 }
 
-@keyframes modal-in {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+.model-id {
+  @apply text-[0.625rem] font-mono opacity-40;
 }
 
-/* Base styles to ensure consistency if variables are missing */
-:host {
-  --foreground: #f8fafc;
-  --muted: #334155;
-  --muted-foreground: #94a3b8;
-  --border: #334155;
-  --accent: #1e293b;
-  --destructive: #ef4444;
-  --background: #020617;
-  --ring: #94a3b8;
+.confirm-input {
+  @apply w-full bg-input border border-border rounded-md px-3 py-2 text-[0.8125rem] text-foreground
+         focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring
+         placeholder:text-muted-foreground;
 }

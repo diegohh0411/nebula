@@ -50,6 +50,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   confirmInputValue = signal('');
   isProcessing = signal(false);
   
+  processingPhase = signal<'downloading' | 'reindexing'>('downloading');
   downloadProgress = signal<number | null>(null);
   currentDownloadFile = signal<string | null>(null);
 
@@ -59,14 +60,17 @@ export class SettingsComponent implements OnInit, OnDestroy {
 
     this.sub.add(
       this.events.modelDownloadProgress$.subscribe((ev: ModelDownloadEvent) => {
+        if (ev.done) {
+          this.processingPhase.set('reindexing');
+          this.downloadProgress.set(100);
+          return;
+        }
+        this.processingPhase.set('downloading');
         this.currentDownloadFile.set(ev.file);
         if (ev.bytes_total) {
           this.downloadProgress.set((ev.bytes_done / ev.bytes_total) * 100);
         } else {
           this.downloadProgress.set(null);
-        }
-        if (ev.done) {
-          this.downloadProgress.set(100);
         }
       })
     );
@@ -88,7 +92,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   async loadSettings() {
     try {
       const model = await invoke<string | null>('get_setting', { key: 'embedding_model' });
-      this.currentModel.set(model || 'diegohh/siglip2-base-patch16-224'); // Default fallback
+      this.currentModel.set(model || 'diegohh/siglip2-base-patch16-224');
     } catch (e) {
       console.error('Failed to load settings:', e);
     }
@@ -112,6 +116,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
     const modelId = this.pendingModelId();
     if (modelId && this.confirmInputValue() === 'REINDEX' && !this.isProcessing()) {
       this.isProcessing.set(true);
+      this.processingPhase.set('downloading');
       this.downloadProgress.set(0);
       try {
         await invoke('update_setting', { key: 'embedding_model', value: modelId });

@@ -29,6 +29,13 @@ fn get_repo_and_subdir(model_id: &str) -> (&str, &str) {
     }
 }
 
+fn get_remote_path(model_id: &str, filename: &str) -> String {
+    match (model_id, filename) {
+        ("onnx-community/siglip2-base-patch32-256-ONNX", "model.onnx") => "onnx/model_fp16.onnx".to_string(),
+        _ => filename.to_string(),
+    }
+}
+
 impl VisionEngine {
     pub fn new(data_dir: PathBuf) -> Self {
         let (tx, rx) = tokio::sync::watch::channel(false);
@@ -70,9 +77,10 @@ impl VisionEngine {
                 continue;
             }
 
+            let remote = get_remote_path(model_id, filename);
             let url = format!(
                 "https://huggingface.co/{}/resolve/main/{}",
-                repo, filename
+                repo, remote
             );
 
             #[cfg(debug_assertions)]
