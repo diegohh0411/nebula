@@ -4,7 +4,7 @@
 
 **Goal:** Add a configurable "Fast" preset for subject analysis that reduces per-image processing time by using a smaller detector input size and skipping gender/age inference.
 
-**Architecture:** Replace the `OnceCell<FaceAnalyzer>` with a `Mutex<Option<(String, Arc<FaceAnalyzer>)>>` store that detects preset changes and rebuilds. For the "fast" preset, bypass `FaceAnalyzer::analyze()` and call detector + embedder directly, skipping gender/age. Add a `subject_model` setting and frontend picker mirroring the existing SigLIP model picker.
+**Architecture:** Define a `SubjectPreset` struct that encapsulates all face analysis configuration (detector input size, whether to skip gender/age). The analyzer builder and inference path both read from this struct — no string-based branching in business logic. Adding a new preset is just adding a const to the struct. The `FaceAnalyzer` is stored in a `Mutex<Option<(String, Arc<FaceAnalyzer>)>>` that detects preset changes and rebuilds.
 
 **Tech Stack:** Rust (Tauri backend), Angular (frontend), `face_id` 0.4.1 crate
 
@@ -87,16 +87,16 @@ git commit -m "feat(db): add subject_model default setting and reset_all_subject
 
 ---
 
-### Task 2: Vision Engine — Replace `OnceCell` with Arc-based swap-able store
+### Task 2: Vision Engine — Add `SubjectPreset` + replace `OnceCell` with Arc-based store
 
 **Files:**
-- Modify: `src-tauri/src/vision_engine.rs:1-10` (add imports)
-- Modify: `src-tauri/src/vision_engine.rs:22-56` (struct + new)
-- Modify: `src-tauri/src/vision_engine.rs:173-182` (replace `get_face_analyzer`)
+- Modify: `src-tauri/src/vision_engine.rs` (full rewrite of struct, new, and face analyzer methods)
 
-- [ ] **Step 1: Update imports**
+This task introduces `SubjectPreset` — a single source of truth for all face analysis configuration. Every preset is a const. The builder and the inference path both read from it. Adding a future preset (e.g., buffalo_s, INT8) means adding one const and one entry to `ALL`.
 
-At the top of `src-tauri/src/vision_engine.rs`, add `Arc` and `face_id` imports. Change line 1 to:
+- [ ] **Step 1: Update imports and add `SubjectPreset`**
+
+Replace the imports at the top of `src-tauri/src/vision_engine.rs` with:
 
 ```rust
 use anyhow::Result;
@@ -112,11 +112,47 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 
 use crate::models::ModelDownloadPayload;
+
+pub struct SubjectPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub detector_input_size: (u32, u32),
+    pub skip_gender_age: bool,
+}
+
+impl SubjectPreset {
+    pub const STANDARD: SubjectPreset = SubjectPreset {
+        id: "standard",
+        name: "Standard",
+        description: "Full accuracy (640\u{00d7}640 detection)",
+        detector_input_size: (640, 640),
+        skip_gender_age: false,
+    };
+
+    pub const FAST: SubjectPreset = SubjectPreset {
+        id: "fast",
+        name: "Fast",
+        description: "Optimized for consumer CPUs (320\u{00d7}320 detection)",
+        detector_input_size: (320, 320),
+        skip_gender_age: true,
+    };
+
+    pub const ALL: &[SubjectPreset] = &[Self::STANDARD, Self::FAST];
+
+    pub fn get(id: &str) -> Option<&'static SubjectPreset> {
+        Self::ALL.iter().find(|p| p.id == id)
+    }
+
+    pub fn default_id() -> &'static str {
+        Self::STANDARD.id
+    }
+}
 ```
 
 - [ ] **Step 2: Replace `face_analyzer` field in `VisionEngine` struct**
 
-In the `VisionEngine` struct (line 22-29), replace `face_analyzer: tokio::sync::OnceCell<face_id::analyzer::FaceAnalyzer>` with `face_analyzer: std::sync::Mutex<Option<(String, Arc<face_id::analyzer::FaceAnalyzer>)>>`:
+Replace the struct definition (lines 22-29) with:
 
 ```rust
 pub struct VisionEngine {
@@ -147,46 +183,55 @@ In `new()` (line 46-56), change `face_analyzer: tokio::sync::OnceCell::new()` to
     }
 ```
 
-- [ ] **Step 4: Replace `get_face_analyzer` method**
+- [ ] **Step 4: Replace `get_face_analyzer` with preset-driven methods**
 
-Replace the entire `get_face_analyzer` method (lines 173-182) with three new methods:
+Replace the entire `get_face_analyzer` method (lines 173-182) with the following four methods. The key design: `build_face_analyzer` reads `preset.detector_input_size`, `analyze_faces` reads `preset.skip_gender_age`, and `get_face_analyzer` compares preset IDs to decide whether to rebuild.
 
 ```rust
-    async fn build_face_analyzer(&self, preset: &str) -> Result<face_id::analyzer::FaceAnalyzer> {
-        let mut builder = face_id::analyzer::FaceAnalyzer::from_hf();
-        if preset == "fast" {
-            builder = builder.detector_input_size((320, 320));
-        }
-        builder
+    async fn build_face_analyzer(preset: &SubjectPreset) -> Result<face_id::analyzer::FaceAnalyzer> {
+        face_id::analyzer::FaceAnalyzer::from_hf()
+            .detector_input_size(preset.detector_input_size)
             .build()
             .await
             .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
     }
 
-    pub async fn get_face_analyzer(&self, preset: &str) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
+    pub async fn get_face_analyzer(&self, preset: &SubjectPreset) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
         {
             let guard = self.face_analyzer.lock()
                 .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
-            if let Some((current, analyzer)) = guard.as_ref() {
-                if current == preset {
+            if let Some((current_id, analyzer)) = guard.as_ref() {
+                if current_id == preset.id {
                     return Ok(Arc::clone(analyzer));
                 }
             }
         }
 
-        let analyzer = Arc::new(self.build_face_analyzer(preset).await?);
+        let analyzer = Arc::new(Self::build_face_analyzer(preset).await?);
         {
             let mut guard = self.face_analyzer.lock()
                 .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
-            *guard = Some((preset.to_string(), Arc::clone(&analyzer)));
+            *guard = Some((preset.id.to_string(), Arc::clone(&analyzer)));
         }
         Ok(analyzer)
     }
 
-    pub fn analyze_faces_fast(
+    pub fn analyze_faces(
         analyzer: &face_id::analyzer::FaceAnalyzer,
         img: &image::DynamicImage,
-    ) -> Result<Vec<(face_id::detector::DetectedFace, Vec<f32>)>> {
+        preset: &SubjectPreset,
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+        if preset.skip_gender_age {
+            Self::analyze_faces_direct(analyzer, img)
+        } else {
+            Self::analyze_faces_full(analyzer, img)
+        }
+    }
+
+    fn analyze_faces_direct(
+        analyzer: &face_id::analyzer::FaceAnalyzer,
+        img: &image::DynamicImage,
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
         let rgb_img = img.to_rgb8();
 
         let detections = {
@@ -221,7 +266,16 @@ Replace the entire `get_face_analyzer` method (lines 173-182) with three new met
                 .map_err(|e| anyhow::anyhow!("batch embedding failed: {e}"))?
         };
 
-        Ok(detections.into_iter().zip(embeddings).collect())
+        Ok(detections.into_iter().zip(embeddings).map(|(d, e)| (d.bbox, e)).collect())
+    }
+
+    fn analyze_faces_full(
+        analyzer: &face_id::analyzer::FaceAnalyzer,
+        img: &image::DynamicImage,
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+        let faces = analyzer.analyze(img)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect())
     }
 ```
 
@@ -234,18 +288,20 @@ Expected: May have errors in `embedder.rs` because `get_face_analyzer()` signatu
 
 ```bash
 git add src-tauri/src/vision_engine.rs
-git commit -m "feat(vision): replace OnceCell with Arc-based swap-able face analyzer store"
+git commit -m "feat(vision): add SubjectPreset config struct and Arc-based face analyzer store"
 ```
 
 ---
 
-### Task 3: Embedder — Add fast path + update subject worker
+### Task 3: Embedder — Use `SubjectPreset` in subject worker
 
 **Files:**
 - Modify: `src-tauri/src/embedder.rs:121-202` (`process_subject_one`)
 - Modify: `src-tauri/src/embedder.rs:270-331` (`run_subject_worker`)
 
-- [ ] **Step 1: Update `process_subject_one` to accept preset and use fast path**
+Now the embedder doesn't branch on strings — it passes the resolved `SubjectPreset` through, and `VisionEngine::analyze_faces` handles the config internally.
+
+- [ ] **Step 1: Update `process_subject_one` to accept a `SubjectPreset`**
 
 Replace the entire `process_subject_one` function (lines 121-202):
 
@@ -257,14 +313,14 @@ async fn process_subject_one(
     queue_id: i64,
     image_id: i64,
     attempts: i32,
-    subject_preset: &str,
+    preset: &'static crate::vision_engine::SubjectPreset,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
         _ => return,
     };
 
-    let analyzer = match vision_engine.get_face_analyzer(subject_preset).await {
+    let analyzer = match vision_engine.get_face_analyzer(preset).await {
         Ok(a) => a,
         Err(e) => {
             eprintln!("Face analyzer unavailable for image {}: {}", image_id, e);
@@ -289,14 +345,7 @@ async fn process_subject_one(
 
     match open_result {
         Ok(dynamic_img) => {
-            let faces_result = if subject_preset == "fast" {
-                crate::vision_engine::VisionEngine::analyze_faces_fast(&analyzer, &dynamic_img)
-                    .map(|pairs| pairs.into_iter().map(|(det, emb)| (det.bbox, emb)).collect::<Vec<_>>())
-            } else {
-                analyzer.analyze(&dynamic_img)
-                    .map(|faces| faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect::<Vec<_>>())
-                    .map_err(|e| anyhow::anyhow!("{}", e))
-            };
+            let faces_result = crate::vision_engine::VisionEngine::analyze_faces(&analyzer, &dynamic_img, preset);
 
             match faces_result {
                 Ok(faces) => {
@@ -341,7 +390,7 @@ async fn process_subject_one(
 }
 ```
 
-- [ ] **Step 2: Update `run_subject_worker` to read preset and pass it through**
+- [ ] **Step 2: Update `run_subject_worker` to resolve preset and pass it through**
 
 Replace the entire `run_subject_worker` function (lines 271-332):
 
@@ -353,11 +402,13 @@ pub async fn run_subject_worker(
 ) {
     vision_engine.wait_until_ready().await;
 
-    let preset = db::get_setting(&pool, "subject_model")
+    let preset_id = db::get_setting(&pool, "subject_model")
         .await
         .unwrap_or(None)
-        .unwrap_or_else(|| "standard".to_string());
-    if let Err(e) = vision_engine.get_face_analyzer(&preset).await {
+        .unwrap_or_else(|| crate::vision_engine::SubjectPreset::default_id().to_string());
+    let preset = crate::vision_engine::SubjectPreset::get(&preset_id)
+        .unwrap_or(&crate::vision_engine::SubjectPreset::STANDARD);
+    if let Err(e) = vision_engine.get_face_analyzer(preset).await {
         eprintln!("[subject-worker] Failed to initialize face analyzer: {}", e);
     }
 
@@ -378,10 +429,12 @@ pub async fn run_subject_worker(
             continue;
         }
 
-        let subject_preset = db::get_setting(&pool, "subject_model")
+        let preset_id = db::get_setting(&pool, "subject_model")
             .await
             .unwrap_or(None)
-            .unwrap_or_else(|| "standard".to_string());
+            .unwrap_or_else(|| crate::vision_engine::SubjectPreset::default_id().to_string());
+        let preset = crate::vision_engine::SubjectPreset::get(&preset_id)
+            .unwrap_or(&crate::vision_engine::SubjectPreset::STANDARD);
 
         let had_items = !batch.is_empty();
         let mut handles = vec![];
@@ -390,10 +443,9 @@ pub async fn run_subject_worker(
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
-            let sp_c = subject_preset.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts, &sp_c).await;
+                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts, preset).await;
             }));
         }
         for h in handles {
@@ -428,12 +480,12 @@ Expected: `Finished` with no errors
 
 ```bash
 git add src-tauri/src/embedder.rs
-git commit -m "feat(embedder): add fast path for subject analysis with gender/age skip"
+git commit -m "feat(embedder): use SubjectPreset config for face analysis path"
 ```
 
 ---
 
-### Task 4: Settings backend — New commands + handle setting change
+### Task 4: Settings backend — Use `SubjectPreset::ALL` for model listing + handle setting change
 
 **Files:**
 - Modify: `src-tauri/src/settings.rs:13-27` (add `get_available_subject_models`)
@@ -441,23 +493,19 @@ git commit -m "feat(embedder): add fast path for subject analysis with gender/ag
 
 - [ ] **Step 1: Add `get_available_subject_models` command**
 
-After `get_available_models` (after line 27), add:
+After `get_available_models` (after line 27), add. This reads from `SubjectPreset::ALL` so adding a new preset automatically adds it to the UI:
 
 ```rust
 #[command]
 pub fn get_available_subject_models() -> Vec<ModelInfo> {
-    vec![
-        ModelInfo {
-            id: "standard".into(),
-            name: "Standard".into(),
-            description: "Full accuracy (640\u{00d7}640 detection)".into(),
-        },
-        ModelInfo {
-            id: "fast".into(),
-            name: "Fast".into(),
-            description: "Optimized for consumer CPUs (320\u{00d7}320 detection)".into(),
-        },
-    ]
+    crate::vision_engine::SubjectPreset::ALL
+        .iter()
+        .map(|p| ModelInfo {
+            id: p.id.to_string(),
+            name: p.name.to_string(),
+            description: p.description.to_string(),
+        })
+        .collect()
 }
 ```
 
@@ -587,7 +635,7 @@ git commit -m "feat: register get_available_subject_models command"
 
 - [ ] **Step 1: Add subject model signals and loading to TS**
 
-Add after the existing model signals (after line 46), and add new loading/selection methods. The full updated component:
+The full updated component:
 
 ```typescript
 import { Component, OnInit, signal, inject, OnDestroy } from '@angular/core';
