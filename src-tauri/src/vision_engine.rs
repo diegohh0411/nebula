@@ -32,8 +32,8 @@ impl SubjectPreset {
     pub const FAST: SubjectPreset = SubjectPreset {
         id: "fast",
         name: "Fast",
-        description: "Optimized for consumer CPUs (320\u{00d7}320 detection)",
-        detector_input_size: (320, 320),
+        description: "Skips gender/age inference for faster processing",
+        detector_input_size: (640, 640),
         skip_gender_age: true,
     };
 
