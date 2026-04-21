@@ -1,14 +1,52 @@
 use anyhow::Result;
+use face_id::face_align::norm_crop;
 use futures::StreamExt;
 use ndarray::{Array2, Array4};
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 
 use crate::models::ModelDownloadPayload;
+
+pub struct SubjectPreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub detector_input_size: (u32, u32),
+    pub skip_gender_age: bool,
+}
+
+impl SubjectPreset {
+    pub const STANDARD: SubjectPreset = SubjectPreset {
+        id: "standard",
+        name: "Standard",
+        description: "Full accuracy (640\u{00d7}640 detection)",
+        detector_input_size: (640, 640),
+        skip_gender_age: false,
+    };
+
+    pub const FAST: SubjectPreset = SubjectPreset {
+        id: "fast",
+        name: "Fast",
+        description: "Optimized for consumer CPUs (320\u{00d7}320 detection)",
+        detector_input_size: (320, 320),
+        skip_gender_age: true,
+    };
+
+    pub const ALL: &[SubjectPreset] = &[Self::STANDARD, Self::FAST];
+
+    pub fn get(id: &str) -> Option<&'static SubjectPreset> {
+        Self::ALL.iter().find(|p| p.id == id)
+    }
+
+    pub fn default_id() -> &'static str {
+        Self::STANDARD.id
+    }
+}
 
 const MODEL_FILES: &[&str] = &["model.onnx", "tokenizer.json"];
 
@@ -23,7 +61,7 @@ pub struct VisionEngine {
     pub data_dir: PathBuf,
     session: std::sync::Mutex<Option<(String, Session)>>,
     tokenizer: std::sync::Mutex<Option<(String, tokenizers::Tokenizer)>>,
-    face_analyzer: tokio::sync::OnceCell<face_id::analyzer::FaceAnalyzer>,
+    face_analyzer: std::sync::Mutex<Option<(String, Arc<face_id::analyzer::FaceAnalyzer>)>>,
     model_ready_tx: tokio::sync::watch::Sender<bool>,
     model_ready_rx: tokio::sync::watch::Receiver<bool>,
 }
@@ -49,7 +87,7 @@ impl VisionEngine {
             data_dir,
             session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
-            face_analyzer: tokio::sync::OnceCell::new(),
+            face_analyzer: std::sync::Mutex::new(None),
             model_ready_tx: tx,
             model_ready_rx: rx,
         }
@@ -170,15 +208,94 @@ impl VisionEngine {
         }
     }
 
-    pub async fn get_face_analyzer(&self) -> Result<&face_id::analyzer::FaceAnalyzer> {
-        self.face_analyzer
-            .get_or_try_init(|| async {
-                face_id::analyzer::FaceAnalyzer::from_hf()
-                    .build()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
-            })
+    async fn build_face_analyzer(preset: &SubjectPreset) -> Result<face_id::analyzer::FaceAnalyzer> {
+        face_id::analyzer::FaceAnalyzer::from_hf()
+            .detector_input_size(preset.detector_input_size)
+            .build()
             .await
+            .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
+    }
+
+    pub async fn get_face_analyzer(&self, preset: &SubjectPreset) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
+        {
+            let guard = self.face_analyzer.lock()
+                .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
+            if let Some((current_id, analyzer)) = guard.as_ref() {
+                if current_id == preset.id {
+                    return Ok(Arc::clone(analyzer));
+                }
+            }
+        }
+
+        let analyzer = Arc::new(Self::build_face_analyzer(preset).await?);
+        {
+            let mut guard = self.face_analyzer.lock()
+                .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
+            *guard = Some((preset.id.to_string(), Arc::clone(&analyzer)));
+        }
+        Ok(analyzer)
+    }
+
+    pub fn analyze_faces(
+        analyzer: &face_id::analyzer::FaceAnalyzer,
+        img: &image::DynamicImage,
+        preset: &SubjectPreset,
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+        if preset.skip_gender_age {
+            Self::analyze_faces_direct(analyzer, img)
+        } else {
+            Self::analyze_faces_full(analyzer, img)
+        }
+    }
+
+    fn analyze_faces_direct(
+        analyzer: &face_id::analyzer::FaceAnalyzer,
+        img: &image::DynamicImage,
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+        let rgb_img = img.to_rgb8();
+
+        let detections = {
+            let mut detector = analyzer.detector.lock()
+                .map_err(|e| anyhow::anyhow!("detector mutex poisoned: {e}"))?;
+            detector.detect(img)?
+        };
+
+        if detections.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let embed_crops: Vec<_> = detections
+            .iter()
+            .map(|res| {
+                let landmarks = res.landmarks.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("face missing landmarks for embedding"))?;
+                let lms_array: [(f32, f32); 5] = landmarks
+                    .iter()
+                    .map(|&(x, y)| (x * rgb_img.width() as f32, y * rgb_img.height() as f32))
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("landmarks were not 5-point keypoints"))?;
+                Ok(norm_crop(&rgb_img, &lms_array, 112))
+            })
+            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+        let embeddings = {
+            let mut embedder = analyzer.embedder.lock()
+                .map_err(|e| anyhow::anyhow!("embedder mutex poisoned: {e}"))?;
+            embedder.compute_embeddings_batch(&embed_crops)
+                .map_err(|e| anyhow::anyhow!("batch embedding failed: {e}"))?
+        };
+
+        Ok(detections.into_iter().zip(embeddings).map(|(d, e)| (d.bbox, e)).collect())
+    }
+
+    fn analyze_faces_full(
+        analyzer: &face_id::analyzer::FaceAnalyzer,
+        img: &image::DynamicImage,
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+        let faces = analyzer.analyze(img)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect())
     }
 
     fn get_session(&self, model_id: &str) -> Result<std::sync::MutexGuard<'_, Option<(String, Session)>>> {
