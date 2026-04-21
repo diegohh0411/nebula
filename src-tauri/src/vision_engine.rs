@@ -215,11 +215,19 @@ impl VisionEngine {
     }
 
     async fn build_face_analyzer(preset: &SubjectPreset) -> Result<face_id::analyzer::FaceAnalyzer> {
-        face_id::analyzer::FaceAnalyzer::from_hf()
-            .detector_input_size(preset.detector_input_size)
-            .build()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
+        let builder = face_id::analyzer::FaceAnalyzer::from_hf()
+            .detector_input_size(preset.detector_input_size);
+        
+        let res = if !preset.detector_hf_id.is_empty() {
+            builder.detector_model(face_id::model_manager::HfModel {
+                id: preset.detector_hf_id.to_string(),
+                file: preset.detector_hf_file.to_string(),
+            }).build().await
+        } else {
+            builder.build().await
+        };
+
+        res.map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
     }
 
     pub async fn get_face_analyzer(&self, preset: &SubjectPreset) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
