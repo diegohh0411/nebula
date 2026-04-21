@@ -71,6 +71,7 @@ async fn process_semantic_one(
     image_id: i64,
     attempts: i32,
     index: &crate::vector_index::IndexStore,
+    model_id: String,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
@@ -83,7 +84,7 @@ async fn process_semantic_one(
     }).await;
 
     let embed_result = match img_res {
-        Ok(Ok(dynamic_img)) => vision_engine.embed_image(&dynamic_img),
+        Ok(Ok(dynamic_img)) => vision_engine.embed_image(&dynamic_img, &model_id),
         Ok(Err(e)) => Err(anyhow::anyhow!("failed to open image: {}", e)),
         Err(e) => Err(anyhow::anyhow!("spawn_blocking panicked: {}", e)),
     };
@@ -228,18 +229,25 @@ pub async fn run_semantic_worker(
         }
 
         let mut handles = vec![];
+        let model_id = db::get_setting(&pool, "embedding_model")
+            .await
+            .unwrap_or(None)
+            .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
+
         for (queue_id, image_id, attempts) in batch {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
             let index_c = Arc::clone(&index);
+            let mid_c = model_id.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 process_semantic_one(
                     &pool_c, &app_c, ve_c.as_ref(),
                     queue_id, image_id, attempts,
                     &index_c,
+                    mid_c,
                 ).await;
             }));
         }
