@@ -5,7 +5,7 @@ pub struct ModelFile {
   pub remote_path: Option<&'static str>,
 }
 
-enum ModelType {
+pub enum ModelType {
   /// Used for general embedding of images & texts in the same vector space to enable Natural Language Search of pictures
   TextImageEmbedding,
   /// Used for face crop embedding in subject analysis
@@ -50,7 +50,7 @@ pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
   model_type: ModelType::FaceEmbedding,
   cache_dir: "buffalo_s",
   files: &[
-    ModelFile { filename: "recognition.onnx", remote_path: "recognition/model.onnx" }
+    ModelFile { filename: "recognition.onnx", remote_path: Some("recognition/model.onnx") }
   ],
   display_name: "Recognition",
   display_description: "Buffalo S recognition model"
@@ -62,7 +62,7 @@ pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
   model_type: ModelType::FaceDetection,
   cache_dir: "buffalo_s",
   files: &[
-    ModelFile { filename: "detection.onnx", remote_path: "detection/model.onnx" }
+    ModelFile { filename: "detection.onnx", remote_path: Some("detection/model.onnx") }
   ],
   display_name: "Detection",
   display_description: "Buffalo S detection model"
