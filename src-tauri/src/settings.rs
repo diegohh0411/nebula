@@ -28,7 +28,7 @@ pub fn get_available_models() -> Vec<ModelInfo> {
 
 #[command]
 pub fn get_available_subject_models() -> Vec<ModelInfo> {
-    crate::vision_engine::SubjectPreset::ALL
+    crate::vision_engine::FaceIdConfig::ALL
         .iter()
         .map(|p| ModelInfo {
             id: p.id.to_string(),
@@ -46,14 +46,14 @@ pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Opti
         .fetch_optional(pool)
         .await
         .map_err(|e| e.to_string())?;
-    
+
     Ok(row.map(|r| r.get("value")))
 }
 
 #[command]
 pub async fn update_setting(app: tauri::AppHandle, state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
     let pool = &state.pool;
-    
+
     if key == "embedding_model" {
         let current = crate::db::get_setting(pool, &key).await.unwrap_or(None);
         if current.as_ref() != Some(&value) {
@@ -62,13 +62,13 @@ pub async fn update_setting(app: tauri::AppHandle, state: State<'_, AppState>, k
 
             // Trigger full reset in DB
             crate::db::reset_all_embeddings(pool).await.map_err(|e| e.to_string())?;
-            
+
             // Clear in-memory vector index
             if let Ok(mut idx) = state.index.write() {
                 // Re-initialize with a standard dim, it will be corrected on first add if different
                 *idx = Box::new(crate::vector_index::FlatIndex::new(768));
             }
-            
+
             // Delete persisted index file to force rebuild from new embeddings
             let idx_path = state.data_dir.join("nebula.idx");
             let _ = std::fs::remove_file(idx_path);
@@ -88,6 +88,6 @@ pub async fn update_setting(app: tauri::AppHandle, state: State<'_, AppState>, k
         .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
-    
+
     Ok(())
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use face_id::face_align::norm_crop;
+use face_id::{analyzer::FaceAnalyzer, face_align::norm_crop};
 use futures::StreamExt;
 use ndarray::{Array2, Array4};
 use ort::session::Session;
@@ -12,40 +12,56 @@ use tokio::io::AsyncWriteExt;
 
 use crate::models::ModelDownloadPayload;
 
-pub struct SubjectPreset {
+pub struct FaceIdModel {
+  pub id: &'static str,
+  pub file: &'static str,
+}
+
+pub struct FaceIdConfig {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
+
     pub detector_input_size: (u32, u32),
+
     pub skip_gender_age: bool,
-    pub detector_hf_id: &'static str,
-    pub detector_hf_file: &'static str,
+    pub detector: Option<FaceIdModel>,
+    pub embedder: Option<FaceIdModel>,
 }
 
-impl SubjectPreset {
-    pub const STANDARD: SubjectPreset = SubjectPreset {
+impl FaceIdConfig {
+    pub const STANDARD: FaceIdConfig = FaceIdConfig {
         id: "standard",
         name: "Standard",
-        description: "Full accuracy (640\u{00d7}640 detection)",
+        description: "Baseline accuracy when analyzing faces, for the pictures that matter",
         detector_input_size: (640, 640),
-        skip_gender_age: false,
-        detector_hf_id: "",
-        detector_hf_file: "",
-    };
 
-    pub const FAST: SubjectPreset = SubjectPreset {
-        id: "fast",
-        name: "Fast",
-        description: "Uses smaller detector and skips gender/age for maximum speed",
-        detector_input_size: (640, 640),
         skip_gender_age: true,
-        detector_hf_id: "RuteNL/SCRFD-face-detection-ONNX",
-        detector_hf_file: "10g_bnkps.onnx",
+        detector: None,
+        embedder: None,
     };
 
-    pub const ALL: &[SubjectPreset] = &[Self::STANDARD, Self::FAST];
+    pub const FAST: FaceIdConfig = FaceIdConfig {
+        id: "blitz",
+        name: "Blitz",
+        description: "Maximum inference speed, for bulk processing",
+        detector_input_size: (640, 640),
 
-    pub fn get(id: &str) -> Option<&'static SubjectPreset> {
+        skip_gender_age: true,
+        detector: Some(FaceIdModel {
+          id: "immich-app/buffalo_s",
+          file: "detection/model.onnx"
+        }),
+
+        embedder: Some(FaceIdModel {
+          id: "immich-app/buffalo_s",
+          file: "recognition/model.onnx"
+        }),
+    };
+
+    pub const ALL: &[FaceIdConfig] = &[Self::STANDARD, Self::FAST];
+
+    pub fn get(id: &str) -> Option<&'static FaceIdConfig> {
         Self::ALL.iter().find(|p| p.id == id)
     }
 
@@ -214,23 +230,30 @@ impl VisionEngine {
         }
     }
 
-    async fn build_face_analyzer(preset: &SubjectPreset) -> Result<face_id::analyzer::FaceAnalyzer> {
-        let builder = face_id::analyzer::FaceAnalyzer::from_hf()
-            .detector_input_size(preset.detector_input_size);
-        
-        let res = if !preset.detector_hf_id.is_empty() {
-            builder.detector_model(face_id::model_manager::HfModel {
-                id: preset.detector_hf_id.to_string(),
-                file: preset.detector_hf_file.to_string(),
-            }).build().await
-        } else {
-            builder.build().await
-        };
+    async fn build_face_analyzer(config: &FaceIdConfig) -> Result<face_id::analyzer::FaceAnalyzer> {
+      let analyzer = match (&config.detector, &config.embedder) {
+        (Some(det), Some(emb)) => FaceAnalyzer::from_hf()
+            .detector_input_size(config.detector_input_size)
+            .detector_model(face_id::model_manager::HfModel { id: det.id.to_string(), file: det.file.to_string() })
+            .embedder_model(face_id::model_manager::HfModel { id: emb.id.to_string(), file: emb.file.to_string() })
+            .build().await,
+        (Some(det), None) => FaceAnalyzer::from_hf()
+            .detector_input_size(config.detector_input_size)
+            .detector_model(face_id::model_manager::HfModel { id: det.id.to_string(), file: det.file.to_string() })
+            .build().await,
+        (None, Some(emb)) => FaceAnalyzer::from_hf()
+            .detector_input_size(config.detector_input_size)
+            .embedder_model(face_id::model_manager::HfModel { id: emb.id.to_string(), file: emb.file.to_string() })
+            .build().await,
+        (None, None) => FaceAnalyzer::from_hf()
+            .detector_input_size(config.detector_input_size)
+            .build().await,
+      };
 
-        res.map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
+      analyzer.map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
     }
 
-    pub async fn get_face_analyzer(&self, preset: &SubjectPreset) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
+    pub async fn get_face_analyzer(&self, preset: &FaceIdConfig) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
         {
             let guard = self.face_analyzer.lock()
                 .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
@@ -253,7 +276,7 @@ impl VisionEngine {
     pub fn analyze_faces(
         analyzer: &face_id::analyzer::FaceAnalyzer,
         img: &image::DynamicImage,
-        preset: &SubjectPreset,
+        preset: &FaceIdConfig,
     ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
         if preset.skip_gender_age {
             Self::analyze_faces_direct(analyzer, img)

@@ -124,7 +124,7 @@ async fn process_subject_one(
     queue_id: i64,
     image_id: i64,
     attempts: i32,
-    preset: &'static crate::vision_engine::SubjectPreset,
+    preset: &'static crate::vision_engine::FaceIdConfig,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
@@ -276,9 +276,9 @@ pub async fn run_subject_worker(
     let preset_id = db::get_setting(&pool, "subject_model")
         .await
         .unwrap_or(None)
-        .unwrap_or_else(|| crate::vision_engine::SubjectPreset::default_id().to_string());
-    let preset = crate::vision_engine::SubjectPreset::get(&preset_id)
-        .unwrap_or(&crate::vision_engine::SubjectPreset::STANDARD);
+        .unwrap_or_else(|| crate::vision_engine::FaceIdConfig::default_id().to_string());
+    let preset = crate::vision_engine::FaceIdConfig::get(&preset_id)
+        .unwrap_or(&crate::vision_engine::FaceIdConfig::STANDARD);
     if let Err(e) = vision_engine.get_face_analyzer(preset).await {
         eprintln!("[subject-worker] Failed to initialize face analyzer: {}", e);
     }
@@ -303,9 +303,9 @@ pub async fn run_subject_worker(
         let preset_id = db::get_setting(&pool, "subject_model")
             .await
             .unwrap_or(None)
-            .unwrap_or_else(|| crate::vision_engine::SubjectPreset::default_id().to_string());
-        let preset = crate::vision_engine::SubjectPreset::get(&preset_id)
-            .unwrap_or(&crate::vision_engine::SubjectPreset::STANDARD);
+            .unwrap_or_else(|| crate::vision_engine::FaceIdConfig::default_id().to_string());
+        let preset = crate::vision_engine::FaceIdConfig::get(&preset_id)
+            .unwrap_or(&crate::vision_engine::FaceIdConfig::STANDARD);
 
         let had_items = !batch.is_empty();
         let mut handles = vec![];
