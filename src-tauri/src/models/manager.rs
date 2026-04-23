@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use anyhow::Result;
 use tauri::{AppHandle, Emitter};
 use futures::StreamExt;
@@ -22,6 +23,7 @@ pub struct ModelDownloadPayload {
 pub struct ModelManager {
   data_dir: PathBuf,
   readiness: std::sync::Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+  downloads: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ModelManager {
@@ -29,6 +31,7 @@ impl ModelManager {
     Self {
       data_dir,
       readiness: std::sync::Mutex::new(HashMap::new()),
+      downloads: std::sync::Mutex::new(HashMap::new()),
     }
   }
 
@@ -52,8 +55,6 @@ impl ModelManager {
   }
 
   pub async fn ensure_ready(&self, app: &AppHandle, spec: &ModelSpec) -> Result<()> {
-    let dir = self.model_dir(spec);
-
     // 1. Ensure a readiness channel exists for this model
     {
       let mut guard = self.readiness.lock().unwrap();
@@ -62,16 +63,27 @@ impl ModelManager {
         .or_insert_with(|| tokio::sync::watch::channel(false).0);
     }
 
-    // 2. Fast path — all files already on disk
+    // 2. Acquire per-model download lock (fast if uncontended)
+    let model_lock = {
+      let mut guard = self.downloads.lock().unwrap();
+      guard
+        .entry(spec.id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+    };
+    let _lock_guard = model_lock.lock().await;
+
+    // 3. Fast path — all files already on disk (re-check after acquiring lock)
+    let dir = self.model_dir(spec);
     if spec.all_files().iter().all(|f| dir.join(f.filename).exists()) {
       self.signal_ready(spec.id);
       return Ok(());
     }
 
-    // 3. Create the cache directory
+    // 4. Create the cache directory
     tokio::fs::create_dir_all(&dir).await?;
 
-    // 4. Download each missing file
+    // 5. Download each missing file
     let client = reqwest::Client::new();
 
     for file in spec.all_files() {
@@ -151,5 +163,114 @@ impl ModelManager {
       if rx.changed().await.is_err() { break; }
       if *rx.borrow() { return; }
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+
+  #[tokio::test]
+  async fn per_model_lock_serializes_concurrent_access() {
+    let map: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> =
+      std::sync::Mutex::new(HashMap::new());
+
+    let lock_a = {
+      let mut guard = map.lock().unwrap();
+      guard
+        .entry("model-a".to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+    };
+    let lock_b = {
+      let mut guard = map.lock().unwrap();
+      guard
+        .entry("model-b".to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+    };
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let max_concurrent = Arc::new(AtomicUsize::new(0));
+
+    let counter_a = counter.clone();
+    let max_a = max_concurrent.clone();
+    let lock_a_clone = lock_a.clone();
+
+    let counter_b = counter.clone();
+    let max_b = max_concurrent.clone();
+    let lock_b_clone = lock_b.clone();
+
+    // Different models should be able to run concurrently
+    let h1 = tokio::spawn(async move {
+      let _g = lock_a_clone.lock().await;
+      counter_a.fetch_add(1, Ordering::SeqCst);
+      let now = counter_a.load(Ordering::SeqCst);
+      max_a.fetch_max(now, Ordering::SeqCst);
+      tokio::task::yield_now().await;
+      counter_a.fetch_sub(1, Ordering::SeqCst);
+    });
+
+    let h2 = tokio::spawn(async move {
+      let _g = lock_b_clone.lock().await;
+      counter_b.fetch_add(1, Ordering::SeqCst);
+      let now = counter_b.load(Ordering::SeqCst);
+      max_b.fetch_max(now, Ordering::SeqCst);
+      tokio::task::yield_now().await;
+      counter_b.fetch_sub(1, Ordering::SeqCst);
+    });
+
+    h1.await.unwrap();
+    h2.await.unwrap();
+
+    assert_eq!(
+      max_concurrent.load(Ordering::SeqCst),
+      2,
+      "different model locks should allow concurrent access"
+    );
+  }
+
+  #[tokio::test]
+  async fn same_model_lock_serializes_callers() {
+    let map: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> =
+      std::sync::Mutex::new(HashMap::new());
+
+    let lock = {
+      let mut guard = map.lock().unwrap();
+      guard
+        .entry("model-x".to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+    };
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let max_concurrent = Arc::new(AtomicUsize::new(0));
+
+    let mut handles = vec![];
+    for _ in 0..4 {
+      let c = counter.clone();
+      let m = max_concurrent.clone();
+      let l = lock.clone();
+      handles.push(tokio::spawn(async move {
+        let _g = l.lock().await;
+        c.fetch_add(1, Ordering::SeqCst);
+        let now = c.load(Ordering::SeqCst);
+        m.fetch_max(now, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        c.fetch_sub(1, Ordering::SeqCst);
+      }));
+    }
+
+    for h in handles {
+      h.await.unwrap();
+    }
+
+    assert_eq!(
+      max_concurrent.load(Ordering::SeqCst),
+      1,
+      "same model lock should serialize all callers"
+    );
   }
 }
