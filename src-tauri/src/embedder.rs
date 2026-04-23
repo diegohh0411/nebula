@@ -292,6 +292,11 @@ pub async fn run_subject_worker(
     if let Err(e) = model_manager.ensure_ready(&app, preset.embedder).await {
         eprintln!("[subject-worker] Embedder model not ready: {}", e);
     }
+    if let Some(gender_age_spec) = preset.gender_age {
+        if let Err(e) = model_manager.ensure_ready(&app, gender_age_spec).await {
+            eprintln!("[subject-worker] Gender/age model not ready: {}", e);
+        }
+    }
 
     if let Err(e) = vision_engine.get_face_analyzer(&model_manager, preset).await {
         eprintln!("[subject-worker] Failed to initialize face analyzer: {}", e);

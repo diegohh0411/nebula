@@ -43,8 +43,11 @@ impl VisionEngine {
 
         let det_path = manager.onnx_path(preset.detector);
         let rec_path = manager.onnx_path(preset.embedder);
+        let gender_age_path = preset.gender_age
+            .map(|spec| manager.onnx_path(spec))
+            .ok_or_else(|| anyhow::anyhow!("FaceIdPreset missing gender_age model"))?;
 
-        let analyzer = FaceAnalyzer::builder(det_path, rec_path, None)
+        let analyzer = FaceAnalyzer::builder(det_path, rec_path, gender_age_path)
             .detector_input_size(preset.detector_input_size)
             .build()
             .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))?;

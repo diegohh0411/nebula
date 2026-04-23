@@ -44,6 +44,8 @@ pub struct FaceIdPreset {
     pub detector: &'static ModelSpec,
     /// Face embedding model specification
     pub embedder: &'static ModelSpec,
+    /// Gender/age estimation model specification (optional - set to None to skip gender/age inference)
+    pub gender_age: Option<&'static ModelSpec>,
     /// Input size (width, height) for the detector model
     pub detector_input_size: (u32, u32),
 }
@@ -103,16 +105,28 @@ pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
   display_description: "Lightweight face detection model",
 };
 
+pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
+  id: "buffalo_s_gender_age",
+  hf_repo: "public-data/insightface",
+  model_type: ModelType::FaceEmbedding,
+  cache_dir: "buffalo_s",
+  model_file: ModelFile { filename: "genderage.onnx", remote_path: Some("models/buffalo_l/genderage.onnx") },
+  tokenizer_file: None,
+  display_name: "Buffalo S Gender/Age",
+  display_description: "Gender and age estimation model",
+};
+
 pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
     id: "blitz",
     name: "Blitz",
     description: "Maximum inference speed, for bulk processing",
     detector: &BUFFALO_S_DETECTION,
     embedder: &BUFFALO_S_RECOGNITION,
+    gender_age: Some(&BUFFALO_S_GENDER_AGE),
     detector_input_size: (640, 640),
 };
 
-pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION];
+pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE];
 pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET];
 
 impl ModelSpec {
