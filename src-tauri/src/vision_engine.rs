@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use face_id::{analyzer::FaceAnalyzer, face_align::norm_crop};
+use face_id::analyzer::FaceAnalyzer;
 use ndarray::{Array2, Array4};
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
@@ -33,7 +33,7 @@ impl VisionEngine {
         preset: &FaceIdPreset
     ) -> Result<Arc<FaceAnalyzer>> {
         {
-            let guard = self.face_analyzer.lock().unwrap();
+            let guard = self.face_analyzer.lock().map_err(|e| anyhow!("face analyzer mutex poisoned: {e}"))?;
             if let Some((current_id, analyzer)) = guard.as_ref() {
                 if current_id == preset.id {
                     return Ok(Arc::clone(analyzer));
@@ -43,9 +43,7 @@ impl VisionEngine {
 
         let det_path = manager.onnx_path(preset.detector);
         let rec_path = manager.onnx_path(preset.embedder);
-        let gender_age_path = preset.gender_age
-            .map(|spec| manager.onnx_path(spec))
-            .ok_or_else(|| anyhow::anyhow!("FaceIdPreset missing gender_age model"))?;
+        let gender_age_path = manager.onnx_path(preset.gender_age);
 
         let analyzer = FaceAnalyzer::builder(det_path, rec_path, gender_age_path)
             .detector_input_size(preset.detector_input_size)
@@ -54,7 +52,7 @@ impl VisionEngine {
 
         let analyzer = Arc::new(analyzer);
         {
-            let mut guard = self.face_analyzer.lock().unwrap();
+            let mut guard = self.face_analyzer.lock().map_err(|e| anyhow!("face analyzer mutex poisoned: {e}"))?;
             *guard = Some((preset.id.to_string(), Arc::clone(&analyzer)));
         }
         Ok(analyzer)
@@ -65,48 +63,7 @@ impl VisionEngine {
         img: &image::DynamicImage,
         _preset: &FaceIdPreset,
     ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
-        Self::analyze_faces_direct(analyzer, img)
-    }
-
-    fn analyze_faces_direct(
-        analyzer: &face_id::analyzer::FaceAnalyzer,
-        img: &image::DynamicImage,
-    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
-        let rgb_img = img.to_rgb8();
-
-        let detections = {
-            let mut detector = analyzer.detector.lock()
-                .map_err(|e| anyhow::anyhow!("detector mutex poisoned: {e}"))?;
-            detector.detect(img)?
-        };
-
-        if detections.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let embed_crops: Vec<_> = detections
-            .iter()
-            .map(|res| {
-                let landmarks = res.landmarks.as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("face missing landmarks for embedding"))?;
-                let lms_array: [(f32, f32); 5] = landmarks
-                    .iter()
-                    .map(|&(x, y)| (x * rgb_img.width() as f32, y * rgb_img.height() as f32))
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("landmarks were not 5-point keypoints"))?;
-                Ok(norm_crop(&rgb_img, &lms_array, 112))
-            })
-            .collect::<Result<Vec<_>, anyhow::Error>>()?;
-
-        let embeddings = {
-            let mut embedder = analyzer.embedder.lock()
-                .map_err(|e| anyhow::anyhow!("embedder mutex poisoned: {e}"))?;
-            embedder.compute_embeddings_batch(&embed_crops)
-                .map_err(|e| anyhow::anyhow!("batch embedding failed: {e}"))?
-        };
-
-        Ok(detections.into_iter().zip(embeddings).map(|(d, e)| (d.bbox, e)).collect())
+        Self::analyze_faces_full(analyzer, img)
     }
 
     fn analyze_faces_full(
@@ -158,7 +115,7 @@ impl VisionEngine {
     }
 
     pub fn embed_image(&self, manager: &ModelManager, img: &image::DynamicImage, spec: &ModelSpec) -> Result<Vec<f32>> {
-        let size = if spec.id.contains("256") { 256 } else { 224 };
+        let size = spec.image_size;
         let resized = img.resize_exact(
             size as u32,
             size as u32,
@@ -244,7 +201,7 @@ impl VisionEngine {
         let input_ids_arr = Array2::from_shape_vec((1, seq_len), input_ids)?;
 
         // Dummy pixel_values — image encoder output is discarded
-        let size = if spec.id.contains("256") { 256 } else { 224 };
+        let size = spec.image_size;
         let dummy_pixels = Array4::<f32>::zeros((1, 3, size, size));
 
         let mut lock = self.get_session(manager, spec)?;

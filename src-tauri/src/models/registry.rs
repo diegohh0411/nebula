@@ -31,6 +31,8 @@ pub struct ModelSpec {
   pub display_name: &'static str,
   /// Display description for the UI
   pub display_description: &'static str,
+  /// Input image resolution for embedding models
+  pub image_size: usize,
 }
 
 pub struct FaceIdPreset {
@@ -44,8 +46,8 @@ pub struct FaceIdPreset {
     pub detector: &'static ModelSpec,
     /// Face embedding model specification
     pub embedder: &'static ModelSpec,
-    /// Gender/age estimation model specification (optional - set to None to skip gender/age inference)
-    pub gender_age: Option<&'static ModelSpec>,
+    /// Gender/age estimation model specification
+    pub gender_age: &'static ModelSpec,
     /// Input size (width, height) for the detector model
     pub detector_input_size: (u32, u32),
 }
@@ -70,6 +72,7 @@ pub const SIGLIP_BASE: ModelSpec = ModelSpec {
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Standard",
   display_description: "Balanced quality and speed (86M params)",
+  image_size: 224,
 };
 
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
@@ -81,6 +84,7 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Fast",
   display_description: "Optimized for consumer CPUs with larger patches",
+  image_size: 256,
 };
 
 pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
@@ -92,6 +96,7 @@ pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
   tokenizer_file: None,
   display_name: "Buffalo S Recognition",
   display_description: "Lightweight face recognition model",
+  image_size: 0,
 };
 
 pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
@@ -103,6 +108,7 @@ pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
   tokenizer_file: None,
   display_name: "Buffalo S Detection",
   display_description: "Lightweight face detection model",
+  image_size: 0,
 };
 
 pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
@@ -114,6 +120,7 @@ pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
   tokenizer_file: None,
   display_name: "Buffalo S Gender/Age",
   display_description: "Gender and age estimation model",
+  image_size: 0,
 };
 
 pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
@@ -122,7 +129,7 @@ pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
     description: "Maximum inference speed, for bulk processing",
     detector: &BUFFALO_S_DETECTION,
     embedder: &BUFFALO_S_RECOGNITION,
-    gender_age: Some(&BUFFALO_S_GENDER_AGE),
+    gender_age: &BUFFALO_S_GENDER_AGE,
     detector_input_size: (640, 640),
 };
 
@@ -141,4 +148,35 @@ impl FaceIdPreset {
   pub fn find_by_id(id: &str) -> Option<&'static FaceIdPreset> {
     ALL_PRESETS.iter().find(|p| p.id == id).copied()
   }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_faceid_preset_gender_age_is_not_option() {
+        // Verify that gender_age is not an Option type
+        let preset = &BUFFALO_S_PRESET;
+        
+        // This should compile and work without unwrapping or matching on Option
+        let gender_age_model = preset.gender_age;
+        
+        // Verify it's the expected model
+        assert_eq!(gender_age_model.id, "buffalo_s_gender_age");
+        assert_eq!(gender_age_model.hf_repo, "public-data/insightface");
+    }
+
+    #[test]
+    fn test_find_by_id_works() {
+        let preset = FaceIdPreset::find_by_id("blitz");
+        assert!(preset.is_some());
+        
+        let preset = preset.unwrap();
+        assert_eq!(preset.id, "blitz");
+        assert_eq!(preset.name, "Blitz");
+        
+        // Verify gender_age is accessible directly (not an Option)
+        assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
+    }
 }
