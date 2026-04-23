@@ -1,35 +1,55 @@
 pub enum ModelType {
+  /// Used for general embedding of images & texts in the same vector space to enable Natural Language Search of pictures
   TextImageEmbedding,
+  /// Used for face crop embedding in subject analysis
   FaceEmbedding,
+  /// Used to find faces in images for subject analysis
   FaceDetection,
 }
 
 pub struct ModelFile {
+  /// Filename on disk
   pub filename: &'static str,
+  /// Path within HuggingFace repo, set to None if same as the value of `filename`
   pub remote_path: Option<&'static str>,
 }
 
 pub struct ModelSpec {
+  /// ID for internal Nebula reference
   pub id: &'static str,
+  /// HuggingFace repo ID (may differ from id if you use aliases)
   pub hf_repo: &'static str,
+  /// Type of ML model, e.g. ModelType::FaceDetection
   pub model_type: ModelType,
+  /// Subdirectory under <data_dir>/models/ to store files
   pub cache_dir: &'static str,
+  /// Main model file that must be present for this model to be "ready"
   pub model_file: ModelFile,
+  /// Optional tokenizer file (for text/image models)
   pub tokenizer_file: Option<ModelFile>,
+  /// Display name for the UI
   pub display_name: &'static str,
+  /// Display description for the UI
   pub display_description: &'static str,
 }
 
 pub struct FaceIdPreset {
+    /// Internal ID for the preset
     pub id: &'static str,
+    /// Display name for the UI
     pub name: &'static str,
+    /// Description explaining when to use this preset
     pub description: &'static str,
+    /// Face detection model specification
     pub detector: &'static ModelSpec,
+    /// Face embedding model specification
     pub embedder: &'static ModelSpec,
+    /// Input size (width, height) for the detector model
     pub detector_input_size: (u32, u32),
 }
 
 impl ModelSpec {
+  /// Returns all files required for this model (model file + optional tokenizer)
   pub fn all_files(&self) -> Vec<&ModelFile> {
     let mut f = vec![&self.model_file];
     if let Some(ref t) = self.tokenizer_file {
@@ -96,12 +116,14 @@ pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_S_R
 pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET];
 
 impl ModelSpec {
+  /// Find a model specification by its ID
   pub fn find_by_id(id: &str) -> Option<&'static ModelSpec> {
     ALL_MODELS.iter().find(|m| m.id == id).copied()
   }
 }
 
 impl FaceIdPreset {
+  /// Find a face ID preset by its ID
   pub fn find_by_id(id: &str) -> Option<&'static FaceIdPreset> {
     ALL_PRESETS.iter().find(|p| p.id == id).copied()
   }
