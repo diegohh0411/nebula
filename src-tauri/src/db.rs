@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
 
-const LATEST_VERSION: u32 = 1;
+const LATEST_VERSION: u32 = 2;
 
 const BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_h      REAL NOT NULL,
     embedding   BLOB,
     added_at    INTEGER NOT NULL,
-    is_manual   INTEGER NOT NULL DEFAULT 0
+    is_manual   INTEGER NOT NULL DEFAULT 0,
+    gender      TEXT,
+    age         INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
@@ -126,6 +128,10 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
             CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
             CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
         );
+    "),
+    (2, "
+        ALTER TABLE faces ADD COLUMN gender TEXT;
+        ALTER TABLE faces ADD COLUMN age INTEGER;
     "),
 ];
 
@@ -1284,7 +1290,9 @@ mod tests {
                 bbox_w REAL NOT NULL, bbox_h REAL NOT NULL,
                 embedding BLOB,
                 added_at INTEGER NOT NULL,
-                is_manual INTEGER NOT NULL DEFAULT 0
+                is_manual INTEGER NOT NULL DEFAULT 0,
+                gender TEXT,
+                age INTEGER
             )"
         ).execute(&pool).await.unwrap();
         pool
