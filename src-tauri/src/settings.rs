@@ -12,23 +12,20 @@ pub struct ModelInfo {
 
 #[command]
 pub fn get_available_models() -> Vec<ModelInfo> {
-    vec![
-        ModelInfo {
-            id: "diegohh/siglip2-base-patch16-224".into(),
-            name: "Standard".into(),
-            description: "Balanced quality and speed (86M params)".into(),
-        },
-        ModelInfo {
-            id: "onnx-community/siglip2-base-patch32-256-ONNX".into(),
-            name: "Fast".into(),
-            description: "Optimized for consumer CPUs with larger patches".into(),
-        },
-    ]
+    crate::models::registry::ALL_MODELS
+        .iter()
+        .filter(|m| matches!(m.model_type, crate::models::registry::ModelType::TextImageEmbedding))
+        .map(|m| ModelInfo {
+            id: m.id.to_string(),
+            name: m.display_name.to_string(),
+            description: m.display_description.to_string(),
+        })
+        .collect()
 }
 
 #[command]
 pub fn get_available_subject_models() -> Vec<ModelInfo> {
-    crate::vision_engine::FaceIdConfig::ALL
+    crate::models::registry::ALL_PRESETS
         .iter()
         .map(|p| ModelInfo {
             id: p.id.to_string(),
@@ -58,7 +55,9 @@ pub async fn update_setting(app: tauri::AppHandle, state: State<'_, AppState>, k
         let current = crate::db::get_setting(pool, &key).await.unwrap_or(None);
         if current.as_ref() != Some(&value) {
             // First, ensure the model is downloaded and ready
-            state.vision_engine.ensure_model_ready(&app, &value).await.map_err(|e| e.to_string())?;
+            let spec = crate::models::registry::ModelSpec::find_by_id(&value)
+                .ok_or_else(|| format!("Unknown model: {}", value))?;
+            state.model_manager.ensure_ready(&app, spec).await.map_err(|e| e.to_string())?;
 
             // Trigger full reset in DB
             crate::db::reset_all_embeddings(pool).await.map_err(|e| e.to_string())?;

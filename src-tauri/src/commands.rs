@@ -1,7 +1,6 @@
 use base64::Engine;
 use sha2::{Sha256, Digest};
 use std::collections::HashSet;
-use tauri::Emitter;
 
 use crate::{
     db,
@@ -76,6 +75,7 @@ pub async fn list_images(
 #[tauri::command]
 pub async fn search(
     query: SearchQuery,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SearchResult>, String> {
     let pool = &state.pool;
@@ -115,7 +115,11 @@ pub async fn search(
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
-                let emb = state.vision_engine.embed_text(query, &model_id).map_err(map_err)?;
+                let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
+                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+
+                state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
+                let emb = state.vision_engine.embed_text(&state.model_manager, query, spec).map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
@@ -169,8 +173,12 @@ pub async fn search(
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
+                let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
+                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+
                 let img = image::load_from_memory(&raw_bytes).map_err(map_err)?;
-                let emb = state.vision_engine.embed_image(&img, &model_id).map_err(map_err)?;
+                state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
+                let emb = state.vision_engine.embed_image(&state.model_manager, &img, spec).map_err(map_err)?;
                 let blob = crate::embedder::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb

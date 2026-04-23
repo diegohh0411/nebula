@@ -1,262 +1,39 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use face_id::{analyzer::FaceAnalyzer, face_align::norm_crop};
-use futures::StreamExt;
 use ndarray::{Array2, Array4};
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncWriteExt;
 
-use crate::models::ModelDownloadPayload;
-
-pub struct FaceIdModel {
-  pub id: &'static str,
-  pub file: &'static str,
-}
-
-pub struct FaceIdConfig {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub description: &'static str,
-
-    pub detector_input_size: (u32, u32),
-
-    pub skip_gender_age: bool,
-    pub detector: Option<FaceIdModel>,
-    pub embedder: Option<FaceIdModel>,
-}
-
-impl FaceIdConfig {
-    pub const STANDARD: FaceIdConfig = FaceIdConfig {
-        id: "standard",
-        name: "Standard",
-        description: "Baseline accuracy when analyzing faces, for the pictures that matter",
-        detector_input_size: (640, 640),
-
-        skip_gender_age: true,
-        detector: None,
-        embedder: None,
-    };
-
-    pub const FAST: FaceIdConfig = FaceIdConfig {
-        id: "blitz",
-        name: "Blitz",
-        description: "Maximum inference speed, for bulk processing",
-        detector_input_size: (640, 640),
-
-        skip_gender_age: true,
-        detector: Some(FaceIdModel {
-          id: "immich-app/buffalo_s",
-          file: "detection/model.onnx"
-        }),
-
-        embedder: Some(FaceIdModel {
-          id: "immich-app/buffalo_s",
-          file: "recognition/model.onnx"
-        }),
-    };
-
-    pub const ALL: &[FaceIdConfig] = &[Self::STANDARD, Self::FAST];
-
-    pub fn get(id: &str) -> Option<&'static FaceIdConfig> {
-        Self::ALL.iter().find(|p| p.id == id)
-    }
-
-    pub fn default_id() -> &'static str {
-        Self::STANDARD.id
-    }
-}
-
-const MODEL_FILES: &[&str] = &["model.onnx", "tokenizer.json"];
-
-fn get_image_size(model_id: &str) -> usize {
-    match model_id {
-        "onnx-community/siglip2-base-patch32-256-ONNX" => 256,
-        _ => 224,
-    }
-}
+use crate::models::manager::ModelManager;
+use crate::models::registry::{ModelSpec, FaceIdPreset};
 
 pub struct VisionEngine {
     pub data_dir: PathBuf,
     session: std::sync::Mutex<Option<(String, Session)>>,
     tokenizer: std::sync::Mutex<Option<(String, tokenizers::Tokenizer)>>,
-    face_analyzer: std::sync::Mutex<Option<(String, Arc<face_id::analyzer::FaceAnalyzer>)>>,
-    model_ready_tx: tokio::sync::watch::Sender<bool>,
-    model_ready_rx: tokio::sync::watch::Receiver<bool>,
-}
-
-fn get_repo_and_subdir(model_id: &str) -> (&str, &str) {
-    match model_id {
-        "onnx-community/siglip2-base-patch32-256-ONNX" => (model_id, "onnx"),
-        _ => (model_id, "siglip2-base-224"),
-    }
-}
-
-fn get_remote_path(model_id: &str, filename: &str) -> String {
-    match (model_id, filename) {
-        ("onnx-community/siglip2-base-patch32-256-ONNX", "model.onnx") => "onnx/model_fp16.onnx".to_string(),
-        _ => filename.to_string(),
-    }
+    face_analyzer: std::sync::Mutex<Option<(String, Arc<FaceAnalyzer>)>>,
 }
 
 impl VisionEngine {
     pub fn new(data_dir: PathBuf) -> Self {
-        let (tx, rx) = tokio::sync::watch::channel(false);
         Self {
             data_dir,
             session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
             face_analyzer: std::sync::Mutex::new(None),
-            model_ready_tx: tx,
-            model_ready_rx: rx,
         }
     }
 
-    fn model_dir(&self, model_id: &str) -> PathBuf {
-        let (_, subdir) = get_repo_and_subdir(model_id);
-        self.data_dir.join("models").join(subdir)
-    }
-
-    /// Downloads any missing model files from HuggingFace, then signals readiness.
-    /// Emits `model_download_progress` events while downloading.
-    /// Should be spawned once at startup before the embedding worker runs.
-    pub async fn ensure_model_ready(&self, app: &AppHandle, model_id: &str) -> Result<()> {
-        let (repo, _) = get_repo_and_subdir(model_id);
-        let model_dir = self.model_dir(model_id);
-
-        // If everything is already on disk, signal immediately and return.
-        if MODEL_FILES.iter().all(|f| model_dir.join(f).exists()) {
-            self.signal_ready();
-            return Ok(());
-        }
-
-        tokio::fs::create_dir_all(&model_dir).await?;
-
-        let client = reqwest::Client::new();
-
-        for filename in MODEL_FILES {
-            let dest = model_dir.join(filename);
-            if dest.exists() {
-                continue;
-            }
-
-            let remote = get_remote_path(model_id, filename);
-            let url = format!(
-                "https://huggingface.co/{}/resolve/main/{}",
-                repo, remote
-            );
-
-            #[cfg(debug_assertions)]
-            eprintln!("[vision-engine] downloading {} from {}", filename, url);
-
-            let resp = client
-                .get(&url)
-                .send()
-                .await?
-                .error_for_status()
-                .map_err(|e| anyhow::anyhow!("failed to fetch '{}': {}", filename, e))?;
-
-            let total_bytes = resp.content_length();
-            let mut downloaded: u64 = 0;
-
-            // Write to a .tmp file first to avoid leaving partial files on crash/cancel.
-            let tmp_path = model_dir.join(format!("{}.tmp", filename));
-            let mut file = tokio::fs::File::create(&tmp_path).await?;
-            let mut stream = resp.bytes_stream();
-
-            while let Some(chunk) = stream.next().await {
-                let chunk =
-                    chunk.map_err(|e| anyhow::anyhow!("download stream error: {}", e))?;
-                downloaded += chunk.len() as u64;
-                file.write_all(&chunk).await?;
-
-                let _ = app.emit(
-                    "model_download_progress",
-                    ModelDownloadPayload {
-                        file: filename.to_string(),
-                        bytes_done: downloaded,
-                        bytes_total: total_bytes,
-                        done: false,
-                        error: None,
-                    },
-                );
-            }
-
-            file.flush().await?;
-            drop(file);
-            tokio::fs::rename(&tmp_path, &dest).await?;
-
-            let _ = app.emit(
-                "model_download_progress",
-                ModelDownloadPayload {
-                    file: filename.to_string(),
-                    bytes_done: downloaded,
-                    bytes_total: total_bytes,
-                    done: true,
-                    error: None,
-                },
-            );
-
-            #[cfg(debug_assertions)]
-            eprintln!("[vision-engine] saved {} ({} bytes)", filename, downloaded);
-        }
-
-        self.signal_ready();
-        Ok(())
-    }
-
-    fn signal_ready(&self) {
-        let _ = self.model_ready_tx.send(true);
-    }
-
-    /// Resolves as soon as the model files are confirmed present on disk.
-    /// Returns immediately if they were already ready when called.
-    pub async fn wait_until_ready(&self) {
-        let mut rx = self.model_ready_rx.clone();
-        // Already ready — fast path.
-        if *rx.borrow() {
-            return;
-        }
-        loop {
-            if rx.changed().await.is_err() {
-                break; // sender dropped — shouldn't happen in normal operation
-            }
-            if *rx.borrow() {
-                return;
-            }
-        }
-    }
-
-    async fn build_face_analyzer(config: &FaceIdConfig) -> Result<face_id::analyzer::FaceAnalyzer> {
-      let analyzer = match (&config.detector, &config.embedder) {
-        (Some(det), Some(emb)) => FaceAnalyzer::from_hf()
-            .detector_input_size(config.detector_input_size)
-            .detector_model(face_id::model_manager::HfModel { id: det.id.to_string(), file: det.file.to_string() })
-            .embedder_model(face_id::model_manager::HfModel { id: emb.id.to_string(), file: emb.file.to_string() })
-            .build().await,
-        (Some(det), None) => FaceAnalyzer::from_hf()
-            .detector_input_size(config.detector_input_size)
-            .detector_model(face_id::model_manager::HfModel { id: det.id.to_string(), file: det.file.to_string() })
-            .build().await,
-        (None, Some(emb)) => FaceAnalyzer::from_hf()
-            .detector_input_size(config.detector_input_size)
-            .embedder_model(face_id::model_manager::HfModel { id: emb.id.to_string(), file: emb.file.to_string() })
-            .build().await,
-        (None, None) => FaceAnalyzer::from_hf()
-            .detector_input_size(config.detector_input_size)
-            .build().await,
-      };
-
-      analyzer.map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))
-    }
-
-    pub async fn get_face_analyzer(&self, preset: &FaceIdConfig) -> Result<Arc<face_id::analyzer::FaceAnalyzer>> {
+    pub async fn get_face_analyzer(
+        &self, 
+        manager: &ModelManager, 
+        preset: &FaceIdPreset
+    ) -> Result<Arc<FaceAnalyzer>> {
         {
-            let guard = self.face_analyzer.lock()
-                .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
+            let guard = self.face_analyzer.lock().unwrap();
             if let Some((current_id, analyzer)) = guard.as_ref() {
                 if current_id == preset.id {
                     return Ok(Arc::clone(analyzer));
@@ -264,25 +41,28 @@ impl VisionEngine {
             }
         }
 
-        let analyzer = Arc::new(Self::build_face_analyzer(preset).await?);
+        let det_path = manager.onnx_path(preset.detector);
+        let rec_path = manager.onnx_path(preset.embedder);
+
+        let analyzer = FaceAnalyzer::builder(det_path, rec_path, "")
+            .detector_input_size(preset.detector_input_size)
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))?;
+
+        let analyzer = Arc::new(analyzer);
         {
-            let mut guard = self.face_analyzer.lock()
-                .map_err(|e| anyhow::anyhow!("face analyzer mutex poisoned: {e}"))?;
+            let mut guard = self.face_analyzer.lock().unwrap();
             *guard = Some((preset.id.to_string(), Arc::clone(&analyzer)));
         }
         Ok(analyzer)
     }
 
     pub fn analyze_faces(
-        analyzer: &face_id::analyzer::FaceAnalyzer,
+        analyzer: &FaceAnalyzer,
         img: &image::DynamicImage,
-        preset: &FaceIdConfig,
+        _preset: &FaceIdPreset,
     ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
-        if preset.skip_gender_age {
-            Self::analyze_faces_direct(analyzer, img)
-        } else {
-            Self::analyze_faces_full(analyzer, img)
-        }
+        Self::analyze_faces_direct(analyzer, img)
     }
 
     fn analyze_faces_direct(
@@ -335,19 +115,19 @@ impl VisionEngine {
         Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect())
     }
 
-    fn get_session(&self, model_id: &str) -> Result<std::sync::MutexGuard<'_, Option<(String, Session)>>> {
+    fn get_session(&self, manager: &ModelManager, spec: &ModelSpec) -> Result<std::sync::MutexGuard<'_, Option<(String, Session)>>> {
         let mut lock = self
             .session
             .lock()
             .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
 
         let needs_load = match &*lock {
-            Some((current_id, _)) => current_id != model_id,
+            Some((current_id, _)) => current_id != spec.id,
             None => true,
         };
 
         if needs_load {
-            let model_path = self.model_dir(model_id).join("model.onnx");
+            let model_path = manager.onnx_path(spec);
 
             #[cfg(debug_assertions)]
             eprintln!("[vision-engine] loading session from: {}", model_path.display());
@@ -369,13 +149,13 @@ impl VisionEngine {
             #[cfg(debug_assertions)]
             eprintln!("[vision-engine] session ready");
 
-            *lock = Some((model_id.to_string(), session));
+            *lock = Some((spec.id.to_string(), session));
         }
         Ok(lock)
     }
 
-    pub fn embed_image(&self, img: &image::DynamicImage, model_id: &str) -> Result<Vec<f32>> {
-        let size = get_image_size(model_id);
+    pub fn embed_image(&self, manager: &ModelManager, img: &image::DynamicImage, spec: &ModelSpec) -> Result<Vec<f32>> {
+        let size = if spec.id.contains("256") { 256 } else { 224 };
         let resized = img.resize_exact(
             size as u32,
             size as u32,
@@ -394,7 +174,7 @@ impl VisionEngine {
         // Dummy input_ids (batch=1, seq_len=1) — text encoder output is discarded
         let dummy_ids = Array2::<i64>::zeros((1, 1));
 
-        let mut lock = self.get_session(model_id)?;
+        let mut lock = self.get_session(manager, spec)?;
         let (_, session) = lock
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("session not initialized"))?;
@@ -414,7 +194,7 @@ impl VisionEngine {
         Ok(data.to_vec())
     }
 
-    pub fn embed_text(&self, text: &str, model_id: &str) -> Result<Vec<f32>> {
+    pub fn embed_text(&self, manager: &ModelManager, text: &str, spec: &ModelSpec) -> Result<Vec<f32>> {
         const MAX_SEQ_LEN: usize = 64;
 
         let encoding = {
@@ -424,12 +204,12 @@ impl VisionEngine {
                 .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
 
             let needs_load = match &*tok_lock {
-                Some((current_id, _)) => current_id != model_id,
+                Some((current_id, _)) => current_id != spec.id,
                 None => true,
             };
 
             if needs_load {
-                let tok_path = self.model_dir(model_id).join("tokenizer.json");
+                let tok_path = manager.tokenizer_path(spec).ok_or_else(|| anyhow!("Model has no tokenizer"))?;
 
                 #[cfg(debug_assertions)]
                 eprintln!(
@@ -438,7 +218,7 @@ impl VisionEngine {
                 );
 
                 *tok_lock = Some((
-                    model_id.to_string(),
+                    spec.id.to_string(),
                     tokenizers::Tokenizer::from_file(tok_path)
                         .map_err(|e| anyhow::anyhow!("{e}"))?,
                 ));
@@ -461,9 +241,10 @@ impl VisionEngine {
         let input_ids_arr = Array2::from_shape_vec((1, seq_len), input_ids)?;
 
         // Dummy pixel_values — image encoder output is discarded
-        let dummy_pixels = Array4::<f32>::zeros((1, 3, get_image_size(model_id), get_image_size(model_id)));
+        let size = if spec.id.contains("256") { 256 } else { 224 };
+        let dummy_pixels = Array4::<f32>::zeros((1, 3, size, size));
 
-        let mut lock = self.get_session(model_id)?;
+        let mut lock = self.get_session(manager, spec)?;
         let (_, session) = lock
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("session not initialized"))?;
