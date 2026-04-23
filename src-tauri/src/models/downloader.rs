@@ -55,7 +55,7 @@ impl ModelDownloader {
     }
 
     // 2. Fast path — all files already on disk
-    if spec.files.iter().all(|f| dir.join(f.filename).exists()) {
+    if spec.all_files().iter().all(|f| dir.join(f.filename).exists()) {
       self.signal_ready(spec.id);
       return Ok(());
     }
@@ -66,7 +66,7 @@ impl ModelDownloader {
     // 4. Download each missing file
     let client = reqwest::Client::new();
 
-    for file in spec.files {
+    for file in spec.all_files() {
       let dest = dir.join(file.filename);
       if dest.exists() {
         continue;
