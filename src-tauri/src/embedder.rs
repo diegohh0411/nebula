@@ -175,6 +175,8 @@ async fn process_subject_one(
                                 (bbox.y2 - bbox.y1) as f64,
                             ),
                             Some(&face_blob),
+                            None,
+                            None,
                         ).await;
                     }
                     if db::mark_subject_analysis_done(pool, queue_id, image_id).await.is_ok() {

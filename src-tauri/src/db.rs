@@ -625,11 +625,13 @@ pub async fn insert_face(
     subject_id: Option<i64>,
     bbox: (f64, f64, f64, f64),
     embedding: Option<&[u8]>,
+    gender: Option<&str>,
+    age: Option<u8>,
 ) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
     let result = sqlx::query(
-        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, gender, age)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(image_id)
     .bind(subject_id)
@@ -639,6 +641,8 @@ pub async fn insert_face(
     .bind(bbox.3)
     .bind(embedding)
     .bind(now)
+    .bind(gender)
+    .bind(age.map(|a| a as i64))
     .execute(pool)
     .await?;
     Ok(result.last_insert_rowid())
@@ -1320,5 +1324,57 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, subject_id);
         assert_eq!(results[0].1, manual_emb);
+    }
+
+    #[tokio::test]
+    async fn insert_face_stores_gender_and_age() {
+        let pool = make_pool().await;
+
+        let face_id = super::insert_face(
+            &pool,
+            1,
+            None,
+            (10.0, 20.0, 100.0, 100.0),
+            None,
+            Some("Male"),
+            Some(28),
+        ).await.unwrap();
+
+        let row = sqlx::query("SELECT gender, age FROM faces WHERE id = ?")
+            .bind(face_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let gender: Option<String> = row.get("gender");
+        let age: Option<i64> = row.get("age");
+        assert_eq!(gender.as_deref(), Some("Male"));
+        assert_eq!(age, Some(28));
+    }
+
+    #[tokio::test]
+    async fn insert_face_stores_null_gender_and_age() {
+        let pool = make_pool().await;
+
+        let face_id = super::insert_face(
+            &pool,
+            1,
+            None,
+            (10.0, 20.0, 100.0, 100.0),
+            None,
+            None,
+            None,
+        ).await.unwrap();
+
+        let row = sqlx::query("SELECT gender, age FROM faces WHERE id = ?")
+            .bind(face_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let gender: Option<String> = row.get("gender");
+        let age: Option<i64> = row.get("age");
+        assert_eq!(gender, None);
+        assert_eq!(age, None);
     }
 }
