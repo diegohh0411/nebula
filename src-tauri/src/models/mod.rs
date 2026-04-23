@@ -1,4 +1,6 @@
 pub mod registry;
-pub mod downloader;
+pub mod manager;
+pub mod entities;
 
-pub use downloader::{ModelDownloader, ModelDownloadPayload};
+pub use manager::ModelManager;
+pub use entities::*;

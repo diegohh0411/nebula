@@ -42,17 +42,6 @@ pub struct ProcessingStatus {
 // Tauri event payloads
 
 #[derive(Debug, Serialize, Clone)]
-pub struct ModelDownloadPayload {
-    pub file: String,
-    pub bytes_done: u64,
-    pub bytes_total: Option<u64>,
-    /// true on the final chunk for each file
-    pub done: bool,
-    /// non-empty if the download failed
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize, Clone)]
 pub struct ProcessingProgressPayload {
     pub semantic_pending: i64,
     pub subject_pending: i64,

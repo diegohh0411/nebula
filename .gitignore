@@ -46,6 +46,3 @@ testem.log
 .DS_Store
 Thumbs.db
 .worktrees/
-
-# Local ONNX model files (generated via optimum-cli export)
-models/
