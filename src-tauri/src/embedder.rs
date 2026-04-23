@@ -67,11 +67,12 @@ async fn process_semantic_one(
     pool: &SqlitePool,
     app: &AppHandle,
     vision_engine: &crate::vision_engine::VisionEngine,
+    model_manager: &crate::models::ModelManager,
     queue_id: i64,
     image_id: i64,
     attempts: i32,
     index: &crate::vector_index::IndexStore,
-    model_id: String,
+    spec: &crate::models::registry::ModelSpec,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
@@ -84,7 +85,7 @@ async fn process_semantic_one(
     }).await;
 
     let embed_result = match img_res {
-        Ok(Ok(dynamic_img)) => vision_engine.embed_image(&dynamic_img, &model_id),
+        Ok(Ok(dynamic_img)) => vision_engine.embed_image(model_manager, &dynamic_img, spec),
         Ok(Err(e)) => Err(anyhow::anyhow!("failed to open image: {}", e)),
         Err(e) => Err(anyhow::anyhow!("spawn_blocking panicked: {}", e)),
     };
@@ -121,17 +122,18 @@ async fn process_subject_one(
     pool: &SqlitePool,
     app: &AppHandle,
     vision_engine: &crate::vision_engine::VisionEngine,
+    model_manager: &crate::models::ModelManager,
     queue_id: i64,
     image_id: i64,
     attempts: i32,
-    preset: &'static crate::vision_engine::FaceIdConfig,
+    preset: &crate::models::registry::FaceIdPreset,
 ) {
     let image = match db::get_image_by_id(pool, image_id).await {
         Ok(Some(img)) => img,
         _ => return,
     };
 
-    let analyzer = match vision_engine.get_face_analyzer(preset).await {
+    let analyzer = match vision_engine.get_face_analyzer(model_manager, preset).await {
         Ok(a) => a,
         Err(e) => {
             eprintln!("Face analyzer unavailable for image {}: {}", image_id, e);
@@ -205,11 +207,10 @@ pub async fn run_semantic_worker(
     pool: SqlitePool,
     app: AppHandle,
     vision_engine: Arc<crate::vision_engine::VisionEngine>,
+    model_manager: Arc<crate::models::ModelManager>,
     index: crate::vector_index::IndexStore,
     data_dir: std::path::PathBuf,
 ) {
-    vision_engine.wait_until_ready().await;
-
     let semaphore = Arc::new(Semaphore::new(CONCURRENT_WORKERS));
 
     loop {
@@ -227,26 +228,36 @@ pub async fn run_semantic_worker(
             continue;
         }
 
-        let mut handles = vec![];
         let model_id = db::get_setting(&pool, "embedding_model")
             .await
             .unwrap_or(None)
             .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
+        
+        let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
+            .unwrap_or(&crate::models::registry::SIGLIP_BASE);
 
+        // Ensure model is ready before processing batch
+        if let Err(e) = model_manager.ensure_ready(&app, spec).await {
+            eprintln!("[semantic-worker] Model not ready: {}", e);
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+
+        let mut handles = vec![];
         for (queue_id, image_id, attempts) in batch {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
+            let mm_c = Arc::clone(&model_manager);
             let index_c = Arc::clone(&index);
-            let mid_c = model_id.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 process_semantic_one(
-                    &pool_c, &app_c, ve_c.as_ref(),
+                    &pool_c, &app_c, ve_c.as_ref(), mm_c.as_ref(),
                     queue_id, image_id, attempts,
                     &index_c,
-                    mid_c,
+                    spec,
                 ).await;
             }));
         }
@@ -270,16 +281,22 @@ pub async fn run_subject_worker(
     pool: SqlitePool,
     app: AppHandle,
     vision_engine: Arc<crate::vision_engine::VisionEngine>,
+    model_manager: Arc<crate::models::ModelManager>,
 ) {
-    vision_engine.wait_until_ready().await;
+    let preset = &crate::models::registry::BUFFALO_S_PRESET;
 
-    let preset_id = db::get_setting(&pool, "subject_model")
-        .await
-        .unwrap_or(None)
-        .unwrap_or_else(|| crate::vision_engine::FaceIdConfig::default_id().to_string());
-    let preset = crate::vision_engine::FaceIdConfig::get(&preset_id)
-        .unwrap_or(&crate::vision_engine::FaceIdConfig::STANDARD);
-    if let Err(e) = vision_engine.get_face_analyzer(preset).await {
+    // Ensure model is ready before starting
+    if let Err(e) = model_manager.ensure_ready(&app, preset.detector).await {
+        eprintln!("[subject-worker] Detector model not ready: {}", e);
+    }
+    if let Err(e) = model_manager.ensure_ready(&app, preset.embedder).await {
+        eprintln!("[subject-worker] Embedder model not ready: {}", e);
+    }
+    if let Err(e) = model_manager.ensure_ready(&app, preset.gender_age).await {
+        eprintln!("[subject-worker] Gender/age model not ready: {}", e);
+    }
+
+    if let Err(e) = vision_engine.get_face_analyzer(&model_manager, preset).await {
         eprintln!("[subject-worker] Failed to initialize face analyzer: {}", e);
     }
 
@@ -300,13 +317,6 @@ pub async fn run_subject_worker(
             continue;
         }
 
-        let preset_id = db::get_setting(&pool, "subject_model")
-            .await
-            .unwrap_or(None)
-            .unwrap_or_else(|| crate::vision_engine::FaceIdConfig::default_id().to_string());
-        let preset = crate::vision_engine::FaceIdConfig::get(&preset_id)
-            .unwrap_or(&crate::vision_engine::FaceIdConfig::STANDARD);
-
         let had_items = !batch.is_empty();
         let mut handles = vec![];
         for (queue_id, image_id, attempts) in batch {
@@ -314,9 +324,10 @@ pub async fn run_subject_worker(
             let pool_c = pool.clone();
             let app_c = app.clone();
             let ve_c = Arc::clone(&vision_engine);
+            let mm_c = Arc::clone(&model_manager);
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), queue_id, image_id, attempts, preset).await;
+                process_subject_one(&pool_c, &app_c, ve_c.as_ref(), mm_c.as_ref(), queue_id, image_id, attempts, preset).await;
             }));
         }
         for h in handles {

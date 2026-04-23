@@ -13,13 +13,14 @@ mod settings;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub data_dir: PathBuf,
     pub indexer: Arc<indexer::Indexer>,
     pub vision_engine: Arc<vision_engine::VisionEngine>,
+    pub model_manager: Arc<crate::models::ModelManager>,
     pub index: vector_index::IndexStore,
 }
 
@@ -42,6 +43,7 @@ pub fn run() {
             let index: vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
             let vision_engine = Arc::new(vision_engine::VisionEngine::new(data_dir.clone()));
+            let model_manager = Arc::new(crate::models::ModelManager::new(data_dir.clone()));
 
             let indexer = tauri::async_runtime::block_on(
                 indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone())
@@ -52,6 +54,7 @@ pub fn run() {
                 data_dir: data_dir.clone(),
                 indexer,
                 vision_engine: vision_engine.clone(),
+                model_manager: model_manager.clone(),
                 index: index.clone(),
             });
 
@@ -60,7 +63,7 @@ pub fn run() {
                 indexer_rescan.start_rescan().await;
             });
 
-            let vision_engine_model = Arc::clone(&vision_engine);
+            let model_manager_startup = Arc::clone(&model_manager);
             let app_handle_model = app.handle().clone();
             let pool_model = pool.clone();
             tauri::async_runtime::spawn(async move {
@@ -69,24 +72,18 @@ pub fn run() {
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
 
-                if let Err(e) = vision_engine_model.ensure_model_ready(&app_handle_model, &model_id).await {
+                let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
+                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+
+                if let Err(e) = model_manager_startup.ensure_ready(&app_handle_model, spec).await {
                     eprintln!("Model setup failed: {}", e);
-                    let _ = app_handle_model.emit(
-                        "model_download_progress",
-                        crate::models::ModelDownloadPayload {
-                            file: String::new(),
-                            bytes_done: 0,
-                            bytes_total: None,
-                            done: false,
-                            error: Some(e.to_string()),
-                        },
-                    );
                 }
             });
 
             let pool_semantic = pool.clone();
             let app_handle_semantic = app.handle().clone();
             let vision_engine_semantic = Arc::clone(&vision_engine);
+            let model_manager_semantic = Arc::clone(&model_manager);
             let index_semantic = index.clone();
             let data_dir_semantic = data_dir.clone();
             tauri::async_runtime::spawn(async move {
@@ -94,6 +91,7 @@ pub fn run() {
                     pool_semantic,
                     app_handle_semantic,
                     vision_engine_semantic,
+                    model_manager_semantic,
                     index_semantic,
                     data_dir_semantic,
                 ).await;
@@ -102,8 +100,14 @@ pub fn run() {
             let pool_subject = pool.clone();
             let app_handle_subject = app.handle().clone();
             let vision_engine_subject = Arc::clone(&vision_engine);
+            let model_manager_subject = Arc::clone(&model_manager);
             tauri::async_runtime::spawn(async move {
-                embedder::run_subject_worker(pool_subject, app_handle_subject, vision_engine_subject).await;
+                embedder::run_subject_worker(
+                    pool_subject, 
+                    app_handle_subject, 
+                    vision_engine_subject,
+                    model_manager_subject
+                ).await;
             });
 
             Ok(())
