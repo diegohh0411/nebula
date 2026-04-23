@@ -44,7 +44,7 @@ impl VisionEngine {
         let det_path = manager.onnx_path(preset.detector);
         let rec_path = manager.onnx_path(preset.embedder);
 
-        let analyzer = FaceAnalyzer::builder(det_path, rec_path, "")
+        let analyzer = FaceAnalyzer::builder(det_path, rec_path, None)
             .detector_input_size(preset.detector_input_size)
             .build()
             .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))?;
