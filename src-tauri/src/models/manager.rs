@@ -19,12 +19,12 @@ pub struct ModelDownloadPayload {
   pub error: Option<String>,
 }
 
-pub struct ModelDownloader {
+pub struct ModelManager {
   data_dir: PathBuf,
   readiness: std::sync::Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 
-impl ModelDownloader {
+impl ModelManager {
   pub fn new(data_dir: PathBuf) -> Self {
     Self {
       data_dir,
@@ -34,6 +34,14 @@ impl ModelDownloader {
 
   pub fn model_dir(&self, spec: &ModelSpec) -> PathBuf {
     self.data_dir.join("models").join(spec.cache_dir)
+  }
+
+  pub fn onnx_path(&self, spec: &ModelSpec) -> PathBuf {
+    self.model_dir(spec).join(spec.model_file.filename)
+  }
+
+  pub fn tokenizer_path(&self, spec: &ModelSpec) -> Option<PathBuf> {
+    spec.tokenizer_file.as_ref().map(|f| self.model_dir(spec).join(f.filename))
   }
 
   fn signal_ready(&self, model_id: &str) {
@@ -72,7 +80,7 @@ impl ModelDownloader {
         continue;
       }
 
-      let remote = file.remote_path.unwrap_or(file.filename); // We use the remote_path if exists, if not the remote path IS the filename
+      let remote = file.remote_path.unwrap_or(file.filename);
       let url = format!(
         "https://huggingface.co/{}/resolve/main/{}",
         spec.hf_repo, remote
@@ -134,7 +142,7 @@ impl ModelDownloader {
       let guard = self.readiness.lock().unwrap();
       match guard.get(model_id) {
         Some(tx) => tx.subscribe(),
-        None => return, // Model was never registered, shouldn't happen
+        None => return,
       }
     };
 
