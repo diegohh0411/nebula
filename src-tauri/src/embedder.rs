@@ -162,8 +162,9 @@ async fn process_subject_one(
 
             match faces_result {
                 Ok(faces) => {
-                    for (bbox, face_emb) in faces {
+                    for (bbox, face_emb, gender, age) in faces {
                         let face_blob = f32_slice_to_bytes(&face_emb);
+                        let gender_str = format!("{:?}", gender);
                         let _ = db::insert_face(
                             pool,
                             image_id,
@@ -175,8 +176,8 @@ async fn process_subject_one(
                                 (bbox.y2 - bbox.y1) as f64,
                             ),
                             Some(&face_blob),
-                            None,
-                            None,
+                            Some(&gender_str),
+                            Some(age),
                         ).await;
                     }
                     if db::mark_subject_analysis_done(pool, queue_id, image_id).await.is_ok() {
