@@ -73,7 +73,7 @@ pub fn run() {
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
 
                 let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
-                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+                    .unwrap_or(&crate::models::registry::SIGLIP_FAST);
 
                 if let Err(e) = model_manager_startup.ensure_ready(&app_handle_model, spec).await {
                     eprintln!("Model setup failed: {}", e);
@@ -103,8 +103,8 @@ pub fn run() {
             let model_manager_subject = Arc::clone(&model_manager);
             tauri::async_runtime::spawn(async move {
                 embedder::run_subject_worker(
-                    pool_subject, 
-                    app_handle_subject, 
+                    pool_subject,
+                    app_handle_subject,
                     vision_engine_subject,
                     model_manager_subject
                 ).await;

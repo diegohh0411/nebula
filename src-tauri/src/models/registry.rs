@@ -63,24 +63,12 @@ impl ModelSpec {
   }
 }
 
-pub const SIGLIP_BASE: ModelSpec = ModelSpec {
-  id: "diegohh/siglip2-base-patch16-224",
-  hf_repo: "diegohh/siglip2-base-patch16-224",
-  model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-224",
-  model_file: ModelFile { filename: "model.onnx", remote_path: None },
-  tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
-  display_name: "Standard",
-  display_description: "Balanced quality and speed (86M params)",
-  image_size: 224,
-};
-
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   id: "onnx-community/siglip2-base-patch32-256-ONNX",
   hf_repo: "onnx-community/siglip2-base-patch32-256-ONNX",
   model_type: ModelType::TextImageEmbedding,
   cache_dir: "siglip2-base-256",
-  model_file: ModelFile { filename: "model_fp16.onnx", remote_path: Some("onnx/model_fp16.onnx") },
+  model_file: ModelFile { filename: "model.onnx", remote_path: Some("onnx/model_quantized.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Fast",
   display_description: "Optimized for consumer CPUs with larger patches",
@@ -133,7 +121,7 @@ pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
     detector_input_size: (640, 640),
 };
 
-pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE];
+pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_FAST, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE];
 pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET];
 
 impl ModelSpec {
@@ -158,10 +146,10 @@ mod tests {
     fn test_faceid_preset_gender_age_is_not_option() {
         // Verify that gender_age is not an Option type
         let preset = &BUFFALO_S_PRESET;
-        
+
         // This should compile and work without unwrapping or matching on Option
         let gender_age_model = preset.gender_age;
-        
+
         // Verify it's the expected model
         assert_eq!(gender_age_model.id, "buffalo_s_gender_age");
         assert_eq!(gender_age_model.hf_repo, "public-data/insightface");
@@ -171,11 +159,11 @@ mod tests {
     fn test_find_by_id_works() {
         let preset = FaceIdPreset::find_by_id("blitz");
         assert!(preset.is_some());
-        
+
         let preset = preset.unwrap();
         assert_eq!(preset.id, "blitz");
         assert_eq!(preset.name, "Blitz");
-        
+
         // Verify gender_age is accessible directly (not an Option)
         assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
     }
