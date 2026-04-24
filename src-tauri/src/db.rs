@@ -773,7 +773,10 @@ pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Resul
     let row = sqlx::query(
         r#"SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at,
                   (SELECT COUNT(DISTINCT image_id) FROM faces WHERE subject_id = s.id) as photo_count,
-                  (SELECT COUNT(*) FROM faces WHERE subject_id = s.id) as face_count
+                  (SELECT COUNT(*) FROM faces WHERE subject_id = s.id) as face_count,
+                  (SELECT gender FROM faces WHERE subject_id = s.id AND gender IS NOT NULL
+                   GROUP BY gender ORDER BY COUNT(*) DESC LIMIT 1) AS predicted_gender,
+                  (SELECT ROUND(AVG(age)) FROM faces WHERE subject_id = s.id AND age IS NOT NULL) AS predicted_age
            FROM subjects s
            WHERE s.id = ?"#,
     )
@@ -781,16 +784,21 @@ pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Resul
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|r| crate::models::SubjectDetail {
-        subject: Subject {
-            id: r.get("id"),
-            name: r.get("name"),
-            thumbnail_face_id: r.get("thumbnail_face_id"),
-            subject_type: r.get("type"),
-            added_at: r.get("added_at"),
-        },
-        photo_count: r.get("photo_count"),
-        face_count: r.get("face_count"),
+    Ok(row.map(|r| {
+        let predicted_age: Option<f64> = r.get("predicted_age");
+        crate::models::SubjectDetail {
+            subject: Subject {
+                id: r.get("id"),
+                name: r.get("name"),
+                thumbnail_face_id: r.get("thumbnail_face_id"),
+                subject_type: r.get("type"),
+                added_at: r.get("added_at"),
+            },
+            photo_count: r.get("photo_count"),
+            face_count: r.get("face_count"),
+            predicted_gender: r.get("predicted_gender"),
+            predicted_age: predicted_age.map(|a| a as u8),
+        }
     }))
 }
 
@@ -1376,5 +1384,53 @@ mod tests {
         let age: Option<i64> = row.get("age");
         assert_eq!(gender, None);
         assert_eq!(age, None);
+    }
+
+    #[tokio::test]
+    async fn get_subject_detail_with_counts_returns_aggregated_gender_age() {
+        let pool = make_pool().await;
+
+        let subject_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        // Insert 3 faces: 2 Male age 30, 1 Female age 20
+        // Expected: gender = Male (majority), age = 27 (avg of 30,30,20)
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, gender, age)
+             VALUES (1, ?, 0,0,1,1, 0, 'Male', 30)"
+        ).bind(subject_id).execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, gender, age)
+             VALUES (2, ?, 0,0,1,1, 0, 'Male', 30)"
+        ).bind(subject_id).execute(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, gender, age)
+             VALUES (3, ?, 0,0,1,1, 0, 'Female', 20)"
+        ).bind(subject_id).execute(&pool).await.unwrap();
+
+        let detail = super::get_subject_detail_with_counts(&pool, subject_id).await.unwrap().unwrap();
+        assert_eq!(detail.predicted_gender, Some("Male".to_string()));
+        assert_eq!(detail.predicted_age, Some(27));
+    }
+
+    #[tokio::test]
+    async fn get_subject_detail_with_counts_returns_none_when_no_gender_age() {
+        let pool = make_pool().await;
+
+        let subject_id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at)
+             VALUES (1, ?, 0,0,1,1, 0)"
+        ).bind(subject_id).execute(&pool).await.unwrap();
+
+        let detail = super::get_subject_detail_with_counts(&pool, subject_id).await.unwrap().unwrap();
+        assert_eq!(detail.predicted_gender, None);
+        assert_eq!(detail.predicted_age, None);
     }
 }

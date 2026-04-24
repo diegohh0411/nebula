@@ -115,6 +115,8 @@ pub struct SubjectDetail {
     pub subject: Subject,
     pub photo_count: i64,
     pub face_count: i64,
+    pub predicted_gender: Option<String>,
+    pub predicted_age: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
