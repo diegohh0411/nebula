@@ -62,17 +62,17 @@ impl VisionEngine {
         analyzer: &FaceAnalyzer,
         img: &image::DynamicImage,
         _preset: &FaceIdPreset,
-    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>, face_id::gender_age::Gender, u8)>> {
         Self::analyze_faces_full(analyzer, img)
     }
 
     fn analyze_faces_full(
         analyzer: &face_id::analyzer::FaceAnalyzer,
         img: &image::DynamicImage,
-    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
+    ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>, face_id::gender_age::Gender, u8)>> {
         let faces = analyzer.analyze(img)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect())
+        Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding, f.gender, f.age)).collect())
     }
 
     fn get_session(&self, manager: &ModelManager, spec: &ModelSpec) -> Result<std::sync::MutexGuard<'_, Option<(String, Session)>>> {
