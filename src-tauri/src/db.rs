@@ -1414,4 +1414,41 @@ mod tests {
         let results = get_manual_faces_by_subject(&pool).await.unwrap();
         assert!(results.is_empty(), "subjects without manual faces should not appear");
     }
+
+    #[tokio::test]
+    async fn get_manual_faces_by_subject_empty_db() {
+        let pool = make_pool().await;
+        let results = get_manual_faces_by_subject(&pool).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_manual_faces_by_subject_multiple_manual_per_subject() {
+        let pool = make_pool().await;
+
+        let s1: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Insert 5 manual faces for subject 1
+        for i in 0..5 {
+            sqlx::query(
+                "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual)
+                 VALUES (?, ?, 0,0,1,1, X'00000000', 0, 1)",
+            )
+            .bind(i + 1)
+            .bind(s1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let results = get_manual_faces_by_subject(&pool).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, s1);
+        assert_eq!(results[0].1.len(), 5);
+    }
 }
