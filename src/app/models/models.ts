@@ -96,6 +96,8 @@ export interface SubjectDetail {
   subject: Subject;
   photo_count: number;
   face_count: number;
+  predicted_gender: string | null;
+  predicted_age: number | null;
 }
 
 export interface MergeSuggestion {
