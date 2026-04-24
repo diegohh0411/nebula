@@ -64,31 +64,31 @@ impl ModelSpec {
 }
 
 pub const SIGLIP_BASE: ModelSpec = ModelSpec {
-  id: "diegohh/siglip2-base-patch16-224",
-  hf_repo: "diegohh/siglip2-base-patch16-224",
+  id: "onnx-community/siglip2-base-patch16-naflex-ONNX",
+  hf_repo: "onnx-community/siglip2-base-patch16-naflex-ONNX",
   model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-224",
-  model_file: ModelFile { filename: "model.onnx", remote_path: None },
+  cache_dir: "siglip2-base-patch16-naflex",
+  model_file: ModelFile { filename: "model_f16.onnx", remote_path: Some("onnx/model_fp16.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Standard",
   display_description: "Balanced quality and speed (86M params)",
-  image_size: 224,
+  image_size: 256,
 };
 
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   id: "onnx-community/siglip2-base-patch32-256-ONNX",
   hf_repo: "onnx-community/siglip2-base-patch32-256-ONNX",
   model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-256",
-  model_file: ModelFile { filename: "model_fp16.onnx", remote_path: Some("onnx/model_fp16.onnx") },
+  cache_dir: "siglip2-base-patch32-256",
+  model_file: ModelFile { filename: "model_q4.onnx", remote_path: Some("onnx/model_q4.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Fast",
   display_description: "Optimized for consumer CPUs with larger patches",
   image_size: 256,
 };
 
-pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
-  id: "buffalo_s_recognition",
+pub const BUFFALO_L_RECOGNITION: ModelSpec = ModelSpec {
+  id: "buffalo_l_recognition",
   hf_repo: "immich-app/buffalo_s",
   model_type: ModelType::FaceEmbedding,
   cache_dir: "buffalo_s",
@@ -111,14 +111,14 @@ pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
   image_size: 0,
 };
 
-pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
-  id: "buffalo_s_gender_age",
+pub const BUFFALO_L_GENDER_AGE: ModelSpec = ModelSpec {
+  id: "buffalo_l_gender_age",
   hf_repo: "public-data/insightface",
   model_type: ModelType::FaceEmbedding,
   cache_dir: "buffalo_s",
   model_file: ModelFile { filename: "genderage.onnx", remote_path: Some("models/buffalo_l/genderage.onnx") },
   tokenizer_file: None,
-  display_name: "Buffalo S Gender/Age",
+  display_name: "Buffalo L Gender/Age",
   display_description: "Gender and age estimation model",
   image_size: 0,
 };
@@ -128,12 +128,12 @@ pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
     name: "Blitz",
     description: "Maximum inference speed, for bulk processing",
     detector: &BUFFALO_S_DETECTION,
-    embedder: &BUFFALO_S_RECOGNITION,
-    gender_age: &BUFFALO_S_GENDER_AGE,
+    embedder: &BUFFALO_L_RECOGNITION,
+    gender_age: &BUFFALO_L_GENDER_AGE,
     detector_input_size: (640, 640),
 };
 
-pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE];
+pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_L_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_L_GENDER_AGE];
 pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET];
 
 impl ModelSpec {
@@ -158,10 +158,10 @@ mod tests {
     fn test_faceid_preset_gender_age_is_not_option() {
         // Verify that gender_age is not an Option type
         let preset = &BUFFALO_S_PRESET;
-        
+
         // This should compile and work without unwrapping or matching on Option
         let gender_age_model = preset.gender_age;
-        
+
         // Verify it's the expected model
         assert_eq!(gender_age_model.id, "buffalo_s_gender_age");
         assert_eq!(gender_age_model.hf_repo, "public-data/insightface");
@@ -171,11 +171,11 @@ mod tests {
     fn test_find_by_id_works() {
         let preset = FaceIdPreset::find_by_id("blitz");
         assert!(preset.is_some());
-        
+
         let preset = preset.unwrap();
         assert_eq!(preset.id, "blitz");
         assert_eq!(preset.name, "Blitz");
-        
+
         // Verify gender_age is accessible directly (not an Option)
         assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
     }
