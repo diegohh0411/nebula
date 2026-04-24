@@ -643,4 +643,87 @@ mod tests {
         let result = find_best_subject_match(&rep_emb, &subject_centroids, SUBJECT_MATCH_THRESHOLD);
         assert_eq!(result, None, "should not match when similarity is below threshold");
     }
+
+    #[test]
+    fn transitive_chain_a_b_c() {
+        // A-B edge, B-C edge, no A-C edge. All 3 in same component.
+        let faces: Vec<(usize, Vec<f32>)> = vec![
+            (0, emb(&[1.0, 0.0, 0.0])),
+            (1, emb(&[0.95, 0.05, 0.0])),  // near face 0
+            (2, emb(&[0.90, 0.10, 0.0])),  // near face 1, not near face 0
+        ];
+
+        let mut uf = UnionFind::new(3);
+        build_knn_graph(&faces, 2, 0.55, &mut uf);
+
+        let components = uf.components();
+        assert_eq!(components.len(), 1, "transitive chain should produce one component");
+
+        let mut members: Vec<usize> = components.values().flatten().copied().collect();
+        members.sort();
+        assert_eq!(members, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn must_link_edge_below_threshold() {
+        // Two faces with cosine similarity ~0.0 but must-linked
+        let mut uf = UnionFind::new(2);
+        inject_must_link_edges(&[(0, 1)], &mut uf);
+        assert_eq!(uf.find(0), uf.find(1));
+    }
+
+    #[test]
+    fn cannot_link_conflict_prevents_assignment() {
+        // Component has manual faces from subject 10 and subject 20
+        let face_subjects: Vec<Option<i64>> = vec![Some(10), Some(20), None];
+        let is_manual: Vec<bool> = vec![true, true, false];
+        let manual_by_subject: HashMap<i64, Vec<i64>> = {
+            let mut m = HashMap::new();
+            m.insert(10, vec![0]);
+            m.insert(20, vec![1]);
+            m
+        };
+
+        let result = assign_component(&face_subjects, &is_manual, &manual_by_subject);
+        assert_eq!(result, None, "conflict component should stay unassigned");
+    }
+
+    #[test]
+    fn single_node_noise() {
+        let face_subjects: Vec<Option<i64>> = vec![None];
+        let is_manual: Vec<bool> = vec![false];
+        let manual_by_subject: HashMap<i64, Vec<i64>> = HashMap::new();
+
+        let result = assign_component(&face_subjects, &is_manual, &manual_by_subject);
+        assert_eq!(result, None, "single unassigned face should be noise");
+    }
+
+    #[test]
+    fn subject_match_via_representative() {
+        // Component of 4 unassigned faces near subject 10's centroid
+        let rep_emb = emb(&[0.95, 0.05, 0.0]);
+        let subject_centroids: HashMap<i64, Vec<f32>> = {
+            let mut m = HashMap::new();
+            m.insert(10, emb(&[1.0, 0.0, 0.0]));
+            m.insert(20, emb(&[0.0, 1.0, 0.0]));
+            m
+        };
+
+        let result = find_best_subject_match(&rep_emb, &subject_centroids, SUBJECT_MATCH_THRESHOLD);
+        assert_eq!(result, Some(10), "should match subject 10 via representative");
+    }
+
+    #[test]
+    fn new_subject_creation_no_near_subject() {
+        // Component of 3 unassigned faces with no nearby subject
+        let rep_emb = emb(&[0.0, 0.0, 1.0]); // orthogonal to all subjects
+        let subject_centroids: HashMap<i64, Vec<f32>> = {
+            let mut m = HashMap::new();
+            m.insert(10, emb(&[1.0, 0.0, 0.0]));
+            m
+        };
+
+        let result = find_best_subject_match(&rep_emb, &subject_centroids, SUBJECT_MATCH_THRESHOLD);
+        assert_eq!(result, None, "should not match any subject");
+    }
 }
