@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 
 CREATE INDEX IF NOT EXISTS idx_cache_key ON embedding_cache(cache_key);
 
-CREATE TABLE IF NOT EXISTS merge_suggestions (
+CREATE TABLE merge_suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
     subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
@@ -112,22 +112,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
 );
 "#;
 
-const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
-    (1, "
-        DROP TABLE IF EXISTS merge_suggestions;
-        CREATE TABLE merge_suggestions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-            subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-            score REAL NOT NULL,
-            created_at INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
-            CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
-            CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
-        );
-    "),
-];
+const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
@@ -707,6 +692,29 @@ pub async fn get_manual_face_embeddings_by_subject(
     Ok(rows)
 }
 
+/// Returns (subject_id, Vec<face_id>) for all subjects that have at least one is_manual=1 face.
+/// Used to build must-link pairs and detect cannot-link conflicts.
+pub async fn get_manual_faces_by_subject(pool: &SqlitePool) -> Result<Vec<(i64, Vec<i64>)>> {
+    let rows = sqlx::query(
+        "SELECT subject_id, id FROM faces \
+         WHERE subject_id IS NOT NULL AND is_manual = 1 \
+         ORDER BY subject_id, id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut map: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+    for row in &rows {
+        let subject_id: i64 = row.get("subject_id");
+        let face_id: i64 = row.get("id");
+        map.entry(subject_id).or_default().push(face_id);
+    }
+
+    let mut result: Vec<(i64, Vec<i64>)> = map.into_iter().collect();
+    result.sort_by_key(|(sid, _)| *sid);
+    Ok(result)
+}
+
 pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> {
     let row = sqlx::query(
         "SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual
@@ -715,7 +723,7 @@ pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> 
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.as_ref().map(|r| Face {
         id: r.get("id"),
         image_id: r.get("image_id"),
@@ -807,7 +815,7 @@ pub async fn get_largest_face_for_subject(pool: &SqlitePool, subject_id: i64) ->
     .bind(subject_id)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.map(|r| r.get("id")))
 }
 
@@ -840,9 +848,9 @@ pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Ve
 pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
     let like_query = format!("%{}%", query);
     let rows = sqlx::query(
-        "SELECT id, name, thumbnail_face_id, type, added_at 
-         FROM subjects 
-         WHERE name LIKE ? COLLATE NOCASE 
+        "SELECT id, name, thumbnail_face_id, type, added_at
+         FROM subjects
+         WHERE name LIKE ? COLLATE NOCASE
          ORDER BY added_at DESC"
     )
     .bind(like_query)
@@ -1312,5 +1320,98 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, subject_id);
         assert_eq!(results[0].1, manual_emb);
+    }
+
+    #[tokio::test]
+    async fn get_manual_faces_by_subject_groups_correctly() {
+        let pool = make_pool().await;
+
+        // Create two subjects
+        let s1: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let s2: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Subject 1: 2 manual faces, 1 auto face
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual)
+             VALUES (1, ?, 0,0,1,1, X'00000000', 0, 1)",
+        )
+        .bind(s1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual)
+             VALUES (2, ?, 0,0,1,1, X'00000000', 0, 1)",
+        )
+        .bind(s1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual)
+             VALUES (3, ?, 0,0,1,1, X'00000000', 0, 0)",
+        )
+        .bind(s1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Subject 2: 1 manual face
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual)
+             VALUES (4, ?, 0,0,1,1, X'00000000', 0, 1)",
+        )
+        .bind(s2)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let results = get_manual_faces_by_subject(&pool).await.unwrap();
+        // Should have exactly 2 groups
+        assert_eq!(results.len(), 2);
+
+        let s1_faces = results.iter().find(|(sid, _)| *sid == s1).unwrap();
+        assert_eq!(s1_faces.1.len(), 2, "subject 1 should have 2 manual faces");
+
+        let s2_faces = results.iter().find(|(sid, _)| *sid == s2).unwrap();
+        assert_eq!(s2_faces.1.len(), 1, "subject 2 should have 1 manual face");
+    }
+
+    #[tokio::test]
+    async fn get_manual_faces_by_subject_excludes_subjects_without_manual() {
+        let pool = make_pool().await;
+
+        let s1: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Only auto faces, no manual
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual)
+             VALUES (1, ?, 0,0,1,1, X'00000000', 0, 0)",
+        )
+        .bind(s1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let results = get_manual_faces_by_subject(&pool).await.unwrap();
+        assert!(results.is_empty(), "subjects without manual faces should not appear");
     }
 }
