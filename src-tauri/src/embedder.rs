@@ -164,7 +164,15 @@ async fn process_subject_one(
                 Ok(faces) => {
                     for (bbox, face_emb) in faces {
                         let face_blob = f32_slice_to_bytes(&face_emb);
-                        let _ = db::insert_face(
+
+                        // Greedy 1-NN assignment: assign immediately to nearest existing face's subject.
+                        // The batch graph recluster will correct any mistakes.
+                        let existing = match db::get_all_faces_with_embeddings(pool).await {
+                            Ok(f) => f,
+                            Err(_) => vec![],
+                        };
+
+                        let new_face_id = match db::insert_face(
                             pool,
                             image_id,
                             None,
@@ -175,7 +183,34 @@ async fn process_subject_one(
                                 (bbox.y2 - bbox.y1) as f64,
                             ),
                             Some(&face_blob),
-                        ).await;
+                        ).await {
+                            Ok(id) => id,
+                            Err(e) => {
+                                eprintln!("[embedder] Failed to insert face for image {}: {}", image_id, e);
+                                continue;
+                            }
+                        };
+
+                        // Find nearest existing face by cosine similarity
+                        let nearest = existing
+                            .iter()
+                            .filter(|(id, _, _, _)| *id != new_face_id)
+                            .filter_map(|(id, _, emb_bytes, _)| {
+                                let emb = bytes_to_f32_vec(emb_bytes).ok()?;
+                                let sim = cosine_similarity(&face_emb, &emb);
+                                if sim > 0.55 {
+                                    Some((id, sim))
+                                } else {
+                                    None
+                                }
+                            })
+                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                        if let Some((nearest_face_id, _sim)) = nearest {
+                            if let Some(subject_id) = db::get_face_subject_id(pool, *nearest_face_id).await.unwrap_or(None) {
+                                let _ = db::update_face_subject(pool, new_face_id, Some(subject_id)).await;
+                            }
+                        }
                     }
                     if db::mark_subject_analysis_done(pool, queue_id, image_id).await.is_ok() {
                         let _ = app.emit("image_updated", ImageUpdatedPayload { image_id });
@@ -349,5 +384,38 @@ pub async fn run_subject_worker(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cosine_similarity_identical_vectors() {
+        let v = vec![1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors() {
+        let a = vec![1.0, 0.0];
+        let b = vec![0.0, 1.0];
+        assert!((cosine_similarity(&a, &b)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_opposite_vectors() {
+        let a = vec![1.0, 0.0];
+        let b = vec![-1.0, 0.0];
+        assert!((cosine_similarity(&a, &b) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bytes_roundtrip() {
+        let original = vec![1.0, -0.5, 0.3, 0.0];
+        let bytes = f32_slice_to_bytes(&original);
+        let decoded = bytes_to_f32_vec(&bytes).unwrap();
+        assert_eq!(original, decoded);
     }
 }
