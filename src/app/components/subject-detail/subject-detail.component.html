@@ -41,6 +41,14 @@
             <span>{{ detail()?.photo_count || 0 }} photos</span>
             <span class="w-1 h-1 rounded-full bg-border"></span>
             <span>{{ detail()?.face_count || 0 }} faces</span>
+            @if (detail()?.predicted_gender) {
+              <span class="w-1 h-1 rounded-full bg-border"></span>
+              <span>Predicted gender: {{ detail()?.predicted_gender }}</span>
+            }
+            @if (detail()?.predicted_age != null) {
+              <span class="w-1 h-1 rounded-full bg-border"></span>
+              <span>Predicted age: ~{{ detail()?.predicted_age }}</span>
+            }
           </div>
         </div>
       </div>
