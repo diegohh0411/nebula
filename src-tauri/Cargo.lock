@@ -3481,7 +3481,6 @@ dependencies = [
  "face_id",
  "futures",
  "half",
- "hdbscan",
  "hf-hub",
  "image",
  "ndarray",
