@@ -128,11 +128,7 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
             CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
             CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
         );
-    "),
-    (2, "
-        ALTER TABLE faces ADD COLUMN gender TEXT;
-        ALTER TABLE faces ADD COLUMN age INTEGER;
-    "),
+    ")
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -725,7 +721,7 @@ pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> 
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.as_ref().map(|r| Face {
         id: r.get("id"),
         image_id: r.get("image_id"),
@@ -825,7 +821,7 @@ pub async fn get_largest_face_for_subject(pool: &SqlitePool, subject_id: i64) ->
     .bind(subject_id)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.map(|r| r.get("id")))
 }
 
@@ -858,9 +854,9 @@ pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Ve
 pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
     let like_query = format!("%{}%", query);
     let rows = sqlx::query(
-        "SELECT id, name, thumbnail_face_id, type, added_at 
-         FROM subjects 
-         WHERE name LIKE ? COLLATE NOCASE 
+        "SELECT id, name, thumbnail_face_id, type, added_at
+         FROM subjects
+         WHERE name LIKE ? COLLATE NOCASE
          ORDER BY added_at DESC"
     )
     .bind(like_query)
