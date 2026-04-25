@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 
 CREATE INDEX IF NOT EXISTS idx_cache_key ON embedding_cache(cache_key);
 
-CREATE TABLE merge_suggestions (
+CREATE TABLE IF NOT EXISTS merge_suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
     subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,

@@ -269,7 +269,7 @@ pub async fn run_semantic_worker(
             .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
         
         let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
-            .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+            .unwrap_or(&crate::models::registry::SIGLIP_FAST);
 
         // Ensure model is ready before processing batch
         if let Err(e) = model_manager.ensure_ready(&app, spec).await {

@@ -73,7 +73,7 @@ pub fn run() {
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
 
                 let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
-                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+                    .unwrap_or(&crate::models::registry::SIGLIP_FAST);
 
                 if let Err(e) = model_manager_startup.ensure_ready(&app_handle_model, spec).await {
                     eprintln!("Model setup failed: {}", e);

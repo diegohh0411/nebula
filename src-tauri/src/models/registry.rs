@@ -63,18 +63,6 @@ impl ModelSpec {
   }
 }
 
-pub const SIGLIP_BASE: ModelSpec = ModelSpec {
-  id: "onnx-community/siglip2-base-patch16-naflex-ONNX",
-  hf_repo: "onnx-community/siglip2-base-patch16-naflex-ONNX",
-  model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-patch16-naflex",
-  model_file: ModelFile { filename: "model_f16.onnx", remote_path: Some("onnx/model_fp16.onnx") },
-  tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
-  display_name: "Standard",
-  display_description: "Balanced quality and speed (86M params)",
-  image_size: 256,
-};
-
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   id: "onnx-community/siglip2-base-patch32-256-ONNX",
   hf_repo: "onnx-community/siglip2-base-patch32-256-ONNX",
@@ -89,6 +77,30 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
 
 pub const BUFFALO_L_RECOGNITION: ModelSpec = ModelSpec {
   id: "buffalo_l_recognition",
+  hf_repo: "immich-app/buffalo_l",
+  model_type: ModelType::FaceEmbedding,
+  cache_dir: "buffalo_l",
+  model_file: ModelFile { filename: "recognition.onnx", remote_path: Some("recognition/model.onnx") },
+  tokenizer_file: None,
+  display_name: "Buffalo L Recognition",
+  display_description: "Industry standard face recognition model",
+  image_size: 0,
+};
+
+pub const BUFFALO_L_DETECTION: ModelSpec = ModelSpec {
+  id: "buffalo_l_detection",
+  hf_repo: "immich-app/buffalo_l",
+  model_type: ModelType::FaceDetection,
+  cache_dir: "buffalo_l",
+  model_file: ModelFile { filename: "detection.onnx", remote_path: Some("detection/model.onnx") },
+  tokenizer_file: None,
+  display_name: "Buffalo L Detection",
+  display_description: "Industry standard face detection model",
+  image_size: 0,
+};
+
+pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
+  id: "buffalo_s_recognition",
   hf_repo: "immich-app/buffalo_s",
   model_type: ModelType::FaceEmbedding,
   cache_dir: "buffalo_s",
@@ -115,7 +127,7 @@ pub const BUFFALO_L_GENDER_AGE: ModelSpec = ModelSpec {
   id: "buffalo_l_gender_age",
   hf_repo: "public-data/insightface",
   model_type: ModelType::FaceEmbedding,
-  cache_dir: "buffalo_s",
+  cache_dir: "buffalo_l",
   model_file: ModelFile { filename: "genderage.onnx", remote_path: Some("models/buffalo_l/genderage.onnx") },
   tokenizer_file: None,
   display_name: "Buffalo L Gender/Age",
@@ -123,18 +135,28 @@ pub const BUFFALO_L_GENDER_AGE: ModelSpec = ModelSpec {
   image_size: 0,
 };
 
-pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
-    id: "blitz",
-    name: "Blitz",
-    description: "Maximum inference speed, for bulk processing",
-    detector: &BUFFALO_S_DETECTION,
+pub const BUFFALO_L_PRESET: FaceIdPreset = FaceIdPreset {
+    id: "standard",
+    name: "Standard",
+    description: "Industry standard, best precision",
+    detector: &BUFFALO_L_DETECTION,
     embedder: &BUFFALO_L_RECOGNITION,
     gender_age: &BUFFALO_L_GENDER_AGE,
     detector_input_size: (640, 640),
 };
 
-pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_L_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_L_GENDER_AGE];
-pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET];
+pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
+    id: "blitz",
+    name: "Blitz",
+    description: "Maximum inference speed, for bulk processing",
+    detector: &BUFFALO_S_DETECTION,
+    embedder: &BUFFALO_S_RECOGNITION,
+    gender_age: &BUFFALO_L_GENDER_AGE,
+    detector_input_size: (640, 640),
+};
+
+pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_FAST, &BUFFALO_L_RECOGNITION, &BUFFALO_L_DETECTION, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_L_GENDER_AGE];
+pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_L_PRESET, &BUFFALO_S_PRESET];
 
 impl ModelSpec {
   /// Find a model specification by its ID
@@ -163,7 +185,7 @@ mod tests {
         let gender_age_model = preset.gender_age;
 
         // Verify it's the expected model
-        assert_eq!(gender_age_model.id, "buffalo_s_gender_age");
+        assert_eq!(gender_age_model.id, "buffalo_l_gender_age");
         assert_eq!(gender_age_model.hf_repo, "public-data/insightface");
     }
 
@@ -177,6 +199,6 @@ mod tests {
         assert_eq!(preset.name, "Blitz");
 
         // Verify gender_age is accessible directly (not an Option)
-        assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
+        assert_eq!(preset.gender_age.id, "buffalo_l_gender_age");
     }
 }

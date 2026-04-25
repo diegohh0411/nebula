@@ -116,7 +116,7 @@ pub async fn search(
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
                 let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
-                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+                    .unwrap_or(&crate::models::registry::SIGLIP_FAST);
 
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_text(&state.model_manager, query, spec).map_err(map_err)?;
@@ -174,7 +174,7 @@ pub async fn search(
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
                 let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
-                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+                    .unwrap_or(&crate::models::registry::SIGLIP_FAST);
 
                 let img = image::load_from_memory(&raw_bytes).map_err(map_err)?;
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
