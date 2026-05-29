@@ -85,8 +85,7 @@ impl ModelSpec {
 }
 
 pub const SIGLIP_BASE: ModelSpec = ModelSpec {
-  // id is kept stable so stored user settings survive the hf_repo correction.
-  id: "onnx-community/siglip2-base-patch16-224",
+  id: "onnx-community/siglip2-base-patch16-224-ONNX",
   hf_repo: "onnx-community/siglip2-base-patch16-224-ONNX",
   model_type: ModelType::TextImageEmbedding,
   cache_dir: "siglip2-base-224-split",
