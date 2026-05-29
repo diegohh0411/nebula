@@ -147,5 +147,5 @@ pub struct SearchResult {
 pub enum SearchQuery {
     Text { query: String },
     ImageId { image_id: i64 },
-    ImageBytes { data: String, mime_type: String },
+    ImageBytes { data: String, #[allow(dead_code)] mime_type: String },
 }

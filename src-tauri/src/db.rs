@@ -4,8 +4,6 @@ use std::path::Path;
 
 use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
 
-const LATEST_VERSION: u32 = 1;
-
 const BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
@@ -453,18 +451,6 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
     Ok(rows.iter().map(row_to_image).collect())
 }
 
-pub async fn get_image_by_path(pool: &SqlitePool, path: &str) -> Result<Option<Image>> {
-    let row = sqlx::query(
-        "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
-                semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
-         FROM images WHERE path = ?",
-    )
-    .bind(path)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.as_ref().map(row_to_image))
-}
-
 pub async fn get_image_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Image>> {
     let row = sqlx::query(
         "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
@@ -878,25 +864,6 @@ pub async fn get_image_ids_for_subjects(pool: &SqlitePool, subject_ids: &[i64]) 
     Ok(rows.into_iter().map(|r| r.get("image_id")).collect())
 }
 
-pub async fn get_all_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Option<i64>, Vec<u8>, bool)>> {
-    let rows = sqlx::query(
-        "SELECT id, subject_id, embedding, is_manual FROM faces WHERE embedding IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| {
-            let id: i64 = r.get("id");
-            let subject_id: Option<i64> = r.get("subject_id");
-            let emb: Option<Vec<u8>> = r.get("embedding");
-            let is_manual: bool = r.get::<i32, _>("is_manual") != 0;
-            emb.map(|e| (id, subject_id, e, is_manual))
-        })
-        .collect())
-}
-
 pub async fn get_unassigned_faces_with_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
     let rows = sqlx::query(
         "SELECT id, embedding FROM faces WHERE subject_id IS NULL AND embedding IS NOT NULL",
@@ -1098,24 +1065,6 @@ pub async fn find_subject_by_name(pool: &SqlitePool, name: &str, exclude_id: i64
         subject_type: r.get("type"),
         added_at: r.get("added_at"),
     }))
-}
-
-pub async fn get_faces_by_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<(i64, Vec<u8>)>> {
-    let rows = sqlx::query(
-        "SELECT id, embedding FROM faces WHERE subject_id = ? AND embedding IS NOT NULL",
-    )
-    .bind(subject_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| {
-            let id: i64 = r.get("id");
-            let emb: Option<Vec<u8>> = r.get("embedding");
-            emb.map(|e| (id, e))
-        })
-        .collect())
 }
 
 pub async fn assign_face_to_subject(pool: &SqlitePool, face_id: i64, subject_id: i64) -> Result<()> {

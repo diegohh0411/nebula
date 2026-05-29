@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use image::DynamicImage;
 
 pub fn thumbnail_cache_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("thumbnails")
@@ -15,26 +16,6 @@ pub fn thumbnail_path_for(data_dir: &Path, image_id: i64) -> PathBuf {
 
 pub fn face_crop_path_for(data_dir: &Path, face_id: i64) -> PathBuf {
     face_crop_cache_dir(data_dir).join(format!("{}.webp", face_id))
-}
-
-/// Generate a 800px-longest-side WebP thumbnail.
-/// Runs in a blocking thread to avoid blocking the async runtime.
-pub async fn generate_thumbnail(src_path: PathBuf, dest_path: PathBuf) -> Result<()> {
-    // Ensure the parent directory exists
-    if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let img = image::open(&src_path)?;
-        // thumbnail() preserves aspect ratio, fitting within 800×800
-        let thumb = img.thumbnail(800, 800);
-        thumb.save_with_format(&dest_path, image::ImageFormat::WebP)?;
-        Ok(())
-    })
-    .await??;
-
-    Ok(())
 }
 
 /// Generate a 200x200 square WebP face crop.
@@ -67,4 +48,43 @@ pub async fn generate_face_crop(
     .await??;
 
     Ok(())
+}
+
+/// Write an 800px-longest-side WebP thumbnail from an already-decoded image.
+pub fn write_thumbnail_from_image(img: &DynamicImage, dest_path: &std::path::Path) -> Result<()> {
+    if let Some(parent) = dest_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let thumb = if img.width() > 800 || img.height() > 800 {
+        img.resize(800, 800, image::imageops::FilterType::CatmullRom)
+    } else {
+        img.clone()
+    };
+    thumb.save_with_format(dest_path, image::ImageFormat::WebP)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn red(w: u32, h: u32) -> image::DynamicImage {
+        let mut img = image::RgbImage::new(w, h);
+        for p in img.pixels_mut() {
+            *p = image::Rgb([200, 50, 50]);
+        }
+        image::DynamicImage::ImageRgb8(img)
+    }
+
+    #[test]
+    fn thumbnail_from_image_fits_within_box_and_writes_file() {
+        let img = red(1600, 1200);
+        let dest = std::env::temp_dir().join(format!("nebula_thumb_{}.webp", std::process::id()));
+        write_thumbnail_from_image(&img, &dest).unwrap();
+        let loaded = image::open(&dest).unwrap();
+        assert!(loaded.width() <= 800 && loaded.height() <= 800);
+        assert!(loaded.width() == 800 || loaded.height() == 800);
+        std::fs::remove_file(&dest).ok();
+    }
+
 }

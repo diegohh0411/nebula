@@ -11,18 +11,17 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use crate::{
     db,
     models::{DebouncedEvent, DebouncedEventKind, SyncProgressPayload, SyncCompletePayload},
-    thumbnail,
     watcher::FolderWatcher,
 };
 
 pub struct Indexer {
     pool: SqlitePool,
+    #[allow(dead_code)]
     data_dir: PathBuf,
     folder_map: RwLock<Vec<(PathBuf, i64)>>,
     app: AppHandle,
     watcher: Arc<Mutex<FolderWatcher>>,
     hash_semaphore: Arc<Semaphore>,
-    thumb_semaphore: Arc<Semaphore>,
     scan_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -121,7 +120,6 @@ impl Indexer {
             app,
             watcher,
             hash_semaphore: Arc::new(Semaphore::new(4)),
-            thumb_semaphore: Arc::new(Semaphore::new(8)),
             scan_mutex: Arc::new(tokio::sync::Mutex::new(())),
         });
 
@@ -208,7 +206,6 @@ impl Indexer {
                 if let Err(e) = db::enqueue_image(&self.pool, image_id).await {
                     eprintln!("Failed to enqueue image {}: {}", image_id, e);
                 }
-                self.spawn_thumbnail(image_id, path.to_path_buf());
 
                 let _ = self.app.emit(
                     "image_added",
@@ -272,7 +269,6 @@ impl Indexer {
                     if let Err(e) = db::enqueue_image(&self.pool, existing.id).await {
                         eprintln!("Failed to enqueue image {}: {}", existing.id, e);
                     }
-                    self.spawn_thumbnail(existing.id, path.to_path_buf());
                     let _ = self.app.emit(
                         "image_updated",
                         crate::models::ImageUpdatedPayload {
@@ -282,30 +278,6 @@ impl Indexer {
                 }
             }
         }
-    }
-
-    fn spawn_thumbnail(&self, image_id: i64, src: PathBuf) {
-        let thumb_path = thumbnail::thumbnail_path_for(&self.data_dir, image_id);
-        let thumb_path_str = thumb_path.to_string_lossy().to_string();
-        let pool = self.pool.clone();
-        let app = self.app.clone();
-        let sem = self.thumb_semaphore.clone();
-        tokio::spawn(async move {
-            let _permit = sem.acquire().await;
-            if let Err(e) = thumbnail::generate_thumbnail(src, thumb_path).await {
-                eprintln!("Thumbnail generation failed: {}", e);
-                return;
-            }
-            if db::update_thumbnail_path(&pool, image_id, &thumb_path_str)
-                .await
-                .is_ok()
-            {
-                let _ = app.emit(
-                    "image_updated",
-                    crate::models::ImageUpdatedPayload { image_id },
-                );
-            }
-        });
     }
 
     pub async fn start_rescan(&self) {
