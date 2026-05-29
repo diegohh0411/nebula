@@ -5,15 +5,22 @@ description: Use when picking up, implementing, or updating a Nebula task from N
 
 # Nebula — Notion Task Workflow
 
-## Prerequisites
+## Prerequisites — pick your interface
 
-Verify `ntn` CLI is available before doing anything else:
+Check which interface is available and use it consistently throughout the session:
 
 ```bash
-which ntn && ntn --version
+which ntn && ntn --version && echo "USE_NTN" || echo "USE_MCP"
 ```
 
-If missing: install via `npm i -g notionhq-cli` and run `ntn login`.
+- **`ntn` available** → use the CLI patterns in this skill (preferred)
+- **`ntn` missing** → fall back to the MCP tool patterns marked `[MCP]` below
+
+If on a machine where you can install:
+```bash
+curl -fsSL https://ntn.dev | bash   # or: npm install --global ntn
+ntn login
+```
 
 ## Key IDs (hardcoded — skip discovery)
 
@@ -25,8 +32,9 @@ If missing: install via `npm i -g notionhq-cli` and run `ntn login`.
 
 ## Fetch a Task by ID
 
-When the user says "pick up task TT-3" or "implement task 3" — the number is always an integer:
+When the user says "pick up task TT-3" or "implement task 3" — the number is always an integer.
 
+**[CLI]**
 ```bash
 # List all tasks (quick overview)
 ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb --json | \
@@ -41,7 +49,7 @@ for r in d['results']:
     print(f'TT-{n}: {name} [{status}] — {r[\"id\"]}')
 "
 
-# Fetch a single task by number (replace 3 with the actual number)
+# Fetch a single task by number (replace 3 with the actual number — integer, not string)
 ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb \
   --filter '{"property":"ID","unique_id":{"equals":3}}' --json
 
@@ -49,7 +57,19 @@ ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb \
 ntn pages get <page-id>
 ```
 
-The `page-id` is the `id` field in the query result (UUID, no dashes needed).
+**[MCP]** Use `notion-search` with the data source URL, then `notion-fetch` for the full page:
+```
+# Step 1 — find the task (pass data_source_url to scope to Tasks only)
+notion-search(
+  query="TT-3",
+  data_source_url="collection://36fe954d-b476-8008-9aca-000b5ef89feb"
+)
+
+# Step 2 — fetch full content by the page ID returned above
+notion-fetch(id="<page-id-from-results>")
+```
+
+The `page-id` is the `id` field in the result (UUID). MCP search may not support `unique_id` filtering directly, so search by the task name or number and confirm the ID matches.
 
 ## Status Lifecycle
 
@@ -78,7 +98,7 @@ Noticed → Detailed → In development → Ready for review
 
 ## Update a Task Property
 
-Get the page UUID from the datasource query first, then PATCH:
+**[CLI]** Get the page UUID from the datasource query first, then PATCH:
 
 ```bash
 PAGE_ID=<uuid-from-query>
@@ -97,43 +117,59 @@ ntn api v1/pages/$PAGE_ID -X PATCH \
   'properties[LOC removed][number]:=87'
 ```
 
+**[MCP]** Use `notion-update-page` with the page ID and property patches:
+```
+notion-update-page(
+  id="<page-id>",
+  properties={
+    "Status": {"status": {"name": "In development"}},
+    "PR number": {"number": 42},
+    "LOC added": {"number": 312},
+    "LOC removed": {"number": 87}
+  }
+)
+```
+Pass only the properties you need to change; omit the rest.
+
 ## Implementation Workflow (step by step)
 
-1. **Fetch the task** — read name, description, instructions with `ntn pages get <id>`
-2. **Set status → In development** via PATCH
+1. **Fetch the task** — read name, description, instructions (CLI: `ntn pages get <id>` / MCP: `notion-fetch(id=<id>)`)
+2. **Set status → In development** using the update patterns above
 3. **Use `superpowers:using-git-worktrees`** to create an isolated branch
 4. **Use `superpowers:brainstorming`** before starting any non-trivial implementation
 5. **Use `superpowers:writing-plans`** if the task is multi-step
 6. **Use `superpowers:subagent-driven-development`** to execute the plan
 7. **Open a PR** on GitHub, never push directly to main
-8. **Set status → Ready for review**, record PR number:
-   ```bash
-   ntn api v1/pages/$PAGE_ID -X PATCH \
-     'properties[Status][status][name]=Ready for review' \
-     'properties[PR number][number]:=<PR_NUMBER>'
-   ```
+8. **Set status → Ready for review** and record PR number (use whichever update pattern applies)
 
 ## Post-Merge Checklist (run after human merges)
 
-Once the PR is merged, the AI agent must update these fields:
+Get LOC stats from the merged PR, then update Notion:
 
 ```bash
-# Get LOC stats from the merged PR
+# Works in both environments — gh CLI is standard
 gh pr view <PR_NUMBER> --json additions,deletions
+```
 
-# Then update Notion
+Then write back (CLI):
+```bash
 ntn api v1/pages/$PAGE_ID -X PATCH \
   'properties[LOC added][number]:=<additions>' \
   'properties[LOC removed][number]:=<deletions>'
 ```
 
-Status will already be **Merged** (set by the human or confirmed after merge). Verify it:
+Or (MCP):
+```
+notion-update-page(id="<page-id>", properties={"LOC added": {"number": <additions>}, "LOC removed": {"number": <deletions>}})
+```
 
+Verify the status is **Merged** — CLI:
 ```bash
 ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb \
   --filter '{"property":"ID","unique_id":{"equals":<N>}}' --json | \
   python3 -c "import sys,json; d=json.load(sys.stdin); print(d['results'][0]['properties']['Status']['status']['name'])"
 ```
+MCP: `notion-fetch(id="<page-id>")` and read the Status property.
 
 ## Common Mistakes
 
@@ -141,6 +177,8 @@ ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb \
 |---|---|
 | Using `collection://` prefix with `ntn datasources query` | Use bare UUID: `36fe954d-b476-8008-9aca-000b5ef89feb` |
 | Passing task ID as a string in filter | Use `:=N` (integer), not `=N` (string) |
+| Mixing CLI and MCP in the same session | Pick one at the start and stick with it |
+| Using `notion-search` with the database URL instead of data source URL | Pass `collection://36fe954d-b476-8008-9aca-000b5ef89feb` as `data_source_url` |
 | Merging PR yourself | Never. Set status to **Ready for review** and stop. |
 | Pushing commits directly to `main` | Always use a branch + PR. |
 | Forgetting LOC update after merge | Always run post-merge checklist above. |
