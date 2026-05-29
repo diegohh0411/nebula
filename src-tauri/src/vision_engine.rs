@@ -9,9 +9,11 @@ use std::sync::Arc;
 
 use crate::models::manager::ModelManager;
 use crate::models::registry::{ModelSpec, FaceIdPreset};
+use crate::pipeline::ComputePlacement;
 
 pub struct VisionEngine {
     pub data_dir: PathBuf,
+    pub placement: ComputePlacement,
     vision_session: std::sync::Mutex<Option<(String, Session)>>,
     text_session: std::sync::Mutex<Option<(String, Session)>>,
     tokenizer: std::sync::Mutex<Option<(String, tokenizers::Tokenizer)>>,
@@ -22,6 +24,7 @@ impl VisionEngine {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
+            placement: ComputePlacement::Cpu,
             vision_session: std::sync::Mutex::new(None),
             text_session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
@@ -47,8 +50,18 @@ impl VisionEngine {
         let rec_path = manager.onnx_path(preset.embedder);
         let gender_age_path = manager.onnx_path(preset.gender_age);
 
+        #[cfg(feature = "directml")]
+        let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> = if self.placement == ComputePlacement::Gpu {
+            vec![ort::ep::DirectML::default().build()]
+        } else {
+            vec![]
+        };
+        #[cfg(not(feature = "directml"))]
+        let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> = vec![];
+
         let analyzer = FaceAnalyzer::builder(det_path, rec_path, gender_age_path)
             .detector_input_size(preset.detector_input_size)
+            .with_execution_providers(&dml_eps)
             .build()
             .map_err(|e| anyhow::anyhow!("failed to build face analyzer: {}", e))?;
 
@@ -77,13 +90,25 @@ impl VisionEngine {
         Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect())
     }
 
-    fn load_session(path: &std::path::Path) -> anyhow::Result<Session> {
-        Session::builder()
+    fn load_session(path: &std::path::Path, placement: ComputePlacement) -> anyhow::Result<Session> {
+        let mut builder = Session::builder()
             .map_err(|e| anyhow!("failed to create session builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| anyhow!("failed to set optimization level: {e}"))?
             .with_intra_threads(num_cpus::get_physical())
-            .map_err(|e| anyhow!("failed to set intra threads: {e}"))?
+            .map_err(|e| anyhow!("failed to set intra threads: {e}"))?;
+
+        #[cfg(feature = "directml")]
+        if placement == ComputePlacement::Gpu {
+            builder = builder
+                .with_execution_providers([ort::ep::DirectML::default().build()])
+                .map_err(|e| anyhow!("failed to register DirectML EP: {e}"))?;
+        }
+
+        #[cfg(not(feature = "directml"))]
+        let _ = placement;
+
+        builder
             .commit_from_file(path)
             .map_err(|e| anyhow!("failed to load ONNX model '{}': {e}", path.display()))
     }
@@ -111,7 +136,7 @@ impl VisionEngine {
         let mut lock = self.vision_session.lock().map_err(|e| anyhow!("mutex poisoned: {e}"))?;
         let needs_load = match &*lock { Some((id, _)) => id != spec.id, None => true };
         if needs_load {
-            *lock = Some((spec.id.to_string(), Self::load_session(&path)?));
+            *lock = Some((spec.id.to_string(), Self::load_session(&path, self.placement)?));
         }
         let (_, session) = lock.as_mut().unwrap();
 
@@ -177,7 +202,7 @@ impl VisionEngine {
         let mut lock = self.text_session.lock().map_err(|e| anyhow!("mutex poisoned: {e}"))?;
         let needs_load = match &*lock { Some((id, _)) => id != spec.id, None => true };
         if needs_load {
-            *lock = Some((spec.id.to_string(), Self::load_session(&path)?));
+            *lock = Some((spec.id.to_string(), Self::load_session(&path, self.placement)?));
         }
         let (_, session) = lock.as_mut().unwrap();
 
