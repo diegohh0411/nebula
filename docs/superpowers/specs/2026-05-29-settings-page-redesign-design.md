@@ -13,7 +13,7 @@ The settings page has three problems to fix in one pass: a first-run bug where n
 **Fix.** Move the default logic to the backend. `get_setting` will return the system default when the key is absent rather than `null`. The frontend drops its hardcoded fallbacks entirely and trusts the backend to always return a valid ID.
 
 - `embedding_model` default: the `id` of the first entry in the available models list
-- `subject_model` default: `"standard"`
+- `subject_model` default: the `id` of the first entry in the available subject models list
 
 The frontend `loadSettings()` simplifies to: set `currentModel` and `currentSubjectModel` directly from what `get_setting` returns, with no fallback string.
 
