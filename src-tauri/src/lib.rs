@@ -82,33 +82,16 @@ pub fn run() {
                 }
             });
 
-            let pool_semantic = pool.clone();
-            let app_handle_semantic = app.handle().clone();
-            let vision_engine_semantic = Arc::clone(&vision_engine);
-            let model_manager_semantic = Arc::clone(&model_manager);
-            let index_semantic = index.clone();
-            let data_dir_semantic = data_dir.clone();
+            let pool_pipe = pool.clone();
+            let app_pipe = app.handle().clone();
+            let ve_pipe = Arc::clone(&vision_engine);
+            let mm_pipe = Arc::clone(&model_manager);
+            let index_pipe = index.clone();
+            let data_dir_pipe = data_dir.clone();
             tauri::async_runtime::spawn(async move {
-                embedder::run_semantic_worker(
-                    pool_semantic,
-                    app_handle_semantic,
-                    vision_engine_semantic,
-                    model_manager_semantic,
-                    index_semantic,
-                    data_dir_semantic,
-                ).await;
-            });
-
-            let pool_subject = pool.clone();
-            let app_handle_subject = app.handle().clone();
-            let vision_engine_subject = Arc::clone(&vision_engine);
-            let model_manager_subject = Arc::clone(&model_manager);
-            tauri::async_runtime::spawn(async move {
-                embedder::run_subject_worker(
-                    pool_subject, 
-                    app_handle_subject, 
-                    vision_engine_subject,
-                    model_manager_subject
+                pipeline::run_pipeline(
+                    pool_pipe, app_pipe, ve_pipe, mm_pipe, index_pipe, data_dir_pipe,
+                    pipeline::PipelineConfig::default(),
                 ).await;
             });
 
