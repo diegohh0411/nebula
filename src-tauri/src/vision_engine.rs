@@ -151,7 +151,7 @@ impl VisionEngine {
 
         let dim = data.len() / n;
         anyhow::ensure!(
-            shape.first().copied() == Some(n as i64) || data.len() % n == 0,
+            shape.first().copied() == Some(n as i64) && data.len() % n == 0,
             "unexpected batch output shape {:?} for n={}", shape, n
         );
         Ok((0..n).map(|i| data[i * dim..(i + 1) * dim].to_vec()).collect())
@@ -183,9 +183,10 @@ impl VisionEngine {
                         .map_err(|e| anyhow!("{e}"))?,
                 ));
             }
-            tok_lock.as_ref().unwrap().1
-                .encode(text, true)
-                .map_err(|e| anyhow!("{e}"))?
+            // Clone the tokenizer out of the lock before encoding (encoding is CPU-bound)
+            let tokenizer = tok_lock.as_ref().unwrap().1.clone();
+            drop(tok_lock);
+            tokenizer.encode(text, true).map_err(|e| anyhow!("{e}"))?
         };
 
         let input_ids: Vec<i64> = encoding.get_ids().iter()

@@ -38,7 +38,7 @@ use tokio::sync::oneshot;
 async fn write_faces(
     pool: &sqlx::SqlitePool,
     image_id: i64,
-    queue_id: i64,
+    sub_qid: i64,
     img_w: f64,
     img_h: f64,
     faces: Vec<(face_id::detector::BoundingBox, Vec<f32>)>,
@@ -59,7 +59,7 @@ async fn write_faces(
         )
         .await;
     }
-    let _ = crate::db::mark_subject_analysis_done(pool, queue_id, image_id).await;
+    let _ = crate::db::mark_subject_analysis_done(pool, sub_qid, image_id).await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -94,29 +94,34 @@ pub async fn run_pipeline(
     let face_tx = face_actor::spawn_face_actor(analyzer);
 
     loop {
-        let batch = {
-            let sem_batch = crate::db::get_queue_batch(&pool, "semantic", config.batch_size as i64).await;
-            let sub_batch = crate::db::get_queue_batch(&pool, "subject", config.batch_size as i64).await;
+        // Pull both queues
+        let sem_batch = crate::db::get_queue_batch(&pool, "semantic", config.batch_size as i64).await.unwrap_or_default();
+        let sub_batch = crate::db::get_queue_batch(&pool, "subject", config.batch_size as i64).await.unwrap_or_default();
 
-            let mut combined = sem_batch.unwrap_or_default();
-            combined.extend(sub_batch.unwrap_or_default());
-            // deduplicate by image_id
-            let mut seen = std::collections::HashSet::new();
-            combined.retain(|(_, image_id, _)| seen.insert(*image_id));
-            combined
-        };
-
-        if batch.is_empty() {
+        if sem_batch.is_empty() && sub_batch.is_empty() {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
 
+        // Merge by image_id, tracking separate queue_ids for each operation
+        let mut image_work: std::collections::HashMap<i64, (Option<(i64, i32)>, Option<(i64, i32)>)> = std::collections::HashMap::new();
+        for (qid, image_id, attempts) in sem_batch {
+            image_work.entry(image_id).or_default().0 = Some((qid, attempts));
+        }
+        for (qid, image_id, attempts) in sub_batch {
+            image_work.entry(image_id).or_default().1 = Some((qid, attempts));
+        }
+        let batch: Vec<(i64, Option<(i64, i32)>, Option<(i64, i32)>)> = image_work
+            .into_iter()
+            .map(|(image_id, (sem, sub))| (image_id, sem, sub))
+            .collect();
+
         // Stage 1: bounded-parallel decode
         let sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
         let mut handles = Vec::new();
-        for (queue_id, image_id, attempts) in batch {
+        for (image_id, sem_entry, sub_entry) in batch {
             let pool_c = pool.clone();
-            let permit = sem.clone().acquire_owned().await.unwrap();
+            let permit = sem.clone().acquire_owned().await.expect("local semaphore closed unexpectedly");
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 let image = crate::db::get_image_by_id(&pool_c, image_id).await.ok().flatten()?;
@@ -127,7 +132,7 @@ pub async fn run_pipeline(
                 .await
                 .ok()?
                 .ok()?;
-                Some((queue_id, image_id, attempts, d))
+                Some((image_id, sem_entry, sub_entry, d))
             }));
         }
         let mut decoded = Vec::new();
@@ -138,67 +143,112 @@ pub async fn run_pipeline(
         }
 
         // Stage 2 & 3: dispatch embed + face, write results
-        for (queue_id, image_id, _attempts, d) in decoded {
+        for (image_id, sem_entry, sub_entry, d) in decoded {
             let img_w = d.full.width() as f64;
             let img_h = d.full.height() as f64;
 
             if config.placement == ComputePlacement::Cpu {
                 // Serialize: embed first, then face (avoid thrashing CPU with both)
-                let (etx, erx) = oneshot::channel();
-                let _ = embed_tx
-                    .send(embed_actor::EmbedRequest {
-                        decoded: d.clone(),
-                        reply: etx,
-                    })
-                    .await;
-                if let Ok(Ok(emb)) = erx.await {
-                    let blob = crate::embedder::f32_slice_to_bytes(&emb);
-                    if crate::db::mark_semantic_analysis_done(&pool, queue_id, image_id, &blob)
-                        .await
-                        .is_ok()
-                    {
-                        index.write().unwrap().add(image_id, &emb);
+                if let Some((sem_qid, _)) = sem_entry {
+                    let (etx, erx) = oneshot::channel();
+                    let _ = embed_tx
+                        .send(embed_actor::EmbedRequest {
+                            decoded: d.clone(),
+                            reply: etx,
+                        })
+                        .await;
+                    if let Ok(Ok(emb)) = erx.await {
+                        let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                        if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
+                            .await
+                            .is_ok()
+                        {
+                            index.write().unwrap().add(image_id, &emb);
+                        }
                     }
                 }
 
-                let (ftx, frx) = oneshot::channel();
-                let _ = face_tx
-                    .send(face_actor::FaceRequest {
-                        decoded: d.clone(),
-                        reply: ftx,
-                    })
-                    .await;
-                if let Ok(Ok(faces)) = frx.await {
-                    write_faces(&pool, image_id, queue_id, img_w, img_h, faces).await;
+                if let Some((sub_qid, _)) = sub_entry {
+                    let (ftx, frx) = oneshot::channel();
+                    let _ = face_tx
+                        .send(face_actor::FaceRequest {
+                            decoded: d.clone(),
+                            reply: ftx,
+                        })
+                        .await;
+                    if let Ok(Ok(faces)) = frx.await {
+                        write_faces(&pool, image_id, sub_qid, img_w, img_h, faces).await;
+                    }
                 }
             } else {
                 // Concurrent: embed on iGPU, face on CPU — dispatch both before awaiting
-                let (etx, erx) = oneshot::channel();
-                let _ = embed_tx
-                    .send(embed_actor::EmbedRequest {
-                        decoded: d.clone(),
-                        reply: etx,
-                    })
-                    .await;
-                let (ftx, frx) = oneshot::channel();
-                let _ = face_tx
-                    .send(face_actor::FaceRequest {
-                        decoded: d.clone(),
-                        reply: ftx,
-                    })
-                    .await;
+                let erx = if let Some((_, _)) = sem_entry {
+                    let (etx, erx) = oneshot::channel();
+                    let _ = embed_tx
+                        .send(embed_actor::EmbedRequest {
+                            decoded: d.clone(),
+                            reply: etx,
+                        })
+                        .await;
+                    Some(erx)
+                } else {
+                    None
+                };
+                let frx = if let Some((_, _)) = sub_entry {
+                    let (ftx, frx) = oneshot::channel();
+                    let _ = face_tx
+                        .send(face_actor::FaceRequest {
+                            decoded: d.clone(),
+                            reply: ftx,
+                        })
+                        .await;
+                    Some(frx)
+                } else {
+                    None
+                };
 
-                if let Ok(Ok(emb)) = erx.await {
-                    let blob = crate::embedder::f32_slice_to_bytes(&emb);
-                    if crate::db::mark_semantic_analysis_done(&pool, queue_id, image_id, &blob)
-                        .await
-                        .is_ok()
-                    {
-                        index.write().unwrap().add(image_id, &emb);
+                // Use tokio::join! for true concurrency between embed and face
+                match (erx, frx) {
+                    (Some(erx), Some(frx)) => {
+                        let (emb_result, face_result) = tokio::join!(erx, frx);
+                        if let Ok(Ok(emb)) = emb_result {
+                            let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                            if let Some((sem_qid, _)) = sem_entry {
+                                if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
+                                    .await
+                                    .is_ok()
+                                {
+                                    index.write().unwrap().add(image_id, &emb);
+                                }
+                            }
+                        }
+                        if let Ok(Ok(faces)) = face_result {
+                            if let Some((sub_qid, _)) = sub_entry {
+                                write_faces(&pool, image_id, sub_qid, img_w, img_h, faces).await;
+                            }
+                        }
                     }
-                }
-                if let Ok(Ok(faces)) = frx.await {
-                    write_faces(&pool, image_id, queue_id, img_w, img_h, faces).await;
+                    (Some(erx), None) => {
+                        if let Ok(Ok(emb)) = erx.await {
+                            let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                            if let Some((sem_qid, _)) = sem_entry {
+                                if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
+                                    .await
+                                    .is_ok()
+                                {
+                                    index.write().unwrap().add(image_id, &emb);
+                                }
+                            }
+                        }
+                    }
+                    (None, Some(frx)) => {
+                        if let Ok(Ok(faces)) = frx.await {
+                            if let Some((sub_qid, _)) = sub_entry {
+                                write_faces(&pool, image_id, sub_qid, img_w, img_h, faces).await;
+                            }
+                        }
+                    }
+                    (None, None) => {}
                 }
             }
 
