@@ -16,6 +16,7 @@ use crate::{
 
 pub struct Indexer {
     pool: SqlitePool,
+    #[allow(dead_code)]
     data_dir: PathBuf,
     folder_map: RwLock<Vec<(PathBuf, i64)>>,
     app: AppHandle,

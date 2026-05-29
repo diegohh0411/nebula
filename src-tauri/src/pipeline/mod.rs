@@ -99,6 +99,12 @@ pub async fn run_pipeline(
     if let Err(e) = manager.ensure_ready(&app, spec).await {
         eprintln!("[pipeline] embed model not ready: {e}");
     }
+    for face_spec in [preset.detector, preset.embedder, preset.gender_age] {
+        if let Err(e) = manager.ensure_ready(&app, face_spec).await {
+            eprintln!("[pipeline] face model not ready ({}): {e}", face_spec.id);
+            return;
+        }
+    }
     let analyzer = match engine.get_face_analyzer(&manager, preset).await {
         Ok(a) => a,
         Err(e) => {
