@@ -106,14 +106,18 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   id: "onnx-community/siglip2-base-patch32-256-ONNX",
   hf_repo: "onnx-community/siglip2-base-patch32-256-ONNX",
   model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-256",
-  model_file: ModelFile { filename: "model_fp16.onnx", remote_path: Some("onnx/model_fp16.onnx") },
+  cache_dir: "siglip2-base-256-split",
+  // model_file points at the vision tower so "ready" checks pass with the same
+  // logic used by SIGLIP_BASE; the text tower is declared separately below.
+  model_file: ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Fast",
-  display_description: "Optimized for consumer CPUs with larger patches",
+  display_description: "Optimized for consumer CPUs — 32px patches = 64 tokens vs 196 for Standard",
   image_size: 256,
-  vision_file: None,
-  text_file: None,
+  vision_file: Some(ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") }),
+  text_file: Some(ModelFile { filename: "text_model.onnx", remote_path: Some("onnx/text_model.onnx") }),
+  // Same tensor names as SIGLIP_BASE — onnx-community uses a consistent export
+  // convention across all SigLIP2 model variants.
   vision_input: "pixel_values",
   vision_output: "image_embeds",
   text_input: "input_ids",
