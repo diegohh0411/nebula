@@ -366,11 +366,15 @@ pub async fn run_pipeline(
             let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
             let thumb_path_str = thumb_path.to_string_lossy().to_string();
             let d_thumb = d.clone();
-            let _ = tokio::task::spawn_blocking(move || {
+            let write_ok = tokio::task::spawn_blocking(move || {
                 crate::thumbnail::write_thumbnail_from_image(d_thumb.full.as_ref(), &thumb_path)
             })
-            .await;
-            let _ = crate::db::update_thumbnail_path(&pool, image_id, &thumb_path_str).await;
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+            if write_ok {
+                let _ = crate::db::update_thumbnail_path(&pool, image_id, &thumb_path_str).await;
+            }
             let _ = app.emit(
                 "image_updated",
                 crate::models::ImageUpdatedPayload { image_id },
