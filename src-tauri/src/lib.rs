@@ -4,6 +4,7 @@ mod db;
 mod embedder;
 mod models;
 mod pipeline;
+mod preprocess;
 mod search;
 mod thumbnail;
 mod vision_engine;
