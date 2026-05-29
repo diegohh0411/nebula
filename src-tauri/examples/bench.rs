@@ -1,9 +1,11 @@
 //! End-to-end throughput benchmark.
-//! Usage: NEBULA_BENCH_DIR=path/to/folder cargo run --release --example bench
 //!
-//! Decodes every JPEG/PNG in the folder and runs the current embed + face paths,
-//! printing per-stage timings and images/sec. This is the baseline that every
-//! optimization task is measured against.
+//! Decode only:
+//!   NEBULA_BENCH_DIR=/path/to/images cargo run --release --example bench
+//!
+//! Decode + embed:
+//!   NEBULA_BENCH_DIR=/path/to/images NEBULA_DATA_DIR=/path/to/app-data \
+//!     cargo run --release --example bench
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -45,22 +47,46 @@ fn main() {
     assert!(!images.is_empty(), "no images found in {}", dir.display());
     eprintln!("benchmarking {} images from {}", images.len(), dir.display());
 
+    // Embed stage is optional — enabled when NEBULA_DATA_DIR is set to the
+    // directory that contains the `models/` subdirectory (the app's data dir).
+    let embed_ctx = std::env::var("NEBULA_DATA_DIR").ok().map(|d| {
+        let data_dir = PathBuf::from(d);
+        let engine = nebula_lib::vision_engine::VisionEngine::new(
+            data_dir.clone(),
+            nebula_lib::pipeline::ComputePlacement::Cpu,
+        );
+        let manager = nebula_lib::models::ModelManager::new(data_dir);
+        (engine, manager)
+    });
+    let spec = &nebula_lib::models::registry::SIGLIP_BASE;
+
     let mut decode = Stage::default();
+    let mut embed = Stage::default();
 
     let wall = Instant::now();
     for path in &images {
         let t = Instant::now();
-        let _img = image::open(path).expect("decode");
+        let img = image::open(path).expect("decode");
         decode.add(t.elapsed().as_secs_f64() * 1000.0);
-        // NOTE: embed/face stages are wired in once the pipeline exposes a
-        // reusable single-image entry point (Task 9). For the baseline run we
-        // measure decode only; record this number now.
+
+        if let Some((engine, manager)) = &embed_ctx {
+            let t = Instant::now();
+            match engine.embed_image(manager, &img, spec) {
+                Ok(_) => embed.add(t.elapsed().as_secs_f64() * 1000.0),
+                Err(e) => { eprintln!("embed failed (stopping embed stage): {e}"); break; }
+            }
+        }
     }
     let secs = wall.elapsed().as_secs_f64();
 
     println!("--- bench results ---");
     println!("images:        {}", images.len());
     println!("decode avg ms: {:.1}", decode.avg());
+    if embed.count > 0 {
+        println!("embed avg ms:  {:.1}", embed.avg());
+    } else {
+        println!("embed:         (set NEBULA_DATA_DIR to enable)");
+    }
     println!("wall secs:     {:.2}", secs);
     println!("images/sec:    {:.2}", images.len() as f64 / secs);
 }
