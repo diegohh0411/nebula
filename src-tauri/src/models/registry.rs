@@ -85,8 +85,9 @@ impl ModelSpec {
 }
 
 pub const SIGLIP_BASE: ModelSpec = ModelSpec {
+  // id is kept stable so stored user settings survive the hf_repo correction.
   id: "onnx-community/siglip2-base-patch16-224",
-  hf_repo: "onnx-community/siglip2-base-patch16-224",
+  hf_repo: "onnx-community/siglip2-base-patch16-224-ONNX",
   model_type: ModelType::TextImageEmbedding,
   cache_dir: "siglip2-base-224-split",
   model_file: ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") },
@@ -97,9 +98,9 @@ pub const SIGLIP_BASE: ModelSpec = ModelSpec {
   vision_file: Some(ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") }),
   text_file: Some(ModelFile { filename: "text_model.onnx", remote_path: Some("onnx/text_model.onnx") }),
   vision_input: "pixel_values",
-  vision_output: "image_embeds",
+  vision_output: "pooler_output",
   text_input: "input_ids",
-  text_output: "text_embeds",
+  text_output: "pooler_output",
 };
 
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
@@ -109,19 +110,19 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   cache_dir: "siglip2-base-256-split",
   // model_file points at the vision tower so "ready" checks pass with the same
   // logic used by SIGLIP_BASE; the text tower is declared separately below.
-  model_file: ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") },
+  model_file: ModelFile { filename: "vision_model_quantized.onnx", remote_path: Some("onnx/vision_model_quantized.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Fast",
-  display_description: "Optimized for consumer CPUs — 32px patches = 64 tokens vs 196 for Standard",
+  display_description: "Optimized for consumer CPUs — INT8 quantized, 32px patches (64 tokens vs 196)",
   image_size: 256,
-  vision_file: Some(ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") }),
-  text_file: Some(ModelFile { filename: "text_model.onnx", remote_path: Some("onnx/text_model.onnx") }),
-  // Same tensor names as SIGLIP_BASE — onnx-community uses a consistent export
-  // convention across all SigLIP2 model variants.
+  vision_file: Some(ModelFile { filename: "vision_model_quantized.onnx", remote_path: Some("onnx/vision_model_quantized.onnx") }),
+  text_file: Some(ModelFile { filename: "text_model_quantized.onnx", remote_path: Some("onnx/text_model_quantized.onnx") }),
+  // Confirmed by inspecting the ONNX graph: onnx-community exports all SigLIP2
+  // variants with pooler_output (not image_embeds/text_embeds).
   vision_input: "pixel_values",
-  vision_output: "image_embeds",
+  vision_output: "pooler_output",
   text_input: "input_ids",
-  text_output: "text_embeds",
+  text_output: "pooler_output",
 };
 
 pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
