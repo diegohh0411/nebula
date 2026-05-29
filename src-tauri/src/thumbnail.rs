@@ -61,31 +61,6 @@ pub fn write_thumbnail_from_image(img: &DynamicImage, dest_path: &std::path::Pat
     Ok(())
 }
 
-/// Write a 200x200 square WebP face crop from an already-decoded image.
-/// `bbox` is relative `(x, y, w, h)` in [0,1].
-#[allow(dead_code)]
-pub fn write_face_crop_from_image(
-    img: &DynamicImage,
-    dest_path: &std::path::Path,
-    bbox: (f64, f64, f64, f64),
-) -> Result<()> {
-    if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let (img_w, img_h) = (img.width() as f64, img.height() as f64);
-    let x = (bbox.0 * img_w).max(0.0).min(img_w - 1.0) as u32;
-    let y = (bbox.1 * img_h).max(0.0).min(img_h - 1.0) as u32;
-    let max_w = img_w - x as f64;
-    let max_h = img_h - y as f64;
-    let w = (bbox.2 * img_w).min(max_w).max(1.0) as u32;
-    let h = (bbox.3 * img_h).min(max_h).max(1.0) as u32;
-
-    let face = img.crop_imm(x, y, w, h);
-    let face_resized = face.resize_exact(200, 200, image::imageops::FilterType::CatmullRom);
-    face_resized.save_with_format(dest_path, image::ImageFormat::WebP)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,15 +84,4 @@ mod tests {
         std::fs::remove_file(&dest).ok();
     }
 
-    #[test]
-    fn face_crop_from_image_is_square_200() {
-        let img = red(1000, 800);
-        let dest = std::env::temp_dir().join(format!("nebula_face_{}.webp", std::process::id()));
-        // bbox in relative coords: x=0.25, y=0.25, w=0.5, h=0.5
-        write_face_crop_from_image(&img, &dest, (0.25, 0.25, 0.5, 0.5)).unwrap();
-        let loaded = image::open(&dest).unwrap();
-        assert_eq!(loaded.width(), 200);
-        assert_eq!(loaded.height(), 200);
-        std::fs::remove_file(&dest).ok();
-    }
 }
