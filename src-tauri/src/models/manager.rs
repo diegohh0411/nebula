@@ -43,6 +43,10 @@ impl ModelManager {
     self.model_dir(spec).join(spec.model_file.filename)
   }
 
+  pub fn model_file_path(&self, spec: &ModelSpec, file: &crate::models::registry::ModelFile) -> std::path::PathBuf {
+    self.model_dir(spec).join(file.filename)
+  }
+
   pub fn tokenizer_path(&self, spec: &ModelSpec) -> Option<PathBuf> {
     spec.tokenizer_file.as_ref().map(|f| self.model_dir(spec).join(f.filename))
   }

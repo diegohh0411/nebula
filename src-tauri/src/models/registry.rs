@@ -33,6 +33,18 @@ pub struct ModelSpec {
   pub display_description: &'static str,
   /// Input image resolution for embedding models
   pub image_size: usize,
+  /// Separate vision-tower ONNX file (image encoder). When set, embed_image uses this.
+  pub vision_file: Option<ModelFile>,
+  /// Separate text-tower ONNX file (text encoder). When set, embed_text uses this.
+  pub text_file: Option<ModelFile>,
+  /// Input tensor name for the vision tower (e.g. "pixel_values").
+  pub vision_input: &'static str,
+  /// Output tensor name for the vision tower (e.g. "image_embeds").
+  pub vision_output: &'static str,
+  /// Input tensor name for the text tower (e.g. "input_ids").
+  pub text_input: &'static str,
+  /// Output tensor name for the text tower (e.g. "text_embeds").
+  pub text_output: &'static str,
 }
 
 pub struct FaceIdPreset {
@@ -53,26 +65,41 @@ pub struct FaceIdPreset {
 }
 
 impl ModelSpec {
-  /// Returns all files required for this model (model file + optional tokenizer)
+  /// Returns all files required for this model (model file + optional tokenizer + split towers)
   pub fn all_files(&self) -> Vec<&ModelFile> {
     let mut f = vec![&self.model_file];
     if let Some(ref t) = self.tokenizer_file {
-      f.push(t);
+        f.push(t);
+    }
+    if let Some(ref v) = self.vision_file {
+        // Only add if different from model_file (avoid duplicate download)
+        if v.filename != self.model_file.filename {
+            f.push(v);
+        }
+    }
+    if let Some(ref t) = self.text_file {
+        f.push(t);
     }
     f
   }
 }
 
 pub const SIGLIP_BASE: ModelSpec = ModelSpec {
-  id: "diegohh/siglip2-base-patch16-224",
-  hf_repo: "diegohh/siglip2-base-patch16-224",
+  id: "onnx-community/siglip2-base-patch16-224",
+  hf_repo: "onnx-community/siglip2-base-patch16-224",
   model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-224",
-  model_file: ModelFile { filename: "model.onnx", remote_path: None },
+  cache_dir: "siglip2-base-224-split",
+  model_file: ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
   display_name: "Standard",
-  display_description: "Balanced quality and speed (86M params)",
+  display_description: "Balanced quality and speed (86M params, split towers)",
   image_size: 224,
+  vision_file: Some(ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") }),
+  text_file: Some(ModelFile { filename: "text_model.onnx", remote_path: Some("onnx/text_model.onnx") }),
+  vision_input: "pixel_values",
+  vision_output: "image_embeds",
+  text_input: "input_ids",
+  text_output: "text_embeds",
 };
 
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
@@ -85,6 +112,12 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   display_name: "Fast",
   display_description: "Optimized for consumer CPUs with larger patches",
   image_size: 256,
+  vision_file: None,
+  text_file: None,
+  vision_input: "pixel_values",
+  vision_output: "image_embeds",
+  text_input: "input_ids",
+  text_output: "text_embeds",
 };
 
 pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
@@ -97,6 +130,12 @@ pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
   display_name: "Buffalo S Recognition",
   display_description: "Lightweight face recognition model",
   image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
 };
 
 pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
@@ -109,6 +148,12 @@ pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
   display_name: "Buffalo S Detection",
   display_description: "Lightweight face detection model",
   image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
 };
 
 pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
@@ -121,6 +166,12 @@ pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
   display_name: "Buffalo S Gender/Age",
   display_description: "Gender and age estimation model",
   image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
 };
 
 pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
@@ -158,10 +209,10 @@ mod tests {
     fn test_faceid_preset_gender_age_is_not_option() {
         // Verify that gender_age is not an Option type
         let preset = &BUFFALO_S_PRESET;
-        
+
         // This should compile and work without unwrapping or matching on Option
         let gender_age_model = preset.gender_age;
-        
+
         // Verify it's the expected model
         assert_eq!(gender_age_model.id, "buffalo_s_gender_age");
         assert_eq!(gender_age_model.hf_repo, "public-data/insightface");
@@ -171,12 +222,22 @@ mod tests {
     fn test_find_by_id_works() {
         let preset = FaceIdPreset::find_by_id("blitz");
         assert!(preset.is_some());
-        
+
         let preset = preset.unwrap();
         assert_eq!(preset.id, "blitz");
         assert_eq!(preset.name, "Blitz");
-        
+
         // Verify gender_age is accessible directly (not an Option)
         assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
+    }
+
+    #[test]
+    fn standard_model_has_split_towers() {
+        let s = &SIGLIP_BASE;
+        assert!(s.vision_file.is_some(), "vision tower must be configured");
+        assert!(s.text_file.is_some(), "text tower must be configured");
+        assert_eq!(s.vision_input, "pixel_values");
+        assert!(!s.vision_output.is_empty());
+        assert!(!s.text_output.is_empty());
     }
 }
