@@ -7,10 +7,10 @@
   <div class="settings-content">
     <section class="settings-section">
       <div class="section-title">
-        <lucide-icon name="search" class="section-icon"></lucide-icon>
-        <h2>Vision Model</h2>
+        <lucide-icon name="sparkles" class="section-icon"></lucide-icon>
+        <h2>Smart Search</h2>
       </div>
-      <p class="section-description">Select the embedding model used for image search and semantic analysis.</p>
+      <p class="section-description">Select the model used to understand and search your photos by meaning.</p>
 
       <div class="model-list">
         @for (model of models(); track model.id) {
@@ -23,9 +23,18 @@
             <div hlmCardHeader>
               <div class="flex items-center justify-between">
                 <h3 hlmCardTitle>{{ model.name }}</h3>
-                @if (currentModel() === model.id) {
-                  <span class="text-xs font-medium px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">Active</span>
-                }
+                <div class="flex items-center gap-2">
+                  @if (currentModel() === model.id) {
+                    <span class="text-xs font-medium px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">Active</span>
+                  } @else if (model.downloaded) {
+                    <lucide-icon name="hard-drive" [size]="14" class="text-muted-foreground"></lucide-icon>
+                  } @else {
+                    <span class="download-chip">
+                      <lucide-icon name="download" [size]="12"></lucide-icon>
+                      {{ formatBytes(model.size_bytes) }}
+                    </span>
+                  }
+                </div>
               </div>
               <p hlmCardDescription>{{ model.description }}</p>
             </div>
@@ -40,9 +49,9 @@
     <section class="settings-section">
       <div class="section-title">
         <lucide-icon name="scan-face" class="section-icon"></lucide-icon>
-        <h2>Face Analysis</h2>
+        <h2>People Recognition</h2>
       </div>
-      <p class="section-description">Select the model used for face detection and subject labeling.</p>
+      <p class="section-description">Select the model used to detect and recognize people in your photos.</p>
 
       <div class="model-list">
         @for (model of subjectModels(); track model.id) {
@@ -55,9 +64,18 @@
             <div hlmCardHeader>
               <div class="flex items-center justify-between">
                 <h3 hlmCardTitle>{{ model.name }}</h3>
-                @if (currentSubjectModel() === model.id) {
-                  <span class="text-xs font-medium px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">Active</span>
-                }
+                <div class="flex items-center gap-2">
+                  @if (currentSubjectModel() === model.id) {
+                    <span class="text-xs font-medium px-2 py-0.5 rounded-full border border-border bg-muted text-muted-foreground">Active</span>
+                  } @else if (model.downloaded) {
+                    <lucide-icon name="hard-drive" [size]="14" class="text-muted-foreground"></lucide-icon>
+                  } @else {
+                    <span class="download-chip">
+                      <lucide-icon name="download" [size]="12"></lucide-icon>
+                      {{ formatBytes(model.size_bytes) }}
+                    </span>
+                  }
+                </div>
               </div>
               <p hlmCardDescription>{{ model.description }}</p>
             </div>
@@ -73,7 +91,7 @@
         <div hlmCardHeader>
           <div class="flex items-center gap-2 text-destructive">
             <lucide-icon name="alert-triangle" size="20"></lucide-icon>
-            <h2 hlmCardTitle class="text-destructive">Change {{ pendingSection() === 'vision' ? 'Vision' : 'Face Analysis' }} Model?</h2>
+            <h2 hlmCardTitle class="text-destructive">Change {{ pendingSection() === 'vision' ? 'Smart Search' : 'People Recognition' }} Model?</h2>
           </div>
           <p hlmCardDescription>This will trigger a full reindex of your library.</p>
         </div>

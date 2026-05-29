@@ -63,3 +63,7 @@
          focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring
          placeholder:text-muted-foreground;
 }
+
+.download-chip {
+  @apply flex items-center gap-1 text-xs text-muted-foreground px-2 py-0.5 rounded-full border border-border;
+}
