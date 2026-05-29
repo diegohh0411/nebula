@@ -88,10 +88,21 @@ impl VisionEngine {
             .map_err(|e| anyhow!("failed to load ONNX model '{}': {e}", path.display()))
     }
 
-    pub fn embed_image(&self, manager: &ModelManager, img: &image::DynamicImage, spec: &ModelSpec) -> Result<Vec<f32>> {
+    pub fn embed_images_batch(
+        &self,
+        manager: &ModelManager,
+        imgs: &[&image::DynamicImage],
+        spec: &ModelSpec,
+    ) -> Result<Vec<Vec<f32>>> {
+        if imgs.is_empty() {
+            return Ok(vec![]);
+        }
         let size = spec.image_size;
-        let mut pixel_values = Array4::<f32>::zeros((1, 3, size, size));
-        crate::preprocess::fill_pixel_values(&mut pixel_values, 0, img, size);
+        let n = imgs.len();
+        let mut pixel_values = ndarray::Array4::<f32>::zeros((n, 3, size, size));
+        for (b, img) in imgs.iter().enumerate() {
+            crate::preprocess::fill_pixel_values(&mut pixel_values, b, img, size);
+        }
 
         let vision_file = spec.vision_file.as_ref()
             .ok_or_else(|| anyhow!("model '{}' has no vision tower configured", spec.id))?;
@@ -108,11 +119,22 @@ impl VisionEngine {
             .map_err(|e| anyhow!("failed to create pixel_values tensor: {e}"))?;
         let outputs = session
             .run(ort::inputs![spec.vision_input => pv_ref])
-            .map_err(|e| anyhow!("image inference failed: {e}"))?;
-        let (_shape, data) = outputs[spec.vision_output]
+            .map_err(|e| anyhow!("batched image inference failed: {e}"))?;
+        let (shape, data) = outputs[spec.vision_output]
             .try_extract_tensor::<f32>()
-            .map_err(|e| anyhow!("failed to extract image embedding: {e}"))?;
-        Ok(data.to_vec())
+            .map_err(|e| anyhow!("failed to extract batched image embeddings: {e}"))?;
+
+        let dim = data.len() / n;
+        anyhow::ensure!(
+            shape.first().copied() == Some(n as i64) || data.len() % n == 0,
+            "unexpected batch output shape {:?} for n={}", shape, n
+        );
+        Ok((0..n).map(|i| data[i * dim..(i + 1) * dim].to_vec()).collect())
+    }
+
+    pub fn embed_image(&self, manager: &ModelManager, img: &image::DynamicImage, spec: &ModelSpec) -> Result<Vec<f32>> {
+        let mut out = self.embed_images_batch(manager, &[img], spec)?;
+        out.pop().ok_or_else(|| anyhow!("empty batch result"))
     }
 
     pub fn embed_text(&self, manager: &ModelManager, text: &str, spec: &ModelSpec) -> Result<Vec<f32>> {
@@ -192,5 +214,27 @@ mod tests {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(64, 64));
         let emb = engine.embed_image(&manager, &img, spec).unwrap();
         assert_eq!(emb.len(), 768, "SigLIP base image embedding dim");
+    }
+
+    #[test]
+    fn batched_embeddings_match_single_when_model_present() {
+        let data_dir = match std::env::var("NEBULA_TEST_DATA_DIR") {
+            Ok(d) => std::path::PathBuf::from(d),
+            Err(_) => { eprintln!("skipping"); return; }
+        };
+        let manager = crate::models::ModelManager::new(data_dir.clone());
+        let spec = &crate::models::registry::SIGLIP_BASE;
+        let vf = spec.vision_file.as_ref().unwrap();
+        if !manager.model_file_path(spec, vf).exists() { eprintln!("skipping"); return; }
+        let engine = VisionEngine::new(data_dir);
+
+        let a = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([200,40,40])));
+        let b = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([40,40,200])));
+        let single_a = engine.embed_image(&manager, &a, spec).unwrap();
+        let batch = engine.embed_images_batch(&manager, &[&a, &b], spec).unwrap();
+        assert_eq!(batch.len(), 2);
+        for (x, y) in single_a.iter().zip(batch[0].iter()) {
+            assert!((x - y).abs() < 1e-3, "batched vs single mismatch: {x} vs {y}");
+        }
     }
 }
