@@ -19,6 +19,8 @@ interface ModelInfo {
   id: string;
   name: string;
   description: string;
+  downloaded: boolean;
+  size_bytes: number;
 }
 
 @Component({
@@ -101,17 +103,25 @@ export class SettingsComponent implements OnInit, OnDestroy {
 
   async loadSettings() {
     try {
-      const model = await invoke<string | null>('get_setting', { key: 'embedding_model' });
-      this.currentModel.set(model || 'diegohh/siglip2-base-patch16-224');
+      const model = await invoke<string>('get_setting', { key: 'embedding_model' });
+      this.currentModel.set(model);
     } catch (e) {
-      console.error('Failed to load settings:', e);
+      console.error('Failed to load embedding_model setting:', e);
     }
     try {
-      const subjectModel = await invoke<string | null>('get_setting', { key: 'subject_model' });
-      this.currentSubjectModel.set(subjectModel || 'standard');
+      const subjectModel = await invoke<string>('get_setting', { key: 'subject_model' });
+      this.currentSubjectModel.set(subjectModel);
     } catch (e) {
-      console.error('Failed to load subject model setting:', e);
+      console.error('Failed to load subject_model setting:', e);
     }
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes === 0) return '';
+    if (bytes < 1_073_741_824) {
+      return `${(bytes / 1_048_576).toFixed(1)} MB`;
+    }
+    return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
   }
 
   selectVisionModel(modelId: string) {

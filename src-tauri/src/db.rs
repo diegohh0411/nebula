@@ -149,14 +149,6 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         }
     }
 
-    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('embedding_model', 'diegohh/siglip2-base-patch16-224')")
-        .execute(&pool)
-        .await?;
-
-    sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES ('subject_model', 'standard')")
-        .execute(&pool)
-        .await?;
-
     sqlx::query("INSERT OR IGNORE INTO schema_version (rowid, version) VALUES (1, 0)")
         .execute(&pool)
         .await?;

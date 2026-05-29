@@ -45,6 +45,8 @@ pub struct ModelSpec {
   pub text_input: &'static str,
   /// Output tensor name for the text tower (e.g. "text_embeds").
   pub text_output: &'static str,
+  /// Approximate total download size in bytes across all model files
+  pub size_bytes: u64,
 }
 
 pub struct FaceIdPreset {
@@ -100,6 +102,7 @@ pub const SIGLIP_BASE: ModelSpec = ModelSpec {
   vision_output: "pooler_output",
   text_input: "input_ids",
   text_output: "pooler_output",
+  size_bytes: 660_000_000, // vision_model.onnx (~360 MB) + text_model.onnx (~270 MB) + tokenizer.json
 };
 
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
@@ -122,6 +125,7 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   vision_output: "pooler_output",
   text_input: "input_ids",
   text_output: "pooler_output",
+  size_bytes: 169_000_000, // vision_model_quantized.onnx (~90 MB) + text_model_quantized.onnx (~70 MB) + tokenizer.json
 };
 
 pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
@@ -140,6 +144,7 @@ pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
   vision_output: "",
   text_input: "",
   text_output: "",
+  size_bytes: 20_000_000, // recognition.onnx (~19 MB)
 };
 
 pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
@@ -158,6 +163,7 @@ pub const BUFFALO_S_DETECTION: ModelSpec = ModelSpec {
   vision_output: "",
   text_input: "",
   text_output: "",
+  size_bytes: 4_000_000, // detection.onnx (~4 MB)
 };
 
 pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
@@ -176,6 +182,7 @@ pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
   vision_output: "",
   text_input: "",
   text_output: "",
+  size_bytes: 1_300_000, // genderage.onnx (~1.3 MB)
 };
 
 pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
