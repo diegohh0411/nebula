@@ -39,17 +39,15 @@ async fn write_faces(
     image_id: i64,
     sub_qid: i64,
     sub_attempts: i32,
-    img_w: f64,
-    img_h: f64,
     faces: Vec<(face_id::detector::BoundingBox, Vec<f32>)>,
 ) {
     let mut all_ok = true;
     for (bbox, face_emb) in faces {
         let face_blob = crate::embedder::f32_slice_to_bytes(&face_emb);
-        let rel_x = bbox.x1 as f64 / img_w;
-        let rel_y = bbox.y1 as f64 / img_h;
-        let rel_w = (bbox.x2 - bbox.x1) as f64 / img_w;
-        let rel_h = (bbox.y2 - bbox.y1) as f64 / img_h;
+        let rel_x = bbox.x1 as f64;
+        let rel_y = bbox.y1 as f64;
+        let rel_w = (bbox.x2 - bbox.x1) as f64;
+        let rel_h = (bbox.y2 - bbox.y1) as f64;
         if let Err(e) = crate::db::insert_face(
             pool,
             image_id,
@@ -97,6 +95,7 @@ pub async fn run_pipeline(
 
     if let Err(e) = manager.ensure_ready(&app, spec).await {
         eprintln!("[pipeline] embed model not ready: {e}");
+        return;
     }
     for face_spec in [preset.detector, preset.embedder, preset.gender_age] {
         if let Err(e) = manager.ensure_ready(&app, face_spec).await {
@@ -221,9 +220,6 @@ pub async fn run_pipeline(
         // This restores the embed/face overlap that the old serial CPU path dropped,
         // while the pre-dispatched embed batch is processed by the actor.
         for Pending { image_id, sem_entry, sub_entry, d, erx } in pending {
-            let img_w = d.full.width() as f64;
-            let img_h = d.full.height() as f64;
-
             let frx = if let Some((sub_qid, sub_attempts)) = sub_entry {
                 let (ftx, frx) = tokio::sync::oneshot::channel();
                 if face_tx.send(face_actor::FaceRequest { decoded: d.clone(), reply: ftx }).await.is_ok() {
@@ -264,7 +260,7 @@ pub async fn run_pipeline(
                     match face_result {
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                write_faces(&pool, image_id, sub_qid, sub_attempts, img_w, img_h, faces).await;
+                                write_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
                                 processed_subject_work = true;
                             }
                         }
@@ -308,7 +304,7 @@ pub async fn run_pipeline(
                     match frx.await {
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                write_faces(&pool, image_id, sub_qid, sub_attempts, img_w, img_h, faces).await;
+                                write_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
                                 processed_subject_work = true;
                             }
                         }

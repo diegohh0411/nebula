@@ -55,8 +55,11 @@ pub fn write_thumbnail_from_image(img: &DynamicImage, dest_path: &std::path::Pat
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // CatmullRom is a good speed/quality tradeoff for downscaling thumbnails.
-    let thumb = img.resize(800, 800, image::imageops::FilterType::CatmullRom);
+    let thumb = if img.width() > 800 || img.height() > 800 {
+        img.resize(800, 800, image::imageops::FilterType::CatmullRom)
+    } else {
+        img.clone()
+    };
     thumb.save_with_format(dest_path, image::ImageFormat::WebP)?;
     Ok(())
 }
