@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod embedder;
 mod models;
+mod pipeline;
 mod search;
 mod thumbnail;
 mod vision_engine;
