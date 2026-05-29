@@ -33,7 +33,6 @@ impl Default for PipelineConfig {
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot;
 
 async fn write_faces(
     pool: &sqlx::SqlitePool,
@@ -189,180 +188,146 @@ pub async fn run_pipeline(
             }
         }
 
-        // Stage 2 & 3: dispatch embed + face, write results
+        // Stage 2: dispatch embed + face, write results
         let mut processed_subject_work = false;
+
+        // Phase A — pre-dispatch all embed requests before awaiting any reply.
+        // This fills the embed actor's channel so its try_recv loop drains a
+        // real batch (up to batch_size) instead of processing images one-by-one.
+        struct Pending {
+            image_id: i64,
+            sem_entry: Option<(i64, i32)>,
+            sub_entry: Option<(i64, i32)>,
+            d: DecodedImage,
+            erx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Vec<f32>>>>,
+        }
+        let mut pending: Vec<Pending> = Vec::with_capacity(decoded.len());
         for (image_id, sem_entry, sub_entry, d) in decoded {
+            let erx = if let Some((sem_qid, sem_attempts)) = sem_entry {
+                let (etx, erx) = tokio::sync::oneshot::channel();
+                if embed_tx.send(embed_actor::EmbedRequest { decoded: d.clone(), reply: etx }).await.is_ok() {
+                    Some(erx)
+                } else {
+                    let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed actor closed").await;
+                    None
+                }
+            } else {
+                None
+            };
+            pending.push(Pending { image_id, sem_entry, sub_entry, d, erx });
+        }
+
+        // Phase B — for each image: dispatch face then join!(embed_result, face_result).
+        // This restores the embed/face overlap that the old serial CPU path dropped,
+        // while the pre-dispatched embed batch is processed by the actor.
+        for Pending { image_id, sem_entry, sub_entry, d, erx } in pending {
             let img_w = d.full.width() as f64;
             let img_h = d.full.height() as f64;
 
-            if config.placement == ComputePlacement::Cpu {
-                // Serialize: embed first, then face (avoid thrashing CPU with both)
-                if let Some((sem_qid, sem_attempts)) = sem_entry {
-                    let (etx, erx) = oneshot::channel();
-                    if embed_tx.send(embed_actor::EmbedRequest { decoded: d.clone(), reply: etx }).await.is_err() {
-                        let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed actor closed").await;
-                    } else {
-                        match erx.await {
-                            Ok(Ok(emb)) => {
-                                let blob = crate::embedder::f32_slice_to_bytes(&emb);
+            let frx = if let Some((sub_qid, sub_attempts)) = sub_entry {
+                let (ftx, frx) = tokio::sync::oneshot::channel();
+                if face_tx.send(face_actor::FaceRequest { decoded: d.clone(), reply: ftx }).await.is_ok() {
+                    Some(frx)
+                } else {
+                    let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face actor closed").await;
+                    None
+                }
+            } else {
+                None
+            };
+
+            match (erx, frx) {
+                (Some(erx), Some(frx)) => {
+                    let (emb_result, face_result) = tokio::join!(erx, frx);
+                    match emb_result {
+                        Ok(Ok(emb)) => {
+                            let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                            if let Some((sem_qid, _)) = sem_entry {
                                 if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
                                     .await.is_ok()
                                 {
                                     index.write().unwrap().add(image_id, &emb);
                                 }
                             }
-                            Ok(Err(e)) => {
+                        }
+                        Ok(Err(e)) => {
+                            if let Some((sem_qid, sem_attempts)) = sem_entry {
                                 let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, &e.to_string()).await;
                             }
-                            Err(_) => {
+                        }
+                        Err(_) => {
+                            if let Some((sem_qid, sem_attempts)) = sem_entry {
                                 let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed reply channel dropped").await;
                             }
                         }
                     }
-                }
-
-                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                    let (ftx, frx) = oneshot::channel();
-                    if face_tx.send(face_actor::FaceRequest { decoded: d.clone(), reply: ftx }).await.is_err() {
-                        let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face actor closed").await;
-                    } else {
-                        match frx.await {
-                            Ok(Ok(faces)) => {
+                    match face_result {
+                        Ok(Ok(faces)) => {
+                            if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 write_faces(&pool, image_id, sub_qid, sub_attempts, img_w, img_h, faces).await;
                                 processed_subject_work = true;
                             }
-                            Ok(Err(e)) => {
+                        }
+                        Ok(Err(e)) => {
+                            if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, &e.to_string()).await;
                             }
-                            Err(_) => {
+                        }
+                        Err(_) => {
+                            if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face reply channel dropped").await;
                             }
                         }
                     }
                 }
-            } else {
-                // Concurrent: embed on iGPU, face on CPU — dispatch both before awaiting
-                let erx = if sem_entry.is_some() {
-                    let (etx, erx) = oneshot::channel();
-                    if embed_tx.send(embed_actor::EmbedRequest { decoded: d.clone(), reply: etx }).await.is_ok() {
-                        Some(erx)
-                    } else {
-                        if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed actor closed").await;
-                        }
-                        None
-                    }
-                } else {
-                    None
-                };
-                let frx = if sub_entry.is_some() {
-                    let (ftx, frx) = oneshot::channel();
-                    if face_tx.send(face_actor::FaceRequest { decoded: d.clone(), reply: ftx }).await.is_ok() {
-                        Some(frx)
-                    } else {
-                        if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face actor closed").await;
-                        }
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                // Use tokio::join! for true concurrency between embed and face
-                match (erx, frx) {
-                    (Some(erx), Some(frx)) => {
-                        let (emb_result, face_result) = tokio::join!(erx, frx);
-                        match emb_result {
-                            Ok(Ok(emb)) => {
-                                let blob = crate::embedder::f32_slice_to_bytes(&emb);
-                                if let Some((sem_qid, _)) = sem_entry {
-                                    if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
-                                        .await.is_ok()
-                                    {
-                                        index.write().unwrap().add(image_id, &emb);
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                    let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, &e.to_string()).await;
-                                }
-                            }
-                            Err(_) => {
-                                if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                    let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed reply channel dropped").await;
+                (Some(erx), None) => {
+                    match erx.await {
+                        Ok(Ok(emb)) => {
+                            let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                            if let Some((sem_qid, _)) = sem_entry {
+                                if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
+                                    .await.is_ok()
+                                {
+                                    index.write().unwrap().add(image_id, &emb);
                                 }
                             }
                         }
-                        match face_result {
-                            Ok(Ok(faces)) => {
-                                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                    write_faces(&pool, image_id, sub_qid, sub_attempts, img_w, img_h, faces).await;
-                                    processed_subject_work = true;
-                                }
+                        Ok(Err(e)) => {
+                            if let Some((sem_qid, sem_attempts)) = sem_entry {
+                                let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, &e.to_string()).await;
                             }
-                            Ok(Err(e)) => {
-                                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                    let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, &e.to_string()).await;
-                                }
-                            }
-                            Err(_) => {
-                                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                    let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face reply channel dropped").await;
-                                }
+                        }
+                        Err(_) => {
+                            if let Some((sem_qid, sem_attempts)) = sem_entry {
+                                let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed reply channel dropped").await;
                             }
                         }
                     }
-                    (Some(erx), None) => {
-                        match erx.await {
-                            Ok(Ok(emb)) => {
-                                let blob = crate::embedder::f32_slice_to_bytes(&emb);
-                                if let Some((sem_qid, _)) = sem_entry {
-                                    if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
-                                        .await.is_ok()
-                                    {
-                                        index.write().unwrap().add(image_id, &emb);
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                    let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, &e.to_string()).await;
-                                }
-                            }
-                            Err(_) => {
-                                if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                    let _ = crate::db::mark_failed(&pool, sem_qid, sem_attempts, "embed reply channel dropped").await;
-                                }
-                            }
-                        }
-                    }
-                    (None, Some(frx)) => {
-                        match frx.await {
-                            Ok(Ok(faces)) => {
-                                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                    write_faces(&pool, image_id, sub_qid, sub_attempts, img_w, img_h, faces).await;
-                                    processed_subject_work = true;
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                    let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, &e.to_string()).await;
-                                }
-                            }
-                            Err(_) => {
-                                if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                    let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face reply channel dropped").await;
-                                }
-                            }
-                        }
-                    }
-                    (None, None) => {}
                 }
+                (None, Some(frx)) => {
+                    match frx.await {
+                        Ok(Ok(faces)) => {
+                            if let Some((sub_qid, sub_attempts)) = sub_entry {
+                                write_faces(&pool, image_id, sub_qid, sub_attempts, img_w, img_h, faces).await;
+                                processed_subject_work = true;
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            if let Some((sub_qid, sub_attempts)) = sub_entry {
+                                let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, &e.to_string()).await;
+                            }
+                        }
+                        Err(_) => {
+                            if let Some((sub_qid, sub_attempts)) = sub_entry {
+                                let _ = crate::db::mark_failed(&pool, sub_qid, sub_attempts, "face reply channel dropped").await;
+                            }
+                        }
+                    }
+                }
+                (None, None) => {}
             }
 
-            // Thumbnail from same buffer
+            // Thumbnail from same buffer — unchanged from original
             let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
             let thumb_path_str = thumb_path.to_string_lossy().to_string();
             let d_thumb = d.clone();
