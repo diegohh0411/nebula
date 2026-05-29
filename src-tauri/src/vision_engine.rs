@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use face_id::analyzer::FaceAnalyzer;
-use ndarray::{Array2, Array4};
+use ndarray::Array2;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::value::TensorRef;
@@ -21,10 +21,10 @@ pub struct VisionEngine {
 }
 
 impl VisionEngine {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf, placement: ComputePlacement) -> Self {
         Self {
             data_dir,
-            placement: ComputePlacement::Cpu,
+            placement,
             vision_session: std::sync::Mutex::new(None),
             text_session: std::sync::Mutex::new(None),
             tokenizer: std::sync::Mutex::new(None),
@@ -50,14 +50,11 @@ impl VisionEngine {
         let rec_path = manager.onnx_path(preset.embedder);
         let gender_age_path = manager.onnx_path(preset.gender_age);
 
-        #[cfg(feature = "directml")]
         let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> = if self.placement == ComputePlacement::Gpu {
             vec![ort::ep::DirectML::default().build()]
         } else {
             vec![]
         };
-        #[cfg(not(feature = "directml"))]
-        let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> = vec![];
 
         let analyzer = FaceAnalyzer::builder(det_path, rec_path, gender_age_path)
             .detector_input_size(preset.detector_input_size)
@@ -98,15 +95,11 @@ impl VisionEngine {
             .with_intra_threads(num_cpus::get_physical())
             .map_err(|e| anyhow!("failed to set intra threads: {e}"))?;
 
-        #[cfg(feature = "directml")]
         if placement == ComputePlacement::Gpu {
             builder = builder
                 .with_execution_providers([ort::ep::DirectML::default().build()])
                 .map_err(|e| anyhow!("failed to register DirectML EP: {e}"))?;
         }
-
-        #[cfg(not(feature = "directml"))]
-        let _ = placement;
 
         builder
             .commit_from_file(path)
@@ -236,7 +229,7 @@ mod tests {
             eprintln!("skipping: vision model not downloaded");
             return;
         }
-        let engine = VisionEngine::new(data_dir);
+        let engine = VisionEngine::new(data_dir, crate::pipeline::ComputePlacement::Cpu);
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(64, 64));
         let emb = engine.embed_image(&manager, &img, spec).unwrap();
         assert_eq!(emb.len(), 768, "SigLIP base image embedding dim");
@@ -252,7 +245,7 @@ mod tests {
         let spec = &crate::models::registry::SIGLIP_BASE;
         let vf = spec.vision_file.as_ref().unwrap();
         if !manager.model_file_path(spec, vf).exists() { eprintln!("skipping"); return; }
-        let engine = VisionEngine::new(data_dir);
+        let engine = VisionEngine::new(data_dir, crate::pipeline::ComputePlacement::Cpu);
 
         let a = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([200,40,40])));
         let b = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([40,40,200])));

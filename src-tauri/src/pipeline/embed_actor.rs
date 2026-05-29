@@ -14,8 +14,9 @@ pub fn spawn_embed_actor(
     manager: Arc<ModelManager>,
     spec: &'static ModelSpec,
     batch_size: usize,
+    channel_depth: usize,
 ) -> mpsc::Sender<EmbedRequest> {
-    let (tx, mut rx) = mpsc::channel::<EmbedRequest>(batch_size * 2);
+    let (tx, mut rx) = mpsc::channel::<EmbedRequest>(channel_depth);
     tokio::spawn(async move {
         loop {
             let first = match rx.recv().await { Some(r) => r, None => break };
@@ -32,10 +33,12 @@ pub fn spawn_embed_actor(
             let engine_c = engine.clone();
             let manager_c = manager.clone();
 
-            let results = tokio::task::block_in_place(|| {
+            let results = tokio::task::spawn_blocking(move || {
                 let refs: Vec<&image::DynamicImage> = imgs.iter().map(|a| a.as_ref()).collect();
                 engine_c.embed_images_batch(manager_c.as_ref(), &refs, spec)
-            });
+            })
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("embed task panicked: {e}")));
 
             match results {
                 Ok(vecs) => {

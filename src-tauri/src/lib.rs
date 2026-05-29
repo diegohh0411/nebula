@@ -44,7 +44,11 @@ pub fn run() {
             )?;
             let index: vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
-            let vision_engine = Arc::new(vision_engine::VisionEngine::new(data_dir.clone()));
+            let pipeline_config = pipeline::PipelineConfig::default();
+            let vision_engine = Arc::new(vision_engine::VisionEngine::new(
+                data_dir.clone(),
+                pipeline_config.placement,
+            ));
             let model_manager = Arc::new(crate::models::ModelManager::new(data_dir.clone()));
 
             let indexer = tauri::async_runtime::block_on(
@@ -65,23 +69,6 @@ pub fn run() {
                 indexer_rescan.start_rescan().await;
             });
 
-            let model_manager_startup = Arc::clone(&model_manager);
-            let app_handle_model = app.handle().clone();
-            let pool_model = pool.clone();
-            tauri::async_runtime::spawn(async move {
-                let model_id = db::get_setting(&pool_model, "embedding_model")
-                    .await
-                    .unwrap_or(None)
-                    .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
-
-                let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
-                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
-
-                if let Err(e) = model_manager_startup.ensure_ready(&app_handle_model, spec).await {
-                    eprintln!("Model setup failed: {}", e);
-                }
-            });
-
             let pool_pipe = pool.clone();
             let app_pipe = app.handle().clone();
             let ve_pipe = Arc::clone(&vision_engine);
@@ -89,9 +76,22 @@ pub fn run() {
             let index_pipe = index.clone();
             let data_dir_pipe = data_dir.clone();
             tauri::async_runtime::spawn(async move {
+                // Resolve the user's chosen embedding model; default to SIGLIP_BASE.
+                let model_id = db::get_setting(&pool_pipe, "embedding_model")
+                    .await
+                    .unwrap_or(None)
+                    .unwrap_or_else(|| crate::models::registry::SIGLIP_BASE.id.to_string());
+                let spec = crate::models::registry::ModelSpec::find_by_id(&model_id)
+                    .unwrap_or(&crate::models::registry::SIGLIP_BASE);
+
+                if let Err(e) = mm_pipe.ensure_ready(&app_pipe, spec).await {
+                    eprintln!("Model setup failed: {}", e);
+                }
+
                 pipeline::run_pipeline(
                     pool_pipe, app_pipe, ve_pipe, mm_pipe, index_pipe, data_dir_pipe,
-                    pipeline::PipelineConfig::default(),
+                    pipeline_config,
+                    spec,
                 ).await;
             });
 
