@@ -3486,6 +3486,7 @@ dependencies = [
  "image",
  "ndarray",
  "notify",
+ "num_cpus",
  "once_cell",
  "ort",
  "rayon",
