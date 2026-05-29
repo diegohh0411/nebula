@@ -256,4 +256,50 @@ mod tests {
             assert!((x - y).abs() < 1e-3, "batched vs single mismatch: {x} vs {y}");
         }
     }
+
+    #[test]
+    fn text_and_image_embeddings_are_cross_modal_compatible() {
+        let data_dir = match std::env::var("NEBULA_TEST_DATA_DIR") {
+            Ok(d) => std::path::PathBuf::from(d),
+            Err(_) => { eprintln!("skipping: NEBULA_TEST_DATA_DIR not set"); return; }
+        };
+        let manager = crate::models::ModelManager::new(data_dir.clone());
+        let spec = &crate::models::registry::SIGLIP_BASE;
+        let vf = spec.vision_file.as_ref().unwrap();
+        let tf = spec.text_file.as_ref().unwrap();
+        if !manager.model_file_path(spec, vf).exists() || !manager.model_file_path(spec, tf).exists() {
+            eprintln!("skipping: split towers not downloaded");
+            return;
+        }
+        let engine = VisionEngine::new(data_dir, crate::pipeline::ComputePlacement::Cpu);
+
+        let red = image::DynamicImage::ImageRgb8(
+            image::RgbImage::from_pixel(224, 224, image::Rgb([220, 30, 30]))
+        );
+        let blue = image::DynamicImage::ImageRgb8(
+            image::RgbImage::from_pixel(224, 224, image::Rgb([30, 30, 220]))
+        );
+        let img_red = engine.embed_image(&manager, &red, spec).unwrap();
+        let img_blue = engine.embed_image(&manager, &blue, spec).unwrap();
+        let txt_red = engine.embed_text(&manager, "a red square", spec).unwrap();
+        let txt_blue = engine.embed_text(&manager, "a blue square", spec).unwrap();
+
+        fn cosine(a: &[f32], b: &[f32]) -> f32 {
+            let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+            let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+            dot / (na * nb + 1e-8)
+        }
+
+        let sim_red_red   = cosine(&img_red,  &txt_red);
+        let sim_red_blue  = cosine(&img_red,  &txt_blue);
+        let sim_blue_blue = cosine(&img_blue, &txt_blue);
+
+        assert!(sim_red_red > 0.0,
+            "red image vs 'red square' text: expected positive cosine, got {sim_red_red}");
+        assert!(sim_red_red > sim_red_blue,
+            "red image should rank higher for 'red square' ({sim_red_red:.3}) than 'blue square' ({sim_red_blue:.3})");
+        assert!(sim_blue_blue > sim_red_blue,
+            "blue image should rank higher for 'blue square' ({sim_blue_blue:.3}) than 'red square' ({sim_red_blue:.3})");
+    }
 }
