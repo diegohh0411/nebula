@@ -17,6 +17,7 @@ pub struct Image {
     pub date_taken: Option<i64>,
     pub mtime: i64,
     pub thumbnail_path: Option<String>,
+    pub preview_path: Option<String>,
     pub semantic_analysis_done: bool,
     pub subject_analysis_done: bool,
     pub added_at: i64,
