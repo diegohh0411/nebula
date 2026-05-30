@@ -15,7 +15,7 @@ We will move thumbnail generation to happen immediately after Stage 1 (Decode) s
 
 ## Data Flow & Events
 
-Two `image_updated` events are emitted per image. **Their order is not guaranteed** — see the Ordering Contract section below.
+Up to two `image_updated` events may be emitted per image. **Their order is not guaranteed** — see the Ordering Contract section below. The Stage 1 emit is conditional (only fires on success); Stage 2 always emits.
 
 **Stage 1 path (detached, concurrent with Stage 2):**
 1. Stage 1 (Decode) completes — `DecodedImage` is in memory.
@@ -32,7 +32,7 @@ Steps 2–4 and steps 5–6 run concurrently. Either emit may arrive at the fron
 ## Ordering Contract (Option A — adopted in TT-12)
 
 Every `image_updated` event means **"refetch this image"** — nothing more. Handlers must:
-- Re-query the DB on every event.
+- Schedule a re-fetch in response to notifications; coalescing rapid events is fine.
 - Tolerate `thumbnail_path = null` (thumbnail write may not have completed yet).
 - Not assume that any particular emit implies a specific set of fields are populated.
 
