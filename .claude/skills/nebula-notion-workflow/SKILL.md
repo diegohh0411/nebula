@@ -29,6 +29,63 @@ ntn login
 | Nebula page | `36fe954d-b476-802d-8601-c822900451ef` |
 | Tasks database | `36fe954d-b476-8082-9b40-d2699511884a` |
 | Tasks data source | `36fe954d-b476-8008-9aca-000b5ef89feb` |
+| User Stories database | `370e954d-b476-80cd-b7d6-e25a7c492349` |
+| User Stories data source | `370e954d-b476-80e1-a5a3-000be9bb23ac` |
+| Context Bits database | `370e954d-b476-80cc-8a33-d5d49a2b3a9b` |
+| Context Bits data source | `370e954d-b476-8079-939d-000bc4380470` |
+
+## Database Schemas
+
+### 📜 User Stories
+
+Tracks user stories and their test/coverage status.
+
+| Property | Type | Values |
+|---|---|---|
+| `Name` | title | Free text |
+| `ID` | auto_increment_id | Auto-assigned integer |
+| `Status` | status | `Not covered` · `Partially covered` · `Covered` |
+
+Query all user stories (CLI):
+```bash
+ntn datasources query 370e954d-b476-80e1-a5a3-000be9bb23ac --json
+```
+
+Query (MCP): `notion-fetch(id="collection://370e954d-b476-80e1-a5a3-000be9bb23ac")`
+
+Update status (MCP):
+```
+notion-update-page(id="<page-id>", properties={"Status": {"status": {"name": "Partially covered"}}})
+```
+
+### 🍪 Context Bits
+
+Freeform notes and context snippets (e.g. meeting notes, decisions).
+
+| Property | Type | Values |
+|---|---|---|
+| `Name` | title | Free text |
+| `Date` | date | ISO-8601 date or range |
+| `Tags` | multi_select | `Meeting` (and others as added) |
+
+Query all context bits (CLI):
+```bash
+ntn datasources query 370e954d-b476-8079-939d-000bc4380470 --json
+```
+
+Query (MCP): `notion-fetch(id="collection://370e954d-b476-8079-939d-000bc4380470")`
+
+Create a new context bit (MCP):
+```
+notion-create-pages(
+  parent={"database_id": "370e954d-b476-80cc-8a33-d5d49a2b3a9b"},
+  properties={
+    "Name": {"title": [{"text": {"content": "Note title"}}]},
+    "Date": {"date": {"start": "2026-05-30"}},
+    "Tags": {"multi_select": [{"name": "Meeting"}]}
+  }
+)
+```
 
 ## Fetch a Task by ID
 
