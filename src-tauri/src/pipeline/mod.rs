@@ -190,6 +190,10 @@ pub async fn run_pipeline(
                     let pool_c = pool.clone();
                     let app_c = app.clone();
 
+                    // Detached: not awaited before Stage 2. Emits image_updated only if both the
+                    // thumbnail write and update_thumbnail_path DB call succeed. May fire before or
+                    // after Stage 2's own image_updated emit — frontend must treat every
+                    // image_updated as "refetch" (Option A contract, TT-12).
                     tokio::spawn(async move {
                         let _permit = thumb_permit;
                         let write_ok = tokio::task::spawn_blocking(move || {
@@ -373,6 +377,8 @@ pub async fn run_pipeline(
                 (None, None) => {}
             }
 
+            // Second emit: signals full analysis complete (embeddings + faces written). NOT ordered
+            // vs. the Stage 1 thumbnail emit — frontend must handle either order (TT-12 Option A).
             let _ = app.emit(
                 "image_updated",
                 crate::models::ImageUpdatedPayload { image_id },

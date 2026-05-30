@@ -15,12 +15,28 @@ We will move thumbnail generation to happen immediately after Stage 1 (Decode) s
 
 ## Data Flow & Events
 
-1. **Stage 1 (Decode) completes:** We have the `DecodedImage` in memory.
-2. **Generate Thumbnail:** We immediately spawn a blocking task to resize the image and save it to the `thumbnails` directory.
-3. **Database Update:** Once written, update the `thumbnail_path` in the `images` table.
-4. **First Emit:** Emit the `image_updated` event to the frontend. This signals that the UI can now display the preview, even though ML analysis is still pending.
-5. **Stage 2 (Inference) completes:** Embeddings and faces are saved to the DB.
-6. **Second Emit:** Emit the `image_updated` event again. This ensures the frontend knows the image is fully processed (e.g. for search or status indicators).
+Up to two `image_updated` events may be emitted per image. **Their order is not guaranteed** — see the Ordering Contract section below. The Stage 1 emit is conditional (only fires on success); Stage 2 always emits.
+
+**Stage 1 path (detached, concurrent with Stage 2):**
+1. Stage 1 (Decode) completes — `DecodedImage` is in memory.
+2. A `tokio::spawn` thumbnail task is launched (not awaited).
+3. Inside that task: thumbnail is written to disk, `thumbnail_path` is updated in the DB.
+4. **First Emit ("preview ready"):** `image_updated` is emitted only if both the write and DB update succeed.
+
+**Stage 2 path (main loop):**
+5. Stage 2 (Inference) completes — embeddings and faces are saved to the DB.
+6. **Second Emit ("analysis complete"):** `image_updated` is emitted unconditionally.
+
+Steps 2–4 and steps 5–6 run concurrently. Either emit may arrive at the frontend first.
+
+## Ordering Contract (Option A — adopted in TT-12)
+
+Every `image_updated` event means **"refetch this image"** — nothing more. Handlers must:
+- Schedule a re-fetch in response to notifications; coalescing rapid events is fine.
+- Tolerate `thumbnail_path = null` (thumbnail write may not have completed yet).
+- Not assume that any particular emit implies a specific set of fields are populated.
+
+The frontend (`PhotoService`) uses `auditTime(2000)` + unconditional `refreshImages()`, which satisfies this contract: rapid successive emits are coalesced into one refresh, and a late Stage 1 emit triggers a second refresh that displays the thumbnail once it is written.
 
 ## Code Changes
 
