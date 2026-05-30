@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// High/low priority work queue for preview generation, with dedup.
 pub struct PreviewQueue {
@@ -50,6 +52,61 @@ impl PreviewQueue {
 
 impl Default for PreviewQueue {
     fn default() -> Self { Self::new() }
+}
+
+/// Pure parallelism decision: burst (all cores) while there is high-priority
+/// work OR we are still inside the burst window after the last high demand;
+/// otherwise trickle.
+pub fn compute_parallelism(
+    secs_since_high_demand: f64,
+    high_pending: bool,
+    burst: usize,
+    trickle: usize,
+    window_secs: f64,
+) -> usize {
+    if high_pending || secs_since_high_demand < window_secs {
+        burst
+    } else {
+        trickle
+    }
+}
+
+/// Tracks the last "high demand" moment and converts it into a live
+/// parallelism target. `last_high_demand_ms` is millis since an arbitrary
+/// epoch (the service's start Instant), stored atomically for cheap sharing.
+pub struct Governor {
+    start: Instant,
+    last_high_demand_ms: AtomicU64,
+    burst: usize,
+    trickle: usize,
+    window: Duration,
+}
+
+impl Governor {
+    pub fn new(burst: usize, trickle: usize, window: Duration) -> Self {
+        Self {
+            start: Instant::now(),
+            last_high_demand_ms: AtomicU64::new(0),
+            burst,
+            trickle,
+            window,
+        }
+    }
+
+    /// Record that high-priority demand just arrived (viewport request or a
+    /// fresh folder scan), re-entering the burst window.
+    pub fn signal_high_demand(&self) {
+        let ms = self.start.elapsed().as_millis() as u64;
+        self.last_high_demand_ms.store(ms, Ordering::Relaxed);
+    }
+
+    /// Current parallelism target given whether high-priority work is pending.
+    pub fn parallelism(&self, high_pending: bool) -> usize {
+        let now_ms = self.start.elapsed().as_millis() as u64;
+        let last = self.last_high_demand_ms.load(Ordering::Relaxed);
+        let secs = (now_ms.saturating_sub(last)) as f64 / 1000.0;
+        compute_parallelism(secs, high_pending, self.burst, self.trickle, self.window.as_secs_f64())
+    }
 }
 
 /// Decode an image at a coarse downscale such that the longest edge is
@@ -233,5 +290,25 @@ mod tests {
         assert!(!q.enqueue_low(1)); // already seen, returns false
         assert_eq!(q.next(), Some(1)); // only one copy
         assert_eq!(q.next(), None);
+    }
+
+    #[test]
+    fn parallelism_bursts_within_window() {
+        // 1s since last high demand, window 5s, high empty -> burst
+        let p = compute_parallelism(1.0, false, 8, 2, 5.0);
+        assert_eq!(p, 8);
+    }
+
+    #[test]
+    fn parallelism_trickles_after_window() {
+        // 6s since last high demand, window 5s, high empty -> trickle
+        let p = compute_parallelism(6.0, false, 8, 2, 5.0);
+        assert_eq!(p, 2);
+    }
+
+    #[test]
+    fn parallelism_bursts_when_high_pending_even_after_window() {
+        let p = compute_parallelism(60.0, true, 8, 2, 5.0);
+        assert_eq!(p, 8);
     }
 }
