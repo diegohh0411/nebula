@@ -42,6 +42,7 @@ impl PreviewQueue {
         self.high.pop_front().or_else(|| self.low.pop_front())
     }
 
+    /// Returns true if there are high-priority items pending.
     pub fn high_nonempty(&self) -> bool {
         !self.high.is_empty()
     }
@@ -223,5 +224,14 @@ mod tests {
         assert!(q.high_nonempty());
         q.next();
         assert!(!q.high_nonempty());
+    }
+
+    #[test]
+    fn enqueue_high_then_low_ignores_low() {
+        let mut q = PreviewQueue::new();
+        q.enqueue_high(1);
+        assert!(!q.enqueue_low(1)); // already seen, returns false
+        assert_eq!(q.next(), Some(1)); // only one copy
+        assert_eq!(q.next(), None);
     }
 }
