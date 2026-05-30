@@ -51,15 +51,16 @@
   </div>
 
   <!-- Processing status badge -->
-  @if (photos.processingStatus().semantic_pending > 0 || photos.processingStatus().subject_pending > 0) {
-    <span class="embed-badge" title="Photos still being processed">
-      <span class="embed-badge-dot"></span>
-      @if (photos.processingStatus().semantic_pending > 0 && photos.processingStatus().subject_pending > 0) {
-        {{ photos.processingStatus().subject_pending }} recognizing · {{ photos.processingStatus().semantic_pending }} indexing
-      } @else if (photos.processingStatus().subject_pending > 0) {
-        {{ photos.processingStatus().subject_pending }} recognizing
+  @if (badgeState() !== 'idle') {
+    <span class="embed-badge" [title]="badgeState() === 'active' ? 'Photos still being processed' : 'All photos are up to date'">
+      @if (badgeState() === 'active') {
+        <span class="embed-badge-dot"></span>
+        Processing {{ photos.pipelineStats().total_pending }} images
+        @if (photos.pipelineStats().images_per_sec >= 0.5) {
+          · {{ photos.pipelineStats().images_per_sec | number:'1.0-0' }} img/s
+        }
       } @else {
-        {{ photos.processingStatus().semantic_pending }} indexing
+        Library up to date
       }
     </span>
   }

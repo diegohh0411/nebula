@@ -4,7 +4,7 @@ use tauri::AppHandle;
 
 use tauri::Emitter;
 
-use crate::{db, models::ProcessingProgressPayload};
+use crate::db;
 
 /// Encode a Vec<f32> to raw little-endian bytes for storage as BLOB.
 pub fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
@@ -44,14 +44,14 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
     dot_product / (norm1 * norm2)
 }
 
-pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle) {
+pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle, images_per_sec: f32) {
     if let Ok(status) = db::get_processing_counts(pool).await {
+        let total_pending = (status.semantic_pending as u32).saturating_add(status.subject_pending as u32);
         let _ = app.emit(
-            "processing_progress",
-            ProcessingProgressPayload {
-                semantic_pending: status.semantic_pending,
-                subject_pending: status.subject_pending,
-                done: status.done,
+            "pipeline_stats",
+            crate::models::PipelineStatsPayload {
+                total_pending,
+                images_per_sec,
             },
         );
     }

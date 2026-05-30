@@ -31,8 +31,9 @@ impl Default for PipelineConfig {
     }
 }
 
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 async fn write_faces(
     pool: &sqlx::SqlitePool,
@@ -116,6 +117,8 @@ pub async fn run_pipeline(
     );
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
+    let mut throughput_window: VecDeque<(Instant, usize)> = VecDeque::new();
+
     loop {
         // Pull both queues
         let sem_batch = match crate::db::get_queue_batch(&pool, "semantic", config.batch_size as i64).await {
@@ -186,6 +189,8 @@ pub async fn run_pipeline(
                 Err(e) => eprintln!("[pipeline] decode task panicked: {e}"),
             }
         }
+
+        let images_processed_this_iter = decoded.len();
 
         // Stage 2: dispatch embed + face, write results
         let mut processed_subject_work = false;
@@ -342,7 +347,22 @@ pub async fn run_pipeline(
             );
         }
 
-        crate::embedder::emit_progress(&pool, &app).await;
+        let now = Instant::now();
+        throughput_window.push_back((now, images_processed_this_iter));
+        throughput_window.retain(|(t, _)| t.elapsed() <= Duration::from_secs(5));
+        let images_per_sec = if throughput_window.len() < 2 {
+            0.0_f32
+        } else {
+            let sum_images: usize = throughput_window.iter().map(|(_, n)| n).sum();
+            let window_span = throughput_window
+                .front()
+                .map(|(t, _)| t.elapsed())
+                .unwrap_or(Duration::from_millis(1))
+                .max(Duration::from_millis(1));
+            sum_images as f32 / window_span.as_secs_f32()
+        };
+
+        crate::embedder::emit_progress(&pool, &app, images_per_sec).await;
 
         // Persist index snapshot
         let snap_path = data_dir.join("nebula.idx");

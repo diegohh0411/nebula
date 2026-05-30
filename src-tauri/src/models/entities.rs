@@ -42,10 +42,9 @@ pub struct ProcessingStatus {
 // Tauri event payloads
 
 #[derive(Debug, Serialize, Clone)]
-pub struct ProcessingProgressPayload {
-    pub semantic_pending: i64,
-    pub subject_pending: i64,
-    pub done: i64,
+pub struct PipelineStatsPayload {
+    pub total_pending: u32,
+    pub images_per_sec: f32,
 }
 
 #[derive(Debug, Serialize, Clone)]

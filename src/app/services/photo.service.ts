@@ -3,7 +3,7 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { auditTime } from 'rxjs/operators';
 import {
   DayGroup,
-  ProcessingStatus,
+  PipelineStats,
   Folder,
   Image,
   SearchResult,
@@ -28,7 +28,7 @@ export class PhotoService {
   readonly subjects = signal<Subject[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
-  readonly processingStatus = signal<ProcessingStatus>({ semantic_pending: 0, subject_pending: 0, done: 0 });
+  readonly pipelineStats = signal<PipelineStats>({ total_pending: 0, images_per_sec: 0 });
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
   readonly searchError = signal<string | null>(null);
@@ -112,8 +112,8 @@ export class PhotoService {
   );
 
   constructor() {
-    this.events.processingProgress$.subscribe((e) => {
-      this.processingStatus.set(e);
+    this.events.pipelineStats$.subscribe((e) => {
+      this.pipelineStats.set(e);
     });
 
     this.events.imageAdded$.pipe(auditTime(1000)).subscribe(() => {
@@ -198,8 +198,8 @@ export class PhotoService {
   }
 
   async refreshProcessingStatus(): Promise<void> {
-    const status = await invoke<ProcessingStatus>('get_processing_status');
-    this.processingStatus.set(status);
+    const stats = await invoke<PipelineStats>('get_processing_status');
+    this.pipelineStats.set(stats);
   }
 
   async refreshSearchResults(): Promise<void> {
