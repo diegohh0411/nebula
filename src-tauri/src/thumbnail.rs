@@ -87,4 +87,57 @@ mod tests {
         std::fs::remove_file(&dest).ok();
     }
 
+    /// thumbnail_path_for must return a path nested under data_dir/thumbnails,
+    /// named after the image id, and be deterministic for the same inputs.
+    #[test]
+    fn thumbnail_path_for_is_under_data_dir_and_deterministic() {
+        let data_dir = std::env::temp_dir().join(format!("nebula_test_data_{}", std::process::id()));
+        let image_id: i64 = 42;
+
+        let path = thumbnail_path_for(&data_dir, image_id);
+
+        // Must be located under data_dir
+        assert!(
+            path.starts_with(&data_dir),
+            "thumbnail path {:?} should be under data_dir {:?}",
+            path,
+            data_dir
+        );
+        // Must carry the image id in the filename
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            file_name.contains("42"),
+            "filename {:?} should contain the image id 42",
+            file_name
+        );
+        // Must be deterministic: same inputs → same output
+        assert_eq!(path, thumbnail_path_for(&data_dir, image_id));
+        // Different ids must not collide
+        assert_ne!(path, thumbnail_path_for(&data_dir, 99));
+    }
+
+    /// write_thumbnail_from_image must actually create the file on disk
+    /// at the path computed by thumbnail_path_for, mirroring Stage-1 of the
+    /// early-preview pipeline.
+    #[test]
+    fn early_preview_writes_thumbnail_file() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "nebula_test_early_preview_{}_{}", std::process::id(), 1u64
+        ));
+        let image_id: i64 = 7;
+        let img = red(400, 300);
+
+        let thumb_path = thumbnail_path_for(&data_dir, image_id);
+        write_thumbnail_from_image(&img, &thumb_path).unwrap();
+
+        assert!(
+            thumb_path.exists(),
+            "thumbnail file should exist at {:?} after write_thumbnail_from_image",
+            thumb_path
+        );
+
+        // Clean up
+        std::fs::remove_file(&thumb_path).ok();
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
 }

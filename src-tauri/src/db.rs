@@ -1229,6 +1229,83 @@ mod tests {
         pool
     }
 
+    /// A minimal in-memory pool containing only the folders + images tables,
+    /// sufficient for testing image-level DB helpers without requiring a temp file.
+    async fn make_images_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE folders (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                path     TEXT UNIQUE NOT NULL,
+                added_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE images (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_id              INTEGER NOT NULL REFERENCES folders(id),
+                path                   TEXT UNIQUE NOT NULL,
+                file_hash              TEXT NOT NULL,
+                file_size              INTEGER NOT NULL DEFAULT 0,
+                date_taken             INTEGER,
+                mtime                  INTEGER NOT NULL,
+                thumbnail_path         TEXT,
+                semantic_analysis_done INTEGER NOT NULL DEFAULT 0,
+                subject_analysis_done  INTEGER NOT NULL DEFAULT 0,
+                embedding              BLOB,
+                added_at               INTEGER NOT NULL,
+                updated_at             INTEGER NOT NULL,
+                deleted_at             INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// update_thumbnail_path must persist the path and make it visible via
+    /// get_image_by_id — this is the DB half of the early-preview contract.
+    #[tokio::test]
+    async fn update_thumbnail_path_persists_and_is_readable() {
+        let pool = make_images_pool().await;
+
+        // Insert a folder so the FK constraint is satisfied
+        let folder_id: i64 = sqlx::query_scalar(
+            "INSERT INTO folders (path, added_at) VALUES ('/test/photos', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Insert an image row; thumbnail_path starts NULL
+        let image_id = insert_image(&pool, folder_id, "/test/photos/img.jpg", "abc123", 1024, 0)
+            .await
+            .unwrap();
+
+        let before = get_image_by_id(&pool, image_id).await.unwrap().unwrap();
+        assert!(
+            before.thumbnail_path.is_none(),
+            "thumbnail_path should be NULL before update"
+        );
+
+        // Record the thumbnail path (simulates the pipeline's Stage-1 early-preview step)
+        let expected_path = format!("/data/thumbnails/{}.webp", image_id);
+        update_thumbnail_path(&pool, image_id, &expected_path)
+            .await
+            .unwrap();
+
+        let after = get_image_by_id(&pool, image_id).await.unwrap().unwrap();
+        assert_eq!(
+            after.thumbnail_path.as_deref(),
+            Some(expected_path.as_str()),
+            "thumbnail_path should equal the value written by update_thumbnail_path"
+        );
+    }
+
     #[tokio::test]
     async fn get_manual_face_embeddings_returns_only_manual() {
         let pool = make_pool().await;
