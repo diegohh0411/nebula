@@ -5,6 +5,7 @@ mod embedder;
 pub mod models;
 pub mod pipeline;
 mod preprocess;
+mod preview;
 mod search;
 mod thumbnail;
 pub mod vision_engine;
