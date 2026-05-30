@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::{
     db,
-    models::{ProcessingStatus, FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
+    models::{FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
     search, thumbnail, AppState,
 };
 
@@ -197,8 +197,13 @@ pub async fn search(
 #[tauri::command]
 pub async fn get_processing_status(
     state: tauri::State<'_, AppState>,
-) -> Result<ProcessingStatus, String> {
-    db::get_processing_counts(&state.pool).await.map_err(map_err)
+) -> Result<crate::models::PipelineStatsPayload, String> {
+    db::get_processing_counts(&state.pool).await
+        .map(|s| crate::models::PipelineStatsPayload {
+            total_pending: (s.semantic_pending as u32).saturating_add(s.subject_pending as u32),
+            images_per_sec: 0.0,
+        })
+        .map_err(map_err)
 }
 
 #[tauri::command]
