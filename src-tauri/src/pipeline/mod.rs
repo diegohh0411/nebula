@@ -118,6 +118,7 @@ pub async fn run_pipeline(
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
     let mut throughput_window: VecDeque<(Instant, usize)> = VecDeque::new();
+    let thumb_sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
 
     loop {
         // Pull both queues
@@ -178,14 +179,19 @@ pub async fn run_pipeline(
             match h.await {
                 Ok(Ok(x)) => {
                     let (image_id, _, _, ref d) = x;
-                    // Early Thumbnail Generation (Stage 1) - spawned in background to avoid blocking Stage 2 dispatch
+                    // Early Thumbnail Generation (Stage 1) - spawned in background to avoid blocking Stage 2 dispatch.
+                    // Acquire a permit BEFORE cloning d so that at most load_channel_depth full-image
+                    // buffers are live at once across all in-flight thumbnail tasks.
+                    let thumb_permit = thumb_sem.clone().acquire_owned().await
+                        .expect("thumb_sem closed unexpectedly");
                     let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
                     let thumb_path_str = thumb_path.to_string_lossy().to_string();
                     let d_thumb = d.clone();
                     let pool_c = pool.clone();
                     let app_c = app.clone();
-                    
+
                     tokio::spawn(async move {
+                        let _permit = thumb_permit;
                         let write_ok = tokio::task::spawn_blocking(move || {
                             crate::thumbnail::write_thumbnail_from_image(d_thumb.full.as_ref(), &thumb_path)
                         })
