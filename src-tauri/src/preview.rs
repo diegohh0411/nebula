@@ -1,6 +1,55 @@
 use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::path::{Path, PathBuf};
+use std::collections::{HashSet, VecDeque};
+
+/// High/low priority work queue for preview generation, with dedup.
+pub struct PreviewQueue {
+    high: VecDeque<i64>,
+    low: VecDeque<i64>,
+    seen: HashSet<i64>,
+}
+
+impl PreviewQueue {
+    pub fn new() -> Self {
+        Self { high: VecDeque::new(), low: VecDeque::new(), seen: HashSet::new() }
+    }
+
+    /// Enqueue at low priority. Returns true if newly added (not seen before).
+    pub fn enqueue_low(&mut self, id: i64) -> bool {
+        if !self.seen.insert(id) {
+            return false;
+        }
+        self.low.push_back(id);
+        true
+    }
+
+    /// Enqueue/promote at high priority. If already queued in low, move it to
+    /// high; if unseen, add to high; if already in high or done, no-op.
+    pub fn enqueue_high(&mut self, id: i64) {
+        if let Some(pos) = self.low.iter().position(|&x| x == id) {
+            self.low.remove(pos);
+            self.high.push_back(id);
+            return;
+        }
+        if self.seen.insert(id) {
+            self.high.push_back(id);
+        }
+    }
+
+    /// Pop the next id: high priority first, then low.
+    pub fn next(&mut self) -> Option<i64> {
+        self.high.pop_front().or_else(|| self.low.pop_front())
+    }
+
+    pub fn high_nonempty(&self) -> bool {
+        !self.high.is_empty()
+    }
+}
+
+impl Default for PreviewQueue {
+    fn default() -> Self { Self::new() }
+}
 
 /// Decode an image at a coarse downscale such that the longest edge is
 /// ≤ `target_long_edge`, preserving aspect ratio. For JPEG this scales
@@ -135,5 +184,44 @@ mod tests {
         assert!(loaded.width() == 800 || loaded.height() == 800);
         std::fs::remove_dir_all(&data_dir).ok();
         std::fs::remove_file(&src).ok();
+    }
+
+    #[test]
+    fn queue_drains_high_before_low() {
+        let mut q = PreviewQueue::new();
+        assert!(q.enqueue_low(1));
+        assert!(q.enqueue_low(2));
+        q.enqueue_high(2);
+        assert_eq!(q.next(), Some(2)); // promoted
+        assert_eq!(q.next(), Some(1));
+        assert_eq!(q.next(), None);
+    }
+
+    #[test]
+    fn promoting_low_id_does_not_double_process() {
+        let mut q = PreviewQueue::new();
+        q.enqueue_low(5);
+        q.enqueue_high(5);
+        assert_eq!(q.next(), Some(5));
+        assert_eq!(q.next(), None); // not still sitting in low
+    }
+
+    #[test]
+    fn enqueue_is_deduped() {
+        let mut q = PreviewQueue::new();
+        assert!(q.enqueue_low(1));
+        assert!(!q.enqueue_low(1)); // already seen
+        assert_eq!(q.next(), Some(1));
+        assert_eq!(q.next(), None);
+    }
+
+    #[test]
+    fn high_nonempty_reflects_state() {
+        let mut q = PreviewQueue::new();
+        assert!(!q.high_nonempty());
+        q.enqueue_high(9);
+        assert!(q.high_nonempty());
+        q.next();
+        assert!(!q.high_nonempty());
     }
 }
