@@ -2,10 +2,11 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::path::Path;
 
-/// Decode an image at a coarse downscale no larger than `target_long_edge`
-/// on its longest side. For JPEG this scales DURING decode (power-of-two)
-/// via `jpeg-decoder`; other formats decode fully via `image`. The caller
-/// is responsible for the final exact resize.
+/// Decode an image at a coarse downscale such that the longest edge is
+/// ≤ `target_long_edge`, preserving aspect ratio. For JPEG this scales
+/// DURING decode (power-of-two factor) via `jpeg-decoder`; other formats
+/// decode fully via `image`. The caller is responsible for the final exact
+/// resize to the target dimensions.
 pub fn decode_at_most(path: &Path, target_long_edge: u32) -> Result<DynamicImage> {
     let is_jpeg = matches!(
         path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
