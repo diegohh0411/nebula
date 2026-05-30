@@ -176,7 +176,31 @@ pub async fn run_pipeline(
         let mut decoded = Vec::new();
         for h in handles {
             match h.await {
-                Ok(Ok(x)) => decoded.push(x),
+                Ok(Ok(x)) => {
+                    let (image_id, _, _, ref d) = x;
+                    // Early Thumbnail Generation (Stage 1)
+                    let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
+                    let thumb_path_str = thumb_path.to_string_lossy().to_string();
+                    let d_thumb = d.clone();
+                    let write_ok = tokio::task::spawn_blocking(move || {
+                        crate::thumbnail::write_thumbnail_from_image(d_thumb.full.as_ref(), &thumb_path)
+                    })
+                    .await
+                    .map(|r| r.is_ok())
+                    .unwrap_or(false);
+
+                    if write_ok {
+                        let _ = crate::db::update_thumbnail_path(&pool, image_id, &thumb_path_str).await;
+                        // First Emit: signal the UI that the preview is ready
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "image_updated",
+                            crate::models::ImageUpdatedPayload { image_id },
+                        );
+                    }
+
+                    decoded.push(x);
+                }
                 Ok(Err((sem_entry, sub_entry, err_msg))) => {
                     eprintln!("[pipeline] decode failed: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
@@ -328,19 +352,6 @@ pub async fn run_pipeline(
                 (None, None) => {}
             }
 
-            // Thumbnail from same buffer — unchanged from original
-            let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
-            let thumb_path_str = thumb_path.to_string_lossy().to_string();
-            let d_thumb = d.clone();
-            let write_ok = tokio::task::spawn_blocking(move || {
-                crate::thumbnail::write_thumbnail_from_image(d_thumb.full.as_ref(), &thumb_path)
-            })
-            .await
-            .map(|r| r.is_ok())
-            .unwrap_or(false);
-            if write_ok {
-                let _ = crate::db::update_thumbnail_path(&pool, image_id, &thumb_path_str).await;
-            }
             let _ = app.emit(
                 "image_updated",
                 crate::models::ImageUpdatedPayload { image_id },
