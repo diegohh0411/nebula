@@ -3,22 +3,55 @@ import {
   ChangeDetectionStrategy,
   inject,
   signal,
+  effect,
+  OnDestroy,
 } from '@angular/core';
+import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { PhotoService } from '../../services/photo.service';
+
+type BadgeState = 'active' | 'completing' | 'idle';
 
 @Component({
   selector: 'app-search-bar',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, DecimalPipe],
   templateUrl: './search-bar.component.html',
   styleUrl: './search-bar.component.css',
 })
-export class SearchBarComponent {
+export class SearchBarComponent implements OnDestroy {
   protected photos = inject(PhotoService);
   protected query = signal('');
   protected isDragOver = signal(false);
+  protected badgeState = signal<BadgeState>('idle');
+
+  private completingTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    effect(() => {
+      const stats = this.photos.pipelineStats();
+      if (stats.total_pending > 0) {
+        if (this.completingTimer !== null) {
+          clearTimeout(this.completingTimer);
+          this.completingTimer = null;
+        }
+        this.badgeState.set('active');
+      } else if (this.badgeState() === 'active') {
+        this.badgeState.set('completing');
+        this.completingTimer = setTimeout(() => {
+          this.badgeState.set('idle');
+          this.completingTimer = null;
+        }, 2500);
+      }
+    });
+  }
+
+  ngOnDestroy(): void {
+    if (this.completingTimer !== null) {
+      clearTimeout(this.completingTimer);
+    }
+  }
 
   protected onSearch(): void {
     void this.photos.searchByText(this.query());
