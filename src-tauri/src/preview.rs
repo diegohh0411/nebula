@@ -42,8 +42,11 @@ impl PreviewQueue {
     }
 
     /// Pop the next id: high priority first, then low.
+    /// Removes the id from `seen` so it can be re-enqueued if needed (e.g. after re-indexing).
     pub fn next(&mut self) -> Option<i64> {
-        self.high.pop_front().or_else(|| self.low.pop_front())
+        let id = self.high.pop_front().or_else(|| self.low.pop_front())?;
+        self.seen.remove(&id);
+        Some(id)
     }
 
     /// Returns true if there are high-priority items pending.
@@ -259,12 +262,16 @@ impl PreviewService {
                 }
 
                 loop {
-                    let high_pending = queue.lock().unwrap().high_nonempty();
-                    let par = governor.parallelism(high_pending);
+                    let (par, id) = {
+                        let mut q = queue.lock().unwrap();
+                        let high_pending = q.high_nonempty();
+                        let par = governor.parallelism(high_pending);
+                        (par, q.next())
+                    };
                     if in_flight.load(Ordering::Relaxed) >= par {
                         break;
                     }
-                    let id = match queue.lock().unwrap().next() {
+                    let id = match id {
                         Some(id) => id,
                         None => break,
                     };
