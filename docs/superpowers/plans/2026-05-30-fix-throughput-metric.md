@@ -4,7 +4,7 @@
 
 **Goal:** Fix the `images_per_sec` metric that permanently reads `0 img/s` in the badge by replacing the broken rolling-window approach with a per-batch EMA calculation.
 
-**Architecture:** The pipeline loop in `src-tauri/src/pipeline/mod.rs` currently uses a `VecDeque<(Instant, usize)>` rolling window that is evicted before a second entry can accumulate (batches take >5 s), so the `len() < 2` guard always returns `0.0`. The fix captures a `batch_start: Instant` before Stage 1 decode, measures real elapsed time after Stage 2 completes, computes an instantaneous rate, then smooths it with an EMA stored in a `mut ema: f32` local variable. The `VecDeque` and its associated `use` import are removed entirely.
+**Architecture:** The pipeline loop in `src-tauri/src/pipeline/mod.rs` currently uses a `VecDeque<(Instant, usize)>` rolling window that is evicted before a second entry can accumulate (batches take >5 s), so the `len() < 2` guard always returns `0.0`. The fix captures a `batch_start: Instant` before Stage 1 decode, measures real elapsed time after Stage 2 completes, computes an instantaneous rate, then smooths it with an EMA stored in a `mut throughput_ema: Option<f32>` local variable (`None` = uninitialized, avoids float equality sentinel). The `VecDeque` and its associated `use` import are removed entirely.
 
 **Tech Stack:** Rust (Tokio async, `std::time::Instant`), existing `emit_progress` API — no new dependencies.
 
@@ -52,20 +52,23 @@ Add this test module at the very bottom of `src-tauri/src/pipeline/mod.rs` (afte
 ```rust
 #[cfg(test)]
 mod tests {
-    fn ema_step(prev: f32, inst: f32) -> f32 {
-        if prev == 0.0 { inst } else { 0.3 * inst + 0.7 * prev }
+    fn ema_step(prev: Option<f32>, inst: f32) -> f32 {
+        match prev {
+            None => inst,
+            Some(p) => 0.3 * inst + 0.7 * p,
+        }
     }
 
     #[test]
     fn ema_seeds_on_first_batch() {
-        // First batch: ema starts at 0.0, should seed with inst_rate directly
-        let ema = ema_step(0.0, 4.0);
+        // First batch: None signals uninitialized, seeds with inst_rate directly
+        let ema = ema_step(None, 4.0);
         assert_eq!(ema, 4.0, "first batch must seed ema = inst_rate");
     }
 
     #[test]
     fn ema_smooths_on_subsequent_batches() {
-        let ema = ema_step(4.0, 8.0);
+        let ema = ema_step(Some(4.0), 8.0);
         // 0.3 * 8.0 + 0.7 * 4.0 = 2.4 + 2.8 = 5.2
         let expected = 0.3_f32 * 8.0 + 0.7_f32 * 4.0;
         assert!(
@@ -76,11 +79,11 @@ mod tests {
 
     #[test]
     fn ema_is_positive_for_nonzero_input() {
-        let mut ema = 0.0_f32;
+        let mut ema: Option<f32> = None;
         for _ in 0..5 {
-            ema = ema_step(ema, 3.0);
+            ema = Some(ema_step(ema, 3.0));
         }
-        assert!(ema > 0.0, "ema must be positive after several batches with nonzero rate");
+        assert!(ema.unwrap() > 0.0, "ema must be positive after several batches with nonzero rate");
     }
 }
 ```
@@ -121,7 +124,7 @@ Find this block (around line 120):
 Replace it with:
 
 ```rust
-    let mut throughput_ema: f32 = 0.0;
+    let mut throughput_ema: Option<f32> = None;
 ```
 
 Then find the line that begins the outer `loop {` body. The very first thing inside the loop body (before the `get_queue_batch` calls) should capture the batch start time. Locate the `loop {` line (around line 122) and the first `let sem_batch = match` line inside it. Insert `batch_start` capture just after `loop {`:
@@ -163,13 +166,13 @@ Find and replace the entire block from `let now = Instant::now();` through `crat
 ```rust
         let dt = batch_start.elapsed().as_secs_f32().max(1e-3);
         let inst_rate = images_processed_this_iter as f32 / dt;
-        throughput_ema = if throughput_ema == 0.0 {
-            inst_rate
-        } else {
-            0.3 * inst_rate + 0.7 * throughput_ema
+        let ema = match throughput_ema {
+            None => inst_rate,
+            Some(prev) => 0.3 * inst_rate + 0.7 * prev,
         };
+        throughput_ema = Some(ema);
 
-        crate::embedder::emit_progress(&pool, &app, throughput_ema).await;
+        crate::embedder::emit_progress(&pool, &app, ema).await;
 ```
 
 ---
@@ -316,6 +319,6 @@ ntn api v1/pages/$PAGE_ID -X PATCH \
 **Placeholder scan:** No TBDs, no "handle edge cases", all code shown inline.
 
 **Type consistency:**
-- `throughput_ema: f32` declared in Task 1 Step 5, used in Task 1 Step 6 — matches.
+- `throughput_ema: Option<f32>` declared in Task 1 Step 5, used in Task 1 Step 6 — matches.
 - `batch_start: Instant` captured in Task 1 Step 5, consumed in Task 1 Step 6 — matches.
 - `images_processed_this_iter: usize` already exists at line 193 — used unchanged.
