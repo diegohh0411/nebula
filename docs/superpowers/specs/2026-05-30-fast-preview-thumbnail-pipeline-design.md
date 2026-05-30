@@ -75,20 +75,21 @@ preview_path TEXT
 
 Distinct filenames so the WebView asset cache never serves a stale tier. No `VERSIONED_MIGRATIONS` entry; user wipes `APP_DATA`.
 
-### Tier 1 — instant (≤ ~200px, paints the grid)
+### Decode helper
 
-1. **JPEG:** read the embedded EXIF thumbnail (add `kamadak-exif`); cameras embed ~160–320px JPEGs at near-zero decode cost. **Re-encode to WebP** for format consistency.
-2. **Fallback** (no EXIF thumb, or PNG): DCT-scaled decode at 1/8 via `jpeg-decoder` `scale()` for JPEG; decode + fast downscale for PNG (typically small screenshots).
+`decode_at_most(path, target_long_edge) -> Result<DynamicImage>` decodes at a coarse downscale ≤ the requested size, isolating format-specific fiddliness behind one tested interface:
+- **JPEG:** `jpeg-decoder` (added directly — `image` 0.25 uses `zune-jpeg`, which has no scaled-decode API). `Decoder::scale(target, target)` downscales by a power of two (1, 2, 4, or 8) *during* decode, so a 24MP JPEG is decoded at ~1/8 in milliseconds. Build a `DynamicImage` from the decoded buffer for `PixelFormat::RGB24` / `L8`; on any other pixel format (e.g. CMYK) or decode error, fall back to `image::open()`.
+- **PNG / other:** `image::open()` (PNGs are typically small screenshots, cheap to decode full), then the caller resizes.
 
-Write `preview_path`, update DB, emit `image_updated`.
+The caller always resizes the (coarsely-scaled) result to the exact target with CatmullRom. We do **not** extract embedded EXIF thumbnails — that path requires fragile TIFF byte-offset math and an extra `kamadak-exif` dependency, and scaled decode is already fast enough and format-uniform.
+
+### Tier 1 — instant (~256px longest edge, paints the grid)
+
+`decode_at_most(path, 256)` → resize to ≤256px longest edge → WebP at `preview_path` (`{id}_p.webp`). Write `preview_path`, update DB, emit `image_updated`.
 
 ### Tier 2 — 800px (current grid quality)
 
-Scaled decode at 1/2 or 1/4 (enough headroom above 800px for clean CatmullRom resize), then reuse `thumbnail::write_thumbnail_from_image` to resize to 800px longest side and encode WebP. Replaces the current full-resolution `image::open()` for thumbnails — a large saving on its own. Write `thumbnail_path`, update DB, emit `image_updated` again.
-
-### Decode helper
-
-`decode_scaled(path, max_dim) -> DynamicImage` picks EXIF-thumb / DCT-scale / full-decode based on format and requested size, isolating format-specific fiddliness behind one tested interface. Confirm `jpeg-decoder`'s `scale` API is reachable through the `image` dep; add `jpeg-decoder` directly if not.
+`decode_at_most(path, 1600)` (headroom above 800px for a clean resize) → reuse `thumbnail::write_thumbnail_from_image` to resize to 800px longest side and encode WebP at `thumbnail_path` (`{id}.webp`). Replaces the current full-resolution `image::open()` for thumbnails — a large saving on its own. Write `thumbnail_path`, update DB, emit `image_updated` again.
 
 ## Viewport prioritization & governor
 
@@ -129,7 +130,7 @@ Inference is never hard-blocked; it runs concurrently throughout. During a burst
 
 Unit-tests-in-module, TDD during implementation.
 
-**`decode_scaled`:** EXIF-thumb path used when present (dims ≤ target); DCT fallback when absent (non-empty, ≤ target); tier-2 of a >800px image fits 800×800 touching one edge; tiny source not upscaled; corrupt/missing file → `Err`, no panic.
+**`decode_at_most`:** scaled JPEG decode returns a non-empty image with dims ≤ original; PNG path decodes; tier-2 of a >800px image fits 800×800 touching one edge after resize; tiny source not upscaled; corrupt/missing file → `Err`, no panic.
 
 **`PreviewQueue` (pure logic):** drains `high` before `low`; promoting a `low` ID removes it from `low`; enqueuing an in-flight/done ID is a no-op; empty queue idles without spinning.
 
