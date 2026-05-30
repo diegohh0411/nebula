@@ -46,11 +46,10 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
 
 pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle, images_per_sec: f32) {
     if let Ok(status) = db::get_processing_counts(pool).await {
-        let total_pending = (status.semantic_pending as u32).saturating_add(status.subject_pending as u32);
         let _ = app.emit(
             "pipeline_stats",
             crate::models::PipelineStatsPayload {
-                total_pending,
+                total_pending: status.total_pending as u32,
                 images_per_sec,
             },
         );
