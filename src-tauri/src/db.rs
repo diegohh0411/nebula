@@ -567,15 +567,13 @@ pub async fn get_all_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>
 pub async fn get_processing_counts(pool: &SqlitePool) -> Result<ProcessingStatus> {
     let row = sqlx::query(
         "SELECT
-           (SELECT COUNT(*) FROM embedding_queue WHERE pipeline = 'semantic') as semantic_pending,
-           (SELECT COUNT(*) FROM embedding_queue WHERE pipeline = 'subject') as subject_pending,
+           (SELECT COUNT(DISTINCT image_id) FROM embedding_queue) as total_pending,
            (SELECT COUNT(*) FROM images WHERE semantic_analysis_done = 1 AND subject_analysis_done = 1 AND deleted_at IS NULL) as done",
     )
     .fetch_one(pool)
     .await?;
     Ok(ProcessingStatus {
-        semantic_pending: row.get("semantic_pending"),
-        subject_pending: row.get("subject_pending"),
+        total_pending: row.get("total_pending"),
         done: row.get("done"),
     })
 }

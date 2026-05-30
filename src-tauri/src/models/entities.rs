@@ -34,8 +34,7 @@ pub struct FolderWithCount {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProcessingStatus {
-    pub semantic_pending: i64,
-    pub subject_pending: i64,
+    pub total_pending: i64,
     pub done: i64,
 }
 

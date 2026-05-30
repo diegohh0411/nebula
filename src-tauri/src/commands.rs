@@ -200,7 +200,7 @@ pub async fn get_processing_status(
 ) -> Result<crate::models::PipelineStatsPayload, String> {
     db::get_processing_counts(&state.pool).await
         .map(|s| crate::models::PipelineStatsPayload {
-            total_pending: (s.semantic_pending as u32).saturating_add(s.subject_pending as u32),
+            total_pending: s.total_pending as u32,
             images_per_sec: 0.0,
         })
         .map_err(map_err)
