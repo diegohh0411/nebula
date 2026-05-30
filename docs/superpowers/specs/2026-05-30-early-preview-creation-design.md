@@ -16,7 +16,7 @@ We will move thumbnail generation to happen immediately after Stage 1 (Decode) s
 ## Data Flow & Events
 
 1. **Stage 1 (Decode) completes:** We have the `DecodedImage` in memory.
-2. **Generate Thumbnail:** We immediately spawn a blocking task to resize the image and save it to the `.thumbnails` directory.
+2. **Generate Thumbnail:** We immediately spawn a blocking task to resize the image and save it to the `thumbnails` directory.
 3. **Database Update:** Once written, update the `thumbnail_path` in the `images` table.
 4. **First Emit:** Emit the `image_updated` event to the frontend. This signals that the UI can now display the preview, even though ML analysis is still pending.
 5. **Stage 2 (Inference) completes:** Embeddings and faces are saved to the DB.
