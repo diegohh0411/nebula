@@ -40,16 +40,9 @@ export function getProcessingStage(
   return 'ready';
 }
 
-export interface ProcessingStatus {
-  semantic_pending: number;
-  subject_pending: number;
-  done: number;
-}
-
-export interface ProcessingProgressEvent {
-  semantic_pending: number;
-  subject_pending: number;
-  done: number;
+export interface PipelineStats {
+  total_pending: number;
+  images_per_sec: number;
 }
 
 export interface ImageAddedEvent {
