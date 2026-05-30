@@ -14,6 +14,10 @@ pub fn thumbnail_path_for(data_dir: &Path, image_id: i64) -> PathBuf {
     thumbnail_cache_dir(data_dir).join(format!("{}.webp", image_id))
 }
 
+pub fn preview_path_for(data_dir: &Path, image_id: i64) -> PathBuf {
+    thumbnail_cache_dir(data_dir).join(format!("{}_p.webp", image_id))
+}
+
 pub fn face_crop_path_for(data_dir: &Path, face_id: i64) -> PathBuf {
     face_crop_cache_dir(data_dir).join(format!("{}.webp", face_id))
 }
