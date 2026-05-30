@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 /// High/low priority work queue for preview generation, with dedup.
 pub struct PreviewQueue {
@@ -177,6 +179,181 @@ pub fn write_thumbnail(src: &Path, image_id: i64, data_dir: &Path) -> Result<Pat
     let dest = crate::thumbnail::thumbnail_path_for(data_dir, image_id);
     crate::thumbnail::write_thumbnail_from_image(&img, &dest)?;
     Ok(dest)
+}
+
+/// Cloneable façade used by the indexer and commands to feed the queue.
+#[derive(Clone)]
+pub struct PreviewHandle {
+    queue: Arc<Mutex<PreviewQueue>>,
+    governor: Arc<Governor>,
+    notify: Arc<Notify>,
+}
+
+impl PreviewHandle {
+    /// Enqueue a newly-indexed image at low priority and wake the dispatcher.
+    pub fn enqueue_low(&self, id: i64) {
+        let added = self.queue.lock().unwrap().enqueue_low(id);
+        if added {
+            self.notify.notify_one();
+        }
+    }
+
+    /// Promote viewport ids to high priority and re-enter the burst window.
+    pub fn prioritize(&self, ids: Vec<i64>) {
+        {
+            let mut q = self.queue.lock().unwrap();
+            for id in ids {
+                q.enqueue_high(id);
+            }
+        }
+        self.governor.signal_high_demand();
+        self.notify.notify_one();
+    }
+}
+
+/// Owns the worker pool. Spawned once at startup.
+pub struct PreviewService;
+
+impl PreviewService {
+    /// Start the dispatcher + backlog feeder. Returns a handle for enqueuing.
+    pub fn start(
+        pool: sqlx::SqlitePool,
+        app: tauri::AppHandle,
+        data_dir: std::path::PathBuf,
+    ) -> PreviewHandle {
+        let cores = num_cpus::get().max(2);
+        let queue = Arc::new(Mutex::new(PreviewQueue::new()));
+        let governor = Arc::new(Governor::new(cores, 2, Duration::from_secs(5)));
+        let notify = Arc::new(Notify::new());
+        let handle = PreviewHandle {
+            queue: queue.clone(),
+            governor: governor.clone(),
+            notify: notify.clone(),
+        };
+
+        // Backlog feeder: enqueue everything that still needs a thumbnail.
+        {
+            let pool = pool.clone();
+            let h = handle.clone();
+            tokio::spawn(async move {
+                match crate::db::images_needing_preview(&pool).await {
+                    Ok(ids) => {
+                        for id in ids {
+                            h.enqueue_low(id);
+                        }
+                    }
+                    Err(e) => eprintln!("[preview] backlog query failed: {e}"),
+                }
+            });
+        }
+
+        // Dispatcher: keep up to `governor.parallelism()` workers in flight.
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            loop {
+                // Wait for work signals; also wake periodically so the trickle
+                // tier keeps draining a large backlog without new signals.
+                tokio::select! {
+                    _ = notify.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                }
+
+                loop {
+                    let high_pending = queue.lock().unwrap().high_nonempty();
+                    let par = governor.parallelism(high_pending);
+                    if in_flight.load(Ordering::Relaxed) >= par {
+                        break;
+                    }
+                    let id = match queue.lock().unwrap().next() {
+                        Some(id) => id,
+                        None => break,
+                    };
+                    in_flight.fetch_add(1, Ordering::Relaxed);
+
+                    let pool = pool.clone();
+                    let app = app.clone();
+                    let data_dir = data_dir.clone();
+                    let in_flight = in_flight.clone();
+                    let notify = notify.clone();
+                    tokio::spawn(async move {
+                        process_image(&pool, &app, &data_dir, id).await;
+                        in_flight.fetch_sub(1, Ordering::Relaxed);
+                        // wake dispatcher to top up the pool
+                        notify.notify_one();
+                    });
+                }
+            }
+        });
+
+        handle
+    }
+}
+
+/// Generate both tiers for one image (skips if deleted or gone), emitting
+/// `image_updated` after each tier so the grid paints progressively.
+async fn process_image(
+    pool: &sqlx::SqlitePool,
+    app: &tauri::AppHandle,
+    data_dir: &std::path::Path,
+    image_id: i64,
+) {
+    use tauri::Emitter;
+
+    let image = match crate::db::get_image_by_id(pool, image_id).await {
+        Ok(Some(i)) => i,
+        Ok(None) => return,
+        Err(e) => {
+            eprintln!("[preview] lookup failed for {image_id}: {e}");
+            return;
+        }
+    };
+    if image.deleted_at.is_some() {
+        return;
+    }
+    let src = std::path::PathBuf::from(&image.path);
+    let data_dir = data_dir.to_path_buf();
+
+    // Tier 1 — tiny instant preview.
+    {
+        let src = src.clone();
+        let dd = data_dir.clone();
+        let res = tokio::task::spawn_blocking(move || write_preview(&src, image_id, &dd)).await;
+        match res {
+            Ok(Ok(path)) => {
+                if crate::db::update_preview_path(pool, image_id, &path.to_string_lossy())
+                    .await
+                    .is_ok()
+                {
+                    let _ = app.emit(
+                        "image_updated",
+                        crate::models::ImageUpdatedPayload { image_id },
+                    );
+                }
+            }
+            Ok(Err(e)) => eprintln!("[preview] tier1 failed for {image_id}: {e}"),
+            Err(e) => eprintln!("[preview] tier1 panicked for {image_id}: {e}"),
+        }
+    }
+
+    // Tier 2 — 800px thumbnail.
+    {
+        let res = tokio::task::spawn_blocking(move || write_thumbnail(&src, image_id, &data_dir)).await;
+        match res {
+            Ok(Ok(path)) => {
+                if crate::db::update_thumbnail_path(pool, image_id, &path.to_string_lossy())
+                    .await
+                    .is_ok()
+                {
+                    let _ = app.emit(
+                        "image_updated",
+                        crate::models::ImageUpdatedPayload { image_id },
+                    );
+                }
+            }
+            Ok(Err(e)) => eprintln!("[preview] tier2 failed for {image_id}: {e}"),
+            Err(e) => eprintln!("[preview] tier2 panicked for {image_id}: {e}"),
+        }
+    }
 }
 
 #[cfg(test)]
