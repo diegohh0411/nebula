@@ -350,13 +350,17 @@ pub async fn run_pipeline(
         let now = Instant::now();
         throughput_window.push_back((now, images_processed_this_iter));
         throughput_window.retain(|(t, _)| t.elapsed() <= Duration::from_secs(5));
-        let sum_images: usize = throughput_window.iter().map(|(_, n)| n).sum();
-        let window_span = throughput_window
-            .front()
-            .map(|(t, _)| t.elapsed())
-            .unwrap_or(Duration::from_millis(1))
-            .max(Duration::from_millis(1));
-        let images_per_sec = sum_images as f32 / window_span.as_secs_f32();
+        let images_per_sec = if throughput_window.len() < 2 {
+            0.0_f32
+        } else {
+            let sum_images: usize = throughput_window.iter().map(|(_, n)| n).sum();
+            let window_span = throughput_window
+                .front()
+                .map(|(t, _)| t.elapsed())
+                .unwrap_or(Duration::from_millis(1))
+                .max(Duration::from_millis(1));
+            sum_images as f32 / window_span.as_secs_f32()
+        };
 
         crate::embedder::emit_progress(&pool, &app, images_per_sec).await;
 
