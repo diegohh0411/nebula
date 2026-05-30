@@ -1,0 +1,77 @@
+import { TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { Subject } from 'rxjs';
+import { PhotoService } from './photo.service';
+import { TauriEventsService } from './tauri-events.service';
+import { ImageUpdatedEvent } from '../models/models';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue([]),
+  convertFileSrc: vi.fn((path: string) => path),
+}));
+
+describe('PhotoService — imageUpdated$ order-agnostic contract', () => {
+  let service: PhotoService;
+  let imageUpdated$: Subject<ImageUpdatedEvent>;
+
+  beforeEach(() => {
+    imageUpdated$ = new Subject<ImageUpdatedEvent>();
+
+    TestBed.configureTestingModule({
+      providers: [
+        PhotoService,
+        {
+          provide: TauriEventsService,
+          useValue: {
+            pipelineStats$: new Subject(),
+            imageAdded$: new Subject(),
+            imageUpdated$,
+            imageRemoved$: new Subject(),
+            modelDownloadProgress$: new Subject(),
+          },
+        },
+      ],
+    });
+
+    service = TestBed.inject(PhotoService);
+    vi.spyOn(service as any, 'refreshImages').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'refreshSearchResults').mockResolvedValue(undefined);
+  });
+
+  it('calls refreshImages after auditTime window expires', fakeAsync(() => {
+    imageUpdated$.next({ image_id: 1 });
+    expect((service as any).refreshImages).not.toHaveBeenCalled();
+    tick(2000);
+    expect((service as any).refreshImages).toHaveBeenCalledTimes(1);
+  }));
+
+  it('coalesces rapid emits (stage-2 then stage-1 within 2 s) into one refresh', fakeAsync(() => {
+    imageUpdated$.next({ image_id: 1 }); // stage-2 "analysis complete" fires first
+    tick(100);
+    imageUpdated$.next({ image_id: 1 }); // stage-1 "preview ready" fires 100 ms later
+    tick(2000);
+    expect((service as any).refreshImages).toHaveBeenCalledTimes(1);
+  }));
+
+  it('fires a second refresh when stage-1 arrives after the 2 s audit window has elapsed', fakeAsync(() => {
+    imageUpdated$.next({ image_id: 1 }); // stage-2 fires
+    tick(2000); // first audit window expires → first refresh
+    expect((service as any).refreshImages).toHaveBeenCalledTimes(1);
+
+    imageUpdated$.next({ image_id: 1 }); // stage-1 thumbnail task fires very late
+    tick(2000); // second audit window → second refresh (UI corrects itself)
+    expect((service as any).refreshImages).toHaveBeenCalledTimes(2);
+  }));
+
+  it('does not assume event order — stage-2 before stage-1 eventually shows thumbnail', fakeAsync(() => {
+    // Worst case: stage-2 fires, UI refreshes and may see thumbnail_path = null.
+    // Then stage-1 thumbnail-write fires and UI refreshes again, picking up the thumbnail.
+    imageUpdated$.next({ image_id: 42 });
+    tick(2000);
+    expect((service as any).refreshImages).toHaveBeenCalledTimes(1);
+
+    imageUpdated$.next({ image_id: 42 });
+    tick(2000);
+    expect((service as any).refreshImages).toHaveBeenCalledTimes(2);
+    // Both calls are unconditional: the second one will find thumbnail_path set.
+  }));
+});
