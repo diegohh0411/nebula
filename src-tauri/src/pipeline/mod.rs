@@ -117,6 +117,7 @@ pub async fn run_pipeline(
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
     let mut throughput_ema: Option<f32> = None;
+    let thumb_sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
 
     loop {
         let batch_start = Instant::now();
@@ -176,7 +177,51 @@ pub async fn run_pipeline(
         let mut decoded = Vec::new();
         for h in handles {
             match h.await {
-                Ok(Ok(x)) => decoded.push(x),
+                Ok(Ok(x)) => {
+                    let (image_id, _, _, ref d) = x;
+                    // Early Thumbnail Generation (Stage 1) - spawned in background to avoid blocking Stage 2 dispatch.
+                    // Acquire a permit BEFORE cloning d so that at most load_channel_depth full-image
+                    // buffers are live at once across all in-flight thumbnail tasks.
+                    let thumb_permit = thumb_sem.clone().acquire_owned().await
+                        .expect("thumb_sem closed unexpectedly");
+                    let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
+                    let thumb_path_str = thumb_path.to_string_lossy().to_string();
+                    let d_thumb = d.clone();
+                    let pool_c = pool.clone();
+                    let app_c = app.clone();
+
+                    tokio::spawn(async move {
+                        let _permit = thumb_permit;
+                        let write_ok = tokio::task::spawn_blocking(move || {
+                            crate::thumbnail::write_thumbnail_from_image(d_thumb.full.as_ref(), &thumb_path)
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            eprintln!("[pipeline] thumbnail panic for image {}: {}", image_id, e);
+                            Err(anyhow::anyhow!("thumbnail task panicked"))
+                        });
+
+                        match write_ok {
+                            Ok(_) => {
+                                if let Err(e) = crate::db::update_thumbnail_path(&pool_c, image_id, &thumb_path_str).await {
+                                    eprintln!("[pipeline] failed to update thumbnail path for image {}: {}", image_id, e);
+                                } else {
+                                    // First Emit: signal the UI that the preview is ready only if both write and DB update succeed
+                                    use tauri::Emitter;
+                                    let _ = app_c.emit(
+                                        "image_updated",
+                                        crate::models::ImageUpdatedPayload { image_id },
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[pipeline] thumbnail generation failed for image {}: {}", image_id, e);
+                            }
+                        }
+                    });
+
+                    decoded.push(x);
+                }
                 Ok(Err((sem_entry, sub_entry, err_msg))) => {
                     eprintln!("[pipeline] decode failed: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
@@ -328,19 +373,6 @@ pub async fn run_pipeline(
                 (None, None) => {}
             }
 
-            // Thumbnail from same buffer — unchanged from original
-            let thumb_path = crate::thumbnail::thumbnail_path_for(&data_dir, image_id);
-            let thumb_path_str = thumb_path.to_string_lossy().to_string();
-            let d_thumb = d.clone();
-            let write_ok = tokio::task::spawn_blocking(move || {
-                crate::thumbnail::write_thumbnail_from_image(d_thumb.full.as_ref(), &thumb_path)
-            })
-            .await
-            .map(|r| r.is_ok())
-            .unwrap_or(false);
-            if write_ok {
-                let _ = crate::db::update_thumbnail_path(&pool, image_id, &thumb_path_str).await;
-            }
             let _ = app.emit(
                 "image_updated",
                 crate::models::ImageUpdatedPayload { image_id },
