@@ -31,7 +31,6 @@ impl Default for PipelineConfig {
     }
 }
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -117,10 +116,11 @@ pub async fn run_pipeline(
     );
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
-    let mut throughput_window: VecDeque<(Instant, usize)> = VecDeque::new();
+    let mut throughput_ema: Option<f32> = None;
     let thumb_sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
 
     loop {
+        let batch_start = Instant::now();
         // Pull both queues
         let sem_batch = match crate::db::get_queue_batch(&pool, "semantic", config.batch_size as i64).await {
             Ok(b) => b,
@@ -379,22 +379,15 @@ pub async fn run_pipeline(
             );
         }
 
-        let now = Instant::now();
-        throughput_window.push_back((now, images_processed_this_iter));
-        throughput_window.retain(|(t, _)| now.duration_since(*t) <= Duration::from_secs(5));
-        let images_per_sec = if throughput_window.len() < 2 {
-            0.0_f32
-        } else {
-            let sum_images: usize = throughput_window.iter().map(|(_, n)| n).sum();
-            let window_span = throughput_window
-                .front()
-                .map(|(t, _)| now.duration_since(*t))
-                .unwrap_or(Duration::from_millis(1))
-                .max(Duration::from_millis(1));
-            sum_images as f32 / window_span.as_secs_f32()
+        let dt = batch_start.elapsed().as_secs_f32().max(1e-3);
+        let inst_rate = images_processed_this_iter as f32 / dt;
+        let ema = match throughput_ema {
+            None => inst_rate,
+            Some(prev) => 0.3 * inst_rate + 0.7 * prev,
         };
+        throughput_ema = Some(ema);
 
-        crate::embedder::emit_progress(&pool, &app, images_per_sec).await;
+        crate::embedder::emit_progress(&pool, &app, ema).await;
 
         // Persist index snapshot
         let snap_path = data_dir.join("nebula.idx");
@@ -414,5 +407,40 @@ pub async fn run_pipeline(
                 let _ = app.emit("subjects_updated", ());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn ema_step(prev: Option<f32>, inst: f32) -> f32 {
+        match prev {
+            None => inst,
+            Some(p) => 0.3 * inst + 0.7 * p,
+        }
+    }
+
+    #[test]
+    fn ema_seeds_on_first_batch() {
+        let ema = ema_step(None, 4.0);
+        assert_eq!(ema, 4.0, "first batch must seed ema = inst_rate");
+    }
+
+    #[test]
+    fn ema_smooths_on_subsequent_batches() {
+        let ema = ema_step(Some(4.0), 8.0);
+        let expected = 0.3_f32 * 8.0 + 0.7_f32 * 4.0;
+        assert!(
+            (ema - expected).abs() < 1e-5,
+            "ema={ema} expected={expected}"
+        );
+    }
+
+    #[test]
+    fn ema_is_positive_for_nonzero_input() {
+        let mut ema: Option<f32> = None;
+        for _ in 0..5 {
+            ema = Some(ema_step(ema, 3.0));
+        }
+        assert!(ema.unwrap() > 0.0, "ema must be positive after several batches with nonzero rate");
     }
 }
