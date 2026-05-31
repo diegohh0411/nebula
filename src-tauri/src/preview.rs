@@ -495,4 +495,40 @@ mod tests {
         let p = compute_parallelism(60.0, true, 8, 2, 5.0);
         assert_eq!(p, 8);
     }
+
+    #[tokio::test]
+    async fn writers_plus_db_make_image_previewable_end_to_end() {
+        let test_dir = std::env::temp_dir().join(format!("nebula_e2e_{}", std::process::id()));
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let pool = crate::db::init_db(&test_dir).await.unwrap();
+        let fid = crate::db::insert_folder(&pool, "/tmp/f").await.unwrap();
+
+        // Create a real source image on disk within the test directory.
+        let mut img = image::RgbImage::new(1600, 1200);
+        for p in img.pixels_mut() { *p = image::Rgb([120, 180, 60]); }
+        let src = test_dir.join("source.jpg");
+        image::DynamicImage::ImageRgb8(img)
+            .save_with_format(&src, image::ImageFormat::Jpeg).unwrap();
+
+        let id = crate::db::insert_image(
+            &pool, fid, src.to_str().unwrap(), "h", 1, 1,
+        ).await.unwrap();
+
+        // Before: needs preview.
+        assert!(crate::db::images_needing_preview(&pool).await.unwrap().contains(&id));
+
+        // Tier 1 then tier 2, persisting paths as process_image would.
+        let p = write_preview(&src, id, &test_dir).unwrap();
+        crate::db::update_preview_path(&pool, id, p.to_str().unwrap()).await.unwrap();
+        let t = write_thumbnail(&src, id, &test_dir).unwrap();
+        crate::db::update_thumbnail_path(&pool, id, t.to_str().unwrap()).await.unwrap();
+
+        // After: both paths set, no longer in the needs-preview set.
+        let img = crate::db::get_image_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(img.preview_path.is_some());
+        assert!(img.thumbnail_path.is_some());
+        assert!(!crate::db::images_needing_preview(&pool).await.unwrap().contains(&id));
+
+        std::fs::remove_dir_all(&test_dir).ok();
+    }
 }
