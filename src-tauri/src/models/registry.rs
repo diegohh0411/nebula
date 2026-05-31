@@ -188,15 +188,116 @@ pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
 pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
     id: "blitz",
     name: "Blitz",
-    description: "Maximum inference speed, for bulk processing",
+    description: "Maximum inference speed, for bulk processing (~25 MB)",
     detector: &BUFFALO_S_DETECTION,
     embedder: &BUFFALO_S_RECOGNITION,
     gender_age: &BUFFALO_S_GENDER_AGE,
     detector_input_size: (640, 640),
 };
 
-pub const ALL_MODELS: &[&ModelSpec] = &[&SIGLIP_BASE, &SIGLIP_FAST, &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE];
-pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET];
+pub const BUFFALO_L_DETECTION: ModelSpec = ModelSpec {
+  id: "buffalo_l_detection",
+  hf_repo: "immich-app/buffalo_l",
+  model_type: ModelType::FaceDetection,
+  cache_dir: "buffalo_l",
+  model_file: ModelFile { filename: "detection.onnx", remote_path: Some("detection/model.onnx") },
+  tokenizer_file: None,
+  display_name: "Buffalo L Detection",
+  display_description: "High-accuracy face detection model",
+  image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
+  size_bytes: 17_000_000,
+};
+
+pub const BUFFALO_L_RECOGNITION: ModelSpec = ModelSpec {
+  id: "buffalo_l_recognition",
+  hf_repo: "immich-app/buffalo_l",
+  model_type: ModelType::FaceEmbedding,
+  cache_dir: "buffalo_l",
+  model_file: ModelFile { filename: "recognition.onnx", remote_path: Some("recognition/model.onnx") },
+  tokenizer_file: None,
+  display_name: "Buffalo L Recognition",
+  display_description: "High-accuracy face recognition model (R100 backbone)",
+  image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
+  size_bytes: 144_000_000,
+};
+
+pub const BUFFALO_L_PRESET: FaceIdPreset = FaceIdPreset {
+    id: "quality",
+    name: "Quality",
+    description: "3–4× more accurate than Blitz — best balance of accuracy and speed (~170 MB)",
+    detector: &BUFFALO_L_DETECTION,
+    embedder: &BUFFALO_L_RECOGNITION,
+    gender_age: &BUFFALO_S_GENDER_AGE,
+    detector_input_size: (640, 640),
+};
+
+pub const ANTELOPE_V2_DETECTION: ModelSpec = ModelSpec {
+  id: "antelopev2_detection",
+  hf_repo: "immich-app/antelopev2",
+  model_type: ModelType::FaceDetection,
+  cache_dir: "antelopev2",
+  model_file: ModelFile { filename: "detection.onnx", remote_path: Some("detection/model.onnx") },
+  tokenizer_file: None,
+  display_name: "Antelope V2 Detection",
+  display_description: "High-accuracy SCRFD face detection model",
+  image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
+  size_bytes: 17_000_000,
+};
+
+pub const ANTELOPE_V2_RECOGNITION: ModelSpec = ModelSpec {
+  id: "antelopev2_recognition",
+  hf_repo: "immich-app/antelopev2",
+  model_type: ModelType::FaceEmbedding,
+  cache_dir: "antelopev2",
+  model_file: ModelFile { filename: "recognition.onnx", remote_path: Some("recognition/model.onnx") },
+  tokenizer_file: None,
+  display_name: "Antelope V2 Recognition",
+  display_description: "Maximum-accuracy glintr100 face recognition model",
+  image_size: 0,
+  vision_file: None,
+  text_file: None,
+  vision_input: "",
+  vision_output: "",
+  text_input: "",
+  text_output: "",
+  size_bytes: 261_000_000,
+};
+
+pub const ANTELOPE_V2_PRESET: FaceIdPreset = FaceIdPreset {
+    id: "precision",
+    name: "Precision",
+    description: "Maximum accuracy — glintr100 backbone, best for difficult lighting and angles (~280 MB)",
+    detector: &ANTELOPE_V2_DETECTION,
+    embedder: &ANTELOPE_V2_RECOGNITION,
+    gender_age: &BUFFALO_S_GENDER_AGE,
+    detector_input_size: (640, 640),
+};
+
+pub const ALL_MODELS: &[&ModelSpec] = &[
+    &SIGLIP_BASE, &SIGLIP_FAST,
+    &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE,
+    &BUFFALO_L_DETECTION, &BUFFALO_L_RECOGNITION,
+    &ANTELOPE_V2_DETECTION, &ANTELOPE_V2_RECOGNITION,
+];
+pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET, &BUFFALO_L_PRESET, &ANTELOPE_V2_PRESET];
 
 impl ModelSpec {
   /// Find a model specification by its ID
@@ -250,5 +351,43 @@ mod tests {
         assert_eq!(s.vision_input, "pixel_values");
         assert!(!s.vision_output.is_empty());
         assert!(!s.text_output.is_empty());
+    }
+
+    #[test]
+    fn all_presets_are_registered_and_findable() {
+        for preset in ALL_PRESETS {
+            let found = FaceIdPreset::find_by_id(preset.id);
+            assert!(found.is_some(), "preset '{}' not findable by id", preset.id);
+        }
+        assert!(FaceIdPreset::find_by_id("blitz").is_some());
+        assert!(FaceIdPreset::find_by_id("quality").is_some());
+        assert!(FaceIdPreset::find_by_id("precision").is_some());
+    }
+
+    #[test]
+    fn quality_preset_uses_buffalo_l_models() {
+        let preset = FaceIdPreset::find_by_id("quality").unwrap();
+        assert_eq!(preset.embedder.hf_repo, "immich-app/buffalo_l");
+        assert_eq!(preset.detector.hf_repo, "immich-app/buffalo_l");
+        assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
+        assert!(preset.embedder.size_bytes > 100_000_000, "buffalo_l recognition must be >100 MB");
+    }
+
+    #[test]
+    fn precision_preset_uses_antelopev2_models() {
+        let preset = FaceIdPreset::find_by_id("precision").unwrap();
+        assert_eq!(preset.embedder.hf_repo, "immich-app/antelopev2");
+        assert_eq!(preset.detector.hf_repo, "immich-app/antelopev2");
+        assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
+        assert!(preset.embedder.size_bytes > 200_000_000, "antelopev2 recognition must be >200 MB");
+    }
+
+    #[test]
+    fn all_face_models_in_all_models() {
+        let ids: Vec<_> = ALL_MODELS.iter().map(|m| m.id).collect();
+        assert!(ids.contains(&"buffalo_l_detection"));
+        assert!(ids.contains(&"buffalo_l_recognition"));
+        assert!(ids.contains(&"antelopev2_detection"));
+        assert!(ids.contains(&"antelopev2_recognition"));
     }
 }
