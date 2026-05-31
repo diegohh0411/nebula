@@ -164,7 +164,7 @@ fn decode_jpeg_scaled(path: &Path, target_long_edge: u32) -> Result<DynamicImage
 pub fn write_preview(src: &Path, image_id: i64, data_dir: &Path) -> Result<PathBuf> {
     let img = decode_at_most(src, 256)?;
     let small = if img.width() > 256 || img.height() > 256 {
-        img.resize(256, 256, image::imageops::FilterType::Triangle)
+        img.resize(256, 256, image::imageops::FilterType::CatmullRom)
     } else {
         img
     };
