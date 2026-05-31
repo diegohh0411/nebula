@@ -26,6 +26,7 @@ pub struct AppState {
     pub model_manager: Arc<crate::models::ModelManager>,
     pub index: vector_index::IndexStore,
     pub preview: preview::PreviewHandle,
+    pub throughput_ema: std::sync::atomic::AtomicU32,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -71,6 +72,7 @@ pub fn run() {
                 model_manager: model_manager.clone(),
                 index: index.clone(),
                 preview: preview_handle.clone(),
+                throughput_ema: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
             });
 
             let indexer_rescan = app.state::<AppState>().indexer.clone();

@@ -1,6 +1,7 @@
-import { Injectable, inject, signal, computed } from '@angular/core';
+import { Injectable, inject, signal, computed, effect } from '@angular/core';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { auditTime } from 'rxjs/operators';
+import { timer, from, EMPTY, Subscription } from 'rxjs';
+import { auditTime, switchMap, catchError } from 'rxjs/operators';
 import {
   DayGroup,
   PipelineStats,
@@ -20,6 +21,7 @@ import { buildJustifiedRows } from '../utils/justified-layout';
 @Injectable({ providedIn: 'root' })
 export class PhotoService {
   private events = inject(TauriEventsService);
+  private pollingSub?: Subscription;
 
   // ---- Reactive state (Angular signals) ----
   readonly viewportWidth = signal<number>(1000);
@@ -114,6 +116,28 @@ export class PhotoService {
   constructor() {
     this.events.pipelineStats$.subscribe((e) => {
       this.pipelineStats.set(e);
+    });
+
+    // TT-7/TT-14: Freshness & Granularity Poll
+    // Starts polling when pending > 0, stops when 0.
+    const isProcessing = computed(() => this.pipelineStats().total_pending > 0);
+
+    effect(() => {
+      const active = isProcessing();
+
+      if (active && !this.pollingSub) {
+        this.pollingSub = timer(0, 1000).pipe(
+          switchMap(() => from(this.refreshProcessingStatus()).pipe(
+            catchError(err => {
+              console.error('Failed to poll processing status:', err);
+              return EMPTY;
+            })
+          ))
+        ).subscribe();
+      } else if (!active && this.pollingSub) {
+        this.pollingSub.unsubscribe();
+        this.pollingSub = undefined;
+      }
     });
 
     this.events.imageAdded$.pipe(auditTime(1000)).subscribe(() => {
