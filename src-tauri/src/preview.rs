@@ -238,7 +238,7 @@ impl PreviewService {
         {
             let pool = pool.clone();
             let h = handle.clone();
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 match crate::db::images_needing_preview(&pool).await {
                     Ok(ids) => {
                         for id in ids {
@@ -252,7 +252,7 @@ impl PreviewService {
 
         // Dispatcher: keep up to `governor.parallelism()` workers in flight.
         let in_flight = Arc::new(AtomicUsize::new(0));
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             loop {
                 // Wait for work signals; also wake periodically so the trickle
                 // tier keeps draining a large backlog without new signals.
