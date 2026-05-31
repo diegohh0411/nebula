@@ -33,8 +33,13 @@
 
 .main-image {
   @apply max-w-full max-h-full object-contain shadow-2xl rounded-sm;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  opacity: 0;
+  transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   /* View Transition magic happens here */
+}
+
+.main-image.loaded {
+  opacity: 1;
 }
 
 .nav-btn {
