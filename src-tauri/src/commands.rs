@@ -208,10 +208,13 @@ pub async fn search(
 pub async fn get_processing_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::models::PipelineStatsPayload, String> {
+    let ema_bits = state.throughput_ema.load(std::sync::atomic::Ordering::Relaxed);
+    let images_per_sec = f32::from_bits(ema_bits);
+
     db::get_processing_counts(&state.pool).await
         .map(|s| crate::models::PipelineStatsPayload {
             total_pending: s.total_pending as u32,
-            images_per_sec: 0.0,
+            images_per_sec,
         })
         .map_err(map_err)
 }
