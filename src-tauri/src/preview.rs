@@ -319,6 +319,9 @@ async fn process_image(
     if image.deleted_at.is_some() {
         return;
     }
+    if image.preview_path.is_some() && image.thumbnail_path.is_some() {
+        return;
+    }
     let src = std::path::PathBuf::from(&image.path);
     let data_dir = data_dir.to_path_buf();
 
