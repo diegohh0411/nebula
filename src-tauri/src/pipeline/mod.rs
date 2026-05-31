@@ -33,6 +33,7 @@ impl Default for PipelineConfig {
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tauri::Manager;
 
 async fn write_faces(
     pool: &sqlx::SqlitePool,
@@ -345,6 +346,10 @@ pub async fn run_pipeline(
             Some(prev) => 0.3 * inst_rate + 0.7 * prev,
         };
         throughput_ema = Some(ema);
+
+        // Update shared AppState for the pull path (TT-7)
+        let app_state: tauri::State<crate::AppState> = app.state();
+        app_state.throughput_ema.store(ema.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
         crate::embedder::emit_progress(&pool, &app, ema).await;
 
