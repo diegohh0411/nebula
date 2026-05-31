@@ -228,6 +228,72 @@ ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb \
 ```
 MCP: `notion-fetch(id="<page-id>")` and read the Status property.
 
+## Creating Pages via `ntn api` (properties + content)
+
+`ntn pages create` only handles Markdown content; it cannot set properties like `Status` or `ID`. To create a task with both properties and a body, use `ntn api v1/pages` with a full JSON payload.
+
+**CRITICAL: `ntn api` takes JSON via stdin redirect, NOT `-d @file`.**
+
+```bash
+# CORRECT: pipe JSON via stdin
+cat > /tmp/new_task.json <<'JSON'
+{
+  "parent": {"database_id": "36fe954d-b476-8082-9b40-d2699511884a"},
+  "properties": {
+    "Name": {"title": [{"text": {"content": "Task title"}}]},
+    "Status": {"status": {"name": "Detailed"}}
+  }
+}
+JSON
+ntn api v1/pages < /tmp/new_task.json
+
+# WRONG: -d @file is NOT supported by ntn api
+# ntn api v1/pages -d @/tmp/new_task.json   # <-- FAILS
+```
+
+**Body must come from exactly one source.** Do not mix `--data`, stdin, and inline inputs in the same call.
+
+## Updating Page Content
+
+`ntn pages update` takes Markdown via `--content '<markdown>'` or stdin, **not** `--content-file`.
+
+```bash
+# CORRECT: inline content
+ntn pages update <page-id> --content '# Title\n\nBody text'
+
+# CORRECT: stdin redirect
+ntn pages update <page-id> < body.md
+
+# WRONG: --content-file does not exist
+# ntn pages update <page-id> --content-file body.md   # <-- FAILS
+```
+
+## Verifying Chained Operations
+
+When creating resources that downstream steps depend on, **always verify the create-step output before proceeding.**
+
+**Pattern — create then verify:**
+```bash
+# Step 1: create and capture raw output
+ntn api v1/pages < /tmp/t1.json > /tmp/r1.json 2>&1
+echo "create exit=$?"
+
+# Step 2: parse and confirm the ID is real
+python3 -c "
+import json, sys
+d = json.load(open('/tmp/r1.json'))
+if 'id' in d:
+    print('OK', d['id'])
+else:
+    print('FAIL', d.get('message', 'unknown error'))
+    sys.exit(1)
+"
+
+# Step 3: only now use the ID in a PATCH
+t1_id=$(python3 -c "import json; print(json.load(open('/tmp/r1.json'))['id'])")
+ntn api v1/pages/$t1_id -X PATCH 'properties[Blocked by][relation][0][id]=<other-id>'
+```
+
 ## Common Mistakes
 
 | Mistake | Fix |
@@ -236,6 +302,10 @@ MCP: `notion-fetch(id="<page-id>")` and read the Status property.
 | Passing task ID as a string in filter | Use `:=N` (integer), not `=N` (string) |
 | Mixing CLI and MCP in the same session | Pick one at the start and stick with it |
 | Using `notion-search` with the database URL instead of data source URL | Pass `collection://36fe954d-b476-8008-9aca-000b5ef89feb` as `data_source_url` |
+| **Using `-d @file` with `ntn api`** | Use stdin redirect: `ntn api v1/pages < file.json` |
+| **Using `--content-file` with `ntn pages update`** | Use `--content '<md>'` or stdin: `ntn pages update <id> < file.md` |
+| **Assuming a create succeeded and using a fabricated ID** | Always parse the create response and verify `'id'` exists |
+| **Running dependent calls in parallel** | Run sequentially; a single failure cascades and cancels the rest |
 | Merging PR yourself | Never. Set status to **Ready for review** and stop. |
 | Pushing commits directly to `main` | Always use a branch + PR. |
 | Forgetting LOC update after merge | Always run post-merge checklist above. |
