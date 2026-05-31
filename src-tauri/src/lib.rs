@@ -124,7 +124,6 @@ pub fn run() {
             commands::set_subject_thumbnail,
             commands::get_subject_photos,
             commands::get_subject_detail,
-            commands::recluster_faces,
             commands::get_merge_suggestions,
             commands::merge_subjects,
             commands::dismiss_merge_suggestion,
