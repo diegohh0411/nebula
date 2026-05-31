@@ -331,6 +331,16 @@ export class PhotoService {
     }
   }
 
+  /** Tell the backend to prioritize previews for the given image ids. */
+  async prioritizePreviews(imageIds: number[]): Promise<void> {
+    if (imageIds.length === 0) return;
+    try {
+      await invoke('prioritize_previews', { imageIds });
+    } catch {
+      // best-effort; previews still arrive via the background pass
+    }
+  }
+
   /** Convert an absolute path to a Tauri asset URL for use in <img src>. */
   thumbnailUrl(thumbPath: string | null): string | null {
     if (!thumbPath) return null;
