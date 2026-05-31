@@ -284,7 +284,7 @@ impl PreviewService {
                     let data_dir = data_dir.clone();
                     let in_flight = in_flight.clone();
                     let notify = notify.clone();
-                    tokio::spawn(async move {
+                    tauri::async_runtime::spawn(async move {
                         process_image(&pool, &app, &data_dir, id).await;
                         in_flight.fetch_sub(1, Ordering::Relaxed);
                         // wake dispatcher to top up the pool
