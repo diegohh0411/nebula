@@ -336,8 +336,8 @@ export class PhotoService {
     if (imageIds.length === 0) return;
     try {
       await invoke('prioritize_previews', { imageIds });
-    } catch {
-      // best-effort; previews still arrive via the background pass
+    } catch (e) {
+      console.debug('[preview] prioritize_previews failed:', e);
     }
   }
 

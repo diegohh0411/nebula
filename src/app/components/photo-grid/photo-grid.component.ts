@@ -22,7 +22,7 @@ export class PhotoGridComponent implements AfterViewInit, OnDestroy {
   private _images: (Image | SearchResult)[] = [];
   @Input() set images(value: (Image | SearchResult)[]) {
     this._images = value;
-    queueMicrotask(() => this.observeCells());
+    setTimeout(() => this.observeCells(), 0);
   }
   get images() { return this._images; }
 
@@ -63,7 +63,9 @@ export class PhotoGridComponent implements AfterViewInit, OnDestroy {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      this.photos.prioritizePreviews([...this.visible]);
+      if (this.visible.size > 0) {
+        this.photos.prioritizePreviews([...this.visible]);
+      }
     }, 100);
   }
 
