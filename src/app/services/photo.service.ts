@@ -314,10 +314,6 @@ export class PhotoService {
     void this.refreshImages();
   }
 
-  async reclusterFaces(): Promise<{ clusters: number; noise: number; merged: number; deleted: number }> {
-    return await invoke<{ clusters: number; noise: number; merged: number; deleted: number }>('recluster_faces');
-  }
-
   async getMergeSuggestions(): Promise<MergeSuggestion[]> {
     return await invoke<MergeSuggestion[]>('get_merge_suggestions');
   }
