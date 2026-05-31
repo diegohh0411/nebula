@@ -134,6 +134,7 @@ pub struct SearchResult {
     pub image_id: i64,
     pub path: String,
     pub thumbnail_path: Option<String>,
+    pub preview_path: Option<String>,
     pub score: f32,
     pub date_taken: Option<i64>,
     pub mtime: i64,

@@ -262,18 +262,20 @@ impl PreviewService {
                 }
 
                 loop {
-                    let (par, id) = {
+                    // Check capacity and dequeue atomically inside the lock so we
+                    // never consume an item we can't process (it would be lost
+                    // since seen is pruned by next()).
+                    let id = {
                         let mut q = queue.lock().unwrap();
                         let high_pending = q.high_nonempty();
                         let par = governor.parallelism(high_pending);
-                        (par, q.next())
-                    };
-                    if in_flight.load(Ordering::Relaxed) >= par {
-                        break;
-                    }
-                    let id = match id {
-                        Some(id) => id,
-                        None => break,
+                        if in_flight.load(Ordering::Relaxed) >= par {
+                            break;
+                        }
+                        match q.next() {
+                            Some(id) => id,
+                            None => break,
+                        }
                     };
                     in_flight.fetch_add(1, Ordering::Relaxed);
 

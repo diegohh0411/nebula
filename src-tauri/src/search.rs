@@ -46,6 +46,7 @@ pub async fn build_search_results(
                 image_id,
                 path: img.path,
                 thumbnail_path: img.thumbnail_path,
+                preview_path: img.preview_path,
                 score,
                 date_taken: img.date_taken,
                 mtime: img.mtime,
