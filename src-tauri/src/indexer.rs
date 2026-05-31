@@ -23,6 +23,7 @@ pub struct Indexer {
     watcher: Arc<Mutex<FolderWatcher>>,
     hash_semaphore: Arc<Semaphore>,
     scan_mutex: Arc<tokio::sync::Mutex<()>>,
+    preview: crate::preview::PreviewHandle,
 }
 
 fn is_image(path: &Path) -> bool {
@@ -93,7 +94,7 @@ fn walk_dir_for_scan(dir: &Path, results: &mut Vec<PathBuf>) {
 }
 
 impl Indexer {
-    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle) -> Result<Arc<Self>> {
+    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle, preview: crate::preview::PreviewHandle) -> Result<Arc<Self>> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let watcher = Arc::new(Mutex::new(FolderWatcher::new(event_tx)?));
 
@@ -121,6 +122,7 @@ impl Indexer {
             watcher,
             hash_semaphore: Arc::new(Semaphore::new(4)),
             scan_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            preview,
         });
 
         let debounce_indexer = indexer.clone();
@@ -206,6 +208,7 @@ impl Indexer {
                 if let Err(e) = db::enqueue_image(&self.pool, image_id).await {
                     eprintln!("Failed to enqueue image {}: {}", image_id, e);
                 }
+                self.preview.enqueue_low(image_id);
 
                 let _ = self.app.emit(
                     "image_added",
@@ -269,6 +272,7 @@ impl Indexer {
                     if let Err(e) = db::enqueue_image(&self.pool, existing.id).await {
                         eprintln!("Failed to enqueue image {}: {}", existing.id, e);
                     }
+                    self.preview.enqueue_low(existing.id);
                     let _ = self.app.emit(
                         "image_updated",
                         crate::models::ImageUpdatedPayload {

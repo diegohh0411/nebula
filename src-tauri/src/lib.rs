@@ -25,6 +25,7 @@ pub struct AppState {
     pub vision_engine: Arc<vision_engine::VisionEngine>,
     pub model_manager: Arc<crate::models::ModelManager>,
     pub index: vector_index::IndexStore,
+    pub preview: preview::PreviewHandle,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -52,8 +53,14 @@ pub fn run() {
             ));
             let model_manager = Arc::new(crate::models::ModelManager::new(data_dir.clone()));
 
+            let preview_handle = preview::PreviewService::start(
+                pool.clone(),
+                app.handle().clone(),
+                data_dir.clone(),
+            );
+
             let indexer = tauri::async_runtime::block_on(
-                indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone())
+                indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone(), preview_handle.clone())
             )?;
 
             app.manage(AppState {
@@ -63,6 +70,7 @@ pub fn run() {
                 vision_engine: vision_engine.clone(),
                 model_manager: model_manager.clone(),
                 index: index.clone(),
+                preview: preview_handle.clone(),
             });
 
             let indexer_rescan = app.state::<AppState>().indexer.clone();
@@ -103,6 +111,7 @@ pub fn run() {
             commands::remove_folder,
             commands::list_folders,
             commands::list_images,
+            commands::prioritize_previews,
             commands::search,
             commands::get_processing_status,
             commands::list_subjects,
