@@ -53,6 +53,7 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
   protected unassignedFaces = computed(() => this.faces().filter(f => f.subject_id === null));
 
   protected localSubjects = signal<Subject[]>([]);
+  protected imageLoaded = signal(false);
 
   private resizeObserver?: ResizeObserver;
 
@@ -93,6 +94,7 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
       this.localSubjects.set([]);
     }
     this.imgLayout.set(null);
+    this.imageLoaded.set(false);
   }
 
   ngAfterViewInit() {
@@ -104,6 +106,7 @@ export class LightboxComponent implements OnChanges, AfterViewInit, OnDestroy {
   }
 
   protected onImageLoad() {
+    this.imageLoaded.set(true);
     this.updateLayoutFromDOM();
     this.tryInitResizeObserver();
   }
