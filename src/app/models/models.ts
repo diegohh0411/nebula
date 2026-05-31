@@ -13,6 +13,7 @@ export interface Image {
   date_taken: number | null;
   mtime: number;
   thumbnail_path: string | null;
+  preview_path: string | null;
   semantic_analysis_done: boolean;
   subject_analysis_done: boolean;
   added_at: number;
@@ -24,6 +25,7 @@ export interface SearchResult {
   image_id: number;
   path: string;
   thumbnail_path: string | null;
+  preview_path: string | null;
   score: number;
   date_taken: number | null;
   mtime: number;

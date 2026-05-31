@@ -73,6 +73,15 @@ pub async fn list_images(
 }
 
 #[tauri::command]
+pub async fn prioritize_previews(
+    image_ids: Vec<i64>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state.preview.prioritize(image_ids);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn search(
     query: SearchQuery,
     app: tauri::AppHandle,
@@ -93,6 +102,7 @@ pub async fn search(
                         image_id: *image_id,
                         path: img.path,
                         thumbnail_path: img.thumbnail_path,
+                        preview_path: img.preview_path,
                         score: 1.0,
                         date_taken: img.date_taken,
                         mtime: img.mtime,
@@ -287,6 +297,7 @@ pub async fn get_subject_photos(subject_id: i64, state: tauri::State<'_, AppStat
         image_id: img.id,
         path: img.path,
         thumbnail_path: img.thumbnail_path,
+        preview_path: img.preview_path,
         score: 1.0,
         date_taken: img.date_taken,
         mtime: img.mtime,

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS images (
     date_taken             INTEGER,
     mtime                  INTEGER NOT NULL,
     thumbnail_path         TEXT,
+    preview_path           TEXT,
     semantic_analysis_done INTEGER NOT NULL DEFAULT 0,
     subject_analysis_done  INTEGER NOT NULL DEFAULT 0,
     embedding              BLOB,
@@ -256,6 +257,7 @@ fn row_to_image(r: &sqlx::sqlite::SqliteRow) -> Image {
         date_taken: r.get("date_taken"),
         mtime: r.get("mtime"),
         thumbnail_path: r.get("thumbnail_path"),
+        preview_path: r.get("preview_path"),
         semantic_analysis_done: r.get::<i32, _>("semantic_analysis_done") != 0,
         subject_analysis_done: r.get::<i32, _>("subject_analysis_done") != 0,
         added_at: r.get("added_at"),
@@ -300,6 +302,7 @@ pub async fn update_image_hash_changed(
     sqlx::query(
         "UPDATE images SET file_hash = ?, file_size = ?, mtime = ?,
          semantic_analysis_done = 0, subject_analysis_done = 0, embedding = NULL,
+         thumbnail_path = NULL, preview_path = NULL,
          updated_at = ?, deleted_at = NULL WHERE id = ?",
     )
     .bind(file_hash)
@@ -418,10 +421,31 @@ pub async fn update_thumbnail_path(pool: &SqlitePool, image_id: i64, thumb_path:
     Ok(())
 }
 
+pub async fn update_preview_path(pool: &SqlitePool, image_id: i64, preview_path: &str) -> Result<()> {
+    sqlx::query("UPDATE images SET preview_path = ? WHERE id = ?")
+        .bind(preview_path)
+        .bind(image_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Ids of non-deleted images that still lack an 800px thumbnail.
+pub async fn images_needing_preview(pool: &SqlitePool) -> Result<Vec<i64>> {
+    let rows = sqlx::query(
+        "SELECT id FROM images
+         WHERE thumbnail_path IS NULL AND deleted_at IS NULL
+         ORDER BY COALESCE(date_taken, mtime) DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(|r| r.get::<i64, _>("id")).collect())
+}
+
 pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Vec<Image>> {
     let rows = if let Some(fid) = folder_id {
         sqlx::query(
-            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
+            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path, preview_path,
                     semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE folder_id = ? AND deleted_at IS NULL
              ORDER BY COALESCE(date_taken, mtime) DESC",
@@ -431,7 +455,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
         .await?
     } else {
         sqlx::query(
-            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
+            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path, preview_path,
                     semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE deleted_at IS NULL
              ORDER BY COALESCE(date_taken, mtime) DESC",
@@ -445,7 +469,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
 
 pub async fn get_image_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Image>> {
     let row = sqlx::query(
-        "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path,
+        "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path, preview_path,
                 semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
          FROM images WHERE id = ?",
     )
@@ -762,7 +786,7 @@ pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Resul
 
 pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Image>> {
     let rows = sqlx::query(
-        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.file_size, i.date_taken, i.mtime, i.thumbnail_path,
+        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.file_size, i.date_taken, i.mtime, i.thumbnail_path, i.preview_path,
                            i.semantic_analysis_done, i.subject_analysis_done, i.added_at, i.updated_at, i.deleted_at
            FROM images i
            JOIN faces f ON f.image_id = i.id
@@ -1253,6 +1277,7 @@ mod tests {
                 date_taken             INTEGER,
                 mtime                  INTEGER NOT NULL,
                 thumbnail_path         TEXT,
+                preview_path           TEXT,
                 semantic_analysis_done INTEGER NOT NULL DEFAULT 0,
                 subject_analysis_done  INTEGER NOT NULL DEFAULT 0,
                 embedding              BLOB,
@@ -1304,6 +1329,38 @@ mod tests {
             Some(expected_path.as_str()),
             "thumbnail_path should equal the value written by update_thumbnail_path"
         );
+    }
+
+    #[tokio::test]
+    async fn update_preview_path_persists_and_is_readable() {
+        let dir = std::env::temp_dir().join(format!("nebula_prevdb_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+        let folder_id = insert_folder(&pool, "/tmp/f").await.unwrap();
+        let image_id = insert_image(&pool, folder_id, "/tmp/f/a.jpg", "h", 1, 1).await.unwrap();
+
+        update_preview_path(&pool, image_id, "/tmp/p_7.webp").await.unwrap();
+
+        let img = get_image_by_id(&pool, image_id).await.unwrap().unwrap();
+        assert_eq!(img.preview_path.as_deref(), Some("/tmp/p_7.webp"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn images_needing_preview_excludes_thumbnailed_and_deleted() {
+        let dir = std::env::temp_dir().join(format!("nebula_needprev_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+        let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+        let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "h1", 1, 1).await.unwrap();
+        let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "h2", 1, 1).await.unwrap();
+        // a already has a thumbnail -> excluded
+        update_thumbnail_path(&pool, a, "/tmp/a.webp").await.unwrap();
+
+        let need = images_needing_preview(&pool).await.unwrap();
+        assert!(need.contains(&b));
+        assert!(!need.contains(&a));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
