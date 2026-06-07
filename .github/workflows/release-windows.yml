@@ -12,8 +12,6 @@ concurrency:
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      RUSTFLAGS: "-C target-feature=+crt-static"
     permissions:
       contents: write          # create the GitHub Release
     steps:
