@@ -33,18 +33,12 @@ if ($c0 -eq $DLL_NOT_FOUND) {
 }
 
 # 2) Install via our NSIS installer; the POSTINSTALL hook runs vc_redist.
-Write-Host '== running our NSIS installer silently (/S) =='
-Start-Process 'C:\test\setup.exe' -ArgumentList '/S' -Wait
-
-$entry = Get-ItemProperty @(
-  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-) -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*nebula*' } | Select-Object -First 1
-if (-not $entry) { throw 'Nebula not registered after silent install' }
-$app = Join-Path $entry.InstallLocation 'nebula.exe'
+#    /D= sets $INSTDIR deterministically (must be the last arg, unquoted).
+Write-Host '== running our NSIS installer silently (/S /D=C:\nebula) =='
+Start-Process 'C:\test\setup.exe' -ArgumentList '/S','/D=C:\nebula' -Wait
+$app = 'C:\nebula\nebula.exe'
+if (-not (Test-Path $app)) { throw "silent install did not produce $app" }
 Write-Host "installed app: $app"
-if (-not (Test-Path $app)) { throw "installed nebula.exe missing at $app" }
 
 # The hook should have installed the runtime the bug is about.
 $haveCrt = Test-Path 'C:\Windows\System32\MSVCP140_1.dll'
