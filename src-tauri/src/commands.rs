@@ -328,8 +328,9 @@ pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppStat
 #[tauri::command]
 pub async fn get_merge_suggestions(
     state: tauri::State<'_, AppState>,
+    limit: Option<i64>,
 ) -> Result<Vec<MergeSuggestion>, String> {
-    db::get_merge_suggestions(&state.pool, None)
+    db::get_merge_suggestions(&state.pool, limit)
         .await
         .map_err(map_err)
 }
