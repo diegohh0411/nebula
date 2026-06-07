@@ -40,8 +40,20 @@ jobs:
       - name: Download VC++ 2015-2022 redistributable (x64)
         shell: pwsh
         run: |
+          $dest = "src-tauri/redist/vc_redist.x64.exe"
           New-Item -ItemType Directory -Force -Path src-tauri/redist | Out-Null
-          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "src-tauri/redist/vc_redist.x64.exe"
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $dest
+          if (-not (Test-Path $dest)) { throw "vc_redist download failed: $dest missing" }
+          $f = Get-Item $dest
+          Write-Host "Downloaded $($f.FullName) ($([math]::Round($f.Length/1MB,1)) MB)"
+          Get-ChildItem src-tauri/redist -Force | Format-Table Name, Length, FullName
+      - name: Verify redist present before build
+        shell: pwsh
+        run: |
+          Write-Host "cwd: $(Get-Location)"
+          Get-ChildItem src-tauri/redist -Force | Format-Table Name, Length, FullName
+          if (-not (Test-Path "src-tauri/redist/vc_redist.x64.exe")) { throw "redist missing immediately before build" }
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         with:
