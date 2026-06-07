@@ -1031,6 +1031,16 @@ pub async fn get_merge_suggestions(pool: &SqlitePool) -> Result<Vec<crate::model
         .collect())
 }
 
+pub async fn get_subject_named_flags(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, bool>> {
+    let rows = sqlx::query("SELECT id, (name IS NOT NULL) as has_name FROM subjects")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>("id"), r.get::<bool, _>("has_name")))
+        .collect())
+}
+
 pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
         .bind(target_id)
@@ -1385,5 +1395,21 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, subject_id);
         assert_eq!(results[0].1, manual_emb);
+    }
+
+    #[tokio::test]
+    async fn get_subject_named_flags_returns_true_for_named_and_false_for_unnamed() {
+        let pool = make_pool().await;
+        let named_id: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let unnamed_id: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let flags = get_subject_named_flags(&pool).await.unwrap();
+
+        assert_eq!(flags.get(&named_id), Some(&true));
+        assert_eq!(flags.get(&unnamed_id), Some(&false));
     }
 }
