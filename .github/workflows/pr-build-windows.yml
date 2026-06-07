@@ -62,93 +62,32 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  # Acceptance test for TT-33: a *clean* Windows machine (no VC++ redist) must be
-  # able to install and launch Nebula without a missing-DLL error. GitHub-hosted
-  # runners are disposable VMs and ship with the VC++ runtime preinstalled, so we
-  # remove it to simulate a clean machine, then prove the before/after behaviour:
-  #   1. bare nebula.exe on the clean machine fails with STATUS_DLL_NOT_FOUND
-  #   2. our NSIS installer's POSTINSTALL hook installs the runtime
-  #   3. the installed nebula.exe then launches without that DLL error
+  # Acceptance test for TT-33: a *fresh* Windows machine (no VC++ 2015-2022
+  # runtime) must install and launch Nebula without a missing-DLL error.
+  # GitHub runners are saturated with VC++-dependent software and keep the CRT
+  # DLLs loaded, so they cannot be made truly clean. Instead we run the test
+  # inside a pristine Windows container (servercore), which ships with no VC++
+  # runtime at all - the real "fresh machine". See the script for the proof.
   verify-clean-install:
     needs: build-windows
-    runs-on: windows-latest
+    runs-on: windows-2022   # pin so servercore:ltsc2022 matches the host kernel
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: nebula-windows-${{ github.sha }}
           path: artifact
-      - name: Clean-machine install + launch smoke test
+      - name: Assemble test payload
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $DLL_NOT_FOUND = -1073741515   # 0xC0000135 STATUS_DLL_NOT_FOUND
-
-          # Make the loader return the error to the process instead of popping a
-          # modal "DLL not found" dialog (which would hang the launch).
-          Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Windows' -Name ErrorMode -Value 2
-          reg add 'HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting' /v DontShowUI /t REG_DWORD /d 1 /f | Out-Null
-
           $setup = (Get-ChildItem -Path artifact -Recurse -Filter '*setup.exe' | Select-Object -First 1).FullName
-          Write-Host "Installer under test: $setup"
-
-          function Launch([string]$exe) {
-            $p = Start-Process $exe -PassThru
-            for ($i = 0; $i -lt 12 -and -not $p.HasExited; $i++) { Start-Sleep -Seconds 1 }
-            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; return 'RUNNING' }
-            return $p.ExitCode
-          }
-
-          # Extract the bare app binary BEFORE removing the runtime (7z needs it too).
-          & 7z e "$setup" nebula.exe -o"$env:RUNNER_TEMP\bare" -y | Out-Null
-          $bare = "$env:RUNNER_TEMP\bare\nebula.exe"
-
-          # --- Simulate a clean machine ---
-          # Uninstalling the redist package leaves the DLLs in System32 (refcounted
-          # by other software), so for an x64 app we physically remove the CRT DLLs
-          # it imports. Back them up so we restore them if the run is interrupted.
-          $crt = 'MSVCP140.dll','MSVCP140_1.dll','MSVCP140_2.dll','MSVCP140_atomic_wait.dll',
-                 'MSVCP140_codecvt_ids.dll','VCRUNTIME140.dll','VCRUNTIME140_1.dll'
-          $sys = "$env:WINDIR\System32"
-          foreach ($d in $crt) {
-            $f = Join-Path $sys $d
-            if (Test-Path $f) {
-              takeown /f "$f" 2>&1 | Out-Null
-              icacls "$f" /grant "$($env:USERNAME):F" 2>&1 | Out-Null
-              Remove-Item "$f" -Force -ErrorAction SilentlyContinue
-              if (Test-Path $f) { Write-Host "WARN: could not remove $d (in use)" } else { Write-Host "removed $d" }
-            }
-          }
-
-          # --- 1) Reproduce TT-33 on the clean machine (hard gate: the test is only
-          #         meaningful if we actually achieved the missing-DLL state) ---
-          $code1 = Launch $bare
-          Write-Host "[clean machine]  bare nebula.exe -> $code1"
-          if ($code1 -ne $DLL_NOT_FOUND) {
-            throw "Isolation failed: bare nebula.exe did not abort with STATUS_DLL_NOT_FOUND (got $code1); cannot prove clean-machine behaviour"
-          }
-          Write-Host "Reproduced TT-33: missing VC++ CRT -> STATUS_DLL_NOT_FOUND (0xC0000135)"
-
-          # --- 2) Install via our NSIS installer (POSTINSTALL hook runs vc_redist) ---
-          Start-Process $setup -ArgumentList '/S' -Wait
-          $entry = Get-ItemProperty @(
-            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-          ) -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*nebula*' } | Select-Object -First 1
-          if (-not $entry) { throw "Nebula not found in the registry after silent install" }
-          $installed = Join-Path $entry.InstallLocation 'nebula.exe'
-          Write-Host "Installed app: $installed"
-          if (-not (Test-Path $installed)) { throw "Installed nebula.exe missing at $installed" }
-          if (Test-Path (Join-Path $entry.InstallLocation 'redist')) {
-            Write-Host "::warning::redist dir still present after install; hook cleanup may not have run"
-          } else {
-            Write-Host "Confirmed POSTINSTALL hook ran: bundled redist was executed and cleaned up"
-          }
-
-          # --- 3) The fix: installed app must launch without the missing-DLL error ---
-          $code2 = Launch $installed
-          Write-Host "[after install]  nebula.exe -> $code2"
-          if ($code2 -eq $DLL_NOT_FOUND) {
-            throw "FAIL: nebula.exe still aborts with STATUS_DLL_NOT_FOUND after install - TT-33 NOT fixed"
-          }
-          Write-Host "PASS: clean machine -> install -> launch with no missing-DLL error (TT-33 satisfied)"
+          New-Item -ItemType Directory -Force -Path test\bare | Out-Null
+          Copy-Item $setup test\setup.exe
+          & 7z e "$setup" nebula.exe -otest\bare -y | Out-Null
+          Copy-Item .github\scripts\tt33-clean-install-test.ps1 test\run.ps1
+      - name: Install + launch in a pristine Windows container
+        shell: pwsh
+        run: |
+          docker run --rm -v "${{ github.workspace }}\test:C:\test" `
+            mcr.microsoft.com/windows/servercore:ltsc2022 `
+            powershell -ExecutionPolicy Bypass -File C:\test\run.ps1
