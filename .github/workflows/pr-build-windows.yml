@@ -102,28 +102,31 @@ jobs:
           & 7z e "$setup" nebula.exe -o"$env:RUNNER_TEMP\bare" -y | Out-Null
           $bare = "$env:RUNNER_TEMP\bare\nebula.exe"
 
-          # --- Simulate a clean machine: uninstall every VC++ 2015-2022 x64 runtime ---
-          $removed = $false
-          Get-ItemProperty @(
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
-          ) -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -match 'Visual C\+\+ 20(1[5-9]|2[0-9]).*x64' -and $_.QuietUninstallString } |
-            ForEach-Object {
-              Write-Host "Uninstalling: $($_.DisplayName)"
-              cmd /c "$($_.QuietUninstallString)" | Out-Null
-              $script:removed = $true
+          # --- Simulate a clean machine ---
+          # Uninstalling the redist package leaves the DLLs in System32 (refcounted
+          # by other software), so for an x64 app we physically remove the CRT DLLs
+          # it imports. Back them up so we restore them if the run is interrupted.
+          $crt = 'MSVCP140.dll','MSVCP140_1.dll','MSVCP140_2.dll','MSVCP140_atomic_wait.dll',
+                 'MSVCP140_codecvt_ids.dll','VCRUNTIME140.dll','VCRUNTIME140_1.dll'
+          $sys = "$env:WINDIR\System32"
+          foreach ($d in $crt) {
+            $f = Join-Path $sys $d
+            if (Test-Path $f) {
+              takeown /f "$f" 2>&1 | Out-Null
+              icacls "$f" /grant "$($env:USERNAME):F" 2>&1 | Out-Null
+              Remove-Item "$f" -Force -ErrorAction SilentlyContinue
+              if (Test-Path $f) { Write-Host "WARN: could not remove $d (in use)" } else { Write-Host "removed $d" }
             }
-          Write-Host "Removed preinstalled VC++ runtime: $removed"
+          }
 
-          # --- 1) Reproduce TT-33 on the clean machine ---
+          # --- 1) Reproduce TT-33 on the clean machine (hard gate: the test is only
+          #         meaningful if we actually achieved the missing-DLL state) ---
           $code1 = Launch $bare
           Write-Host "[clean machine]  bare nebula.exe -> $code1"
-          if ($code1 -eq $DLL_NOT_FOUND) {
-            Write-Host "Reproduced TT-33: missing VC++ CRT -> STATUS_DLL_NOT_FOUND (0xC0000135)"
-          } else {
-            Write-Host "::warning::Clean-machine isolation inconclusive (expected 0xC0000135, got $code1); the post-install check below is still authoritative"
+          if ($code1 -ne $DLL_NOT_FOUND) {
+            throw "Isolation failed: bare nebula.exe did not abort with STATUS_DLL_NOT_FOUND (got $code1); cannot prove clean-machine behaviour"
           }
+          Write-Host "Reproduced TT-33: missing VC++ CRT -> STATUS_DLL_NOT_FOUND (0xC0000135)"
 
           # --- 2) Install via our NSIS installer (POSTINSTALL hook runs vc_redist) ---
           Start-Process $setup -ArgumentList '/S' -Wait
