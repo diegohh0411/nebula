@@ -47,13 +47,6 @@ jobs:
           if (-not (Test-Path $dest)) { throw "vc_redist download failed: $dest missing" }
           $f = Get-Item $dest
           Write-Host "Downloaded $($f.FullName) ($([math]::Round($f.Length/1MB,1)) MB)"
-          Get-ChildItem src-tauri/redist -Force | Format-Table Name, Length, FullName
-      - name: Verify redist present before build
-        shell: pwsh
-        run: |
-          Write-Host "cwd: $(Get-Location)"
-          Get-ChildItem src-tauri/redist -Force | Format-Table Name, Length, FullName
-          if (-not (Test-Path "src-tauri/redist/vc_redist.x64.exe")) { throw "redist missing immediately before build" }
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         with:

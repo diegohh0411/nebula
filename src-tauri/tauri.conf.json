@@ -38,9 +38,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "redist/vc_redist.x64.exe": "./"
-    },
+    "resources": [
+      "redist/vc_redist.x64.exe"
+    ],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/hooks.nsh"
