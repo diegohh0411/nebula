@@ -105,6 +105,8 @@ const MERGE_CENTROID_SIMILARITY_THRESHOLD: f32 = 0.65;
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
     crate::db::clear_merge_suggestions(pool).await?;
 
+    let named_flags = crate::db::get_subject_named_flags(pool).await?;
+
     let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
         .into_iter()
@@ -118,7 +120,7 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
         .collect();
 
     let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
-    
+
     let mut subject_embeddings: Vec<(i64, Vec<f32>)> = anchor_centroids.into_iter().collect();
     subject_embeddings.sort_unstable_by_key(|(id, _)| *id);
 
@@ -127,16 +129,15 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
             let (id_a, emb_a) = &subject_embeddings[i];
             let (id_b, emb_b) = &subject_embeddings[j];
 
-            let sim = crate::embedder::cosine_similarity(emb_a, emb_b);
+            let a_named = named_flags.get(id_a).copied().unwrap_or(false);
+            let b_named = named_flags.get(id_b).copied().unwrap_or(false);
+            if !a_named && !b_named {
+                continue;
+            }
 
+            let sim = crate::embedder::cosine_similarity(emb_a, emb_b);
             if sim > MERGE_CENTROID_SIMILARITY_THRESHOLD {
-                crate::db::insert_merge_suggestion(
-                    pool,
-                    *id_a,
-                    *id_b,
-                    sim as f64,
-                )
-                .await?;
+                crate::db::insert_merge_suggestion(pool, *id_a, *id_b, sim as f64).await?;
             }
         }
     }
@@ -303,5 +304,22 @@ mod tests {
         // Cluster B centroid: orthogonal — no match
         let b = find_nearest_anchor(&emb(&[0.0, 1.0, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD);
         assert_eq!(b, None, "cluster B should get no match (creates new subject)");
+    }
+
+    #[test]
+    fn unnamed_unnamed_pair_is_skipped() {
+        let mut named_flags = std::collections::HashMap::new();
+        named_flags.insert(1i64, true);   // Alice — named
+        named_flags.insert(2i64, false);  // unnamed
+        named_flags.insert(3i64, false);  // unnamed
+
+        let is_unnamed_pair = |a: i64, b: i64| -> bool {
+            !named_flags.get(&a).copied().unwrap_or(false)
+                && !named_flags.get(&b).copied().unwrap_or(false)
+        };
+
+        assert!(!is_unnamed_pair(1, 2), "named+unnamed should not be skipped");
+        assert!(!is_unnamed_pair(1, 1), "named+named should not be skipped");
+        assert!(is_unnamed_pair(2, 3),  "unnamed+unnamed must be skipped");
     }
 }
