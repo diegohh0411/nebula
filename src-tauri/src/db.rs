@@ -996,17 +996,38 @@ pub async fn insert_merge_suggestion(
     Ok(())
 }
 
-pub async fn get_merge_suggestions(pool: &SqlitePool) -> Result<Vec<crate::models::MergeSuggestion>> {
-    let rows = sqlx::query(
-        r#"SELECT ms.id, ms.score,
-                  sa.id as sa_id, sa.name as sa_name, sa.thumbnail_face_id as sa_thumbnail_face_id, sa.type as sa_type, sa.added_at as sa_added_at,
-                  sb.id as sb_id, sb.name as sb_name, sb.thumbnail_face_id as sb_thumbnail_face_id, sb.type as sb_type, sb.added_at as sb_added_at
-           FROM merge_suggestions ms
-           JOIN subjects sa ON ms.subject_id_a = sa.id
-           JOIN subjects sb ON ms.subject_id_b = sb.id"#,
-    )
-    .fetch_all(pool)
-    .await?;
+pub async fn get_merge_suggestions(pool: &SqlitePool, limit: Option<i64>) -> Result<Vec<crate::models::MergeSuggestion>> {
+    let rows = match limit {
+        Some(n) if n > 0 => {
+            sqlx::query(
+                r#"SELECT ms.id, ms.score,
+                          sa.id as sa_id, sa.name as sa_name, sa.thumbnail_face_id as sa_thumbnail_face_id, sa.type as sa_type, sa.added_at as sa_added_at,
+                          sb.id as sb_id, sb.name as sb_name, sb.thumbnail_face_id as sb_thumbnail_face_id, sb.type as sb_type, sb.added_at as sb_added_at
+                   FROM merge_suggestions ms
+                   JOIN subjects sa ON ms.subject_id_a = sa.id
+                   JOIN subjects sb ON ms.subject_id_b = sb.id
+                   ORDER BY ms.score DESC, ms.id ASC
+                   LIMIT ?"#
+            )
+            .bind(n)
+            .fetch_all(pool)
+            .await?
+        }
+        Some(_) => return Ok(vec![]),
+        None => {
+            sqlx::query(
+                r#"SELECT ms.id, ms.score,
+                          sa.id as sa_id, sa.name as sa_name, sa.thumbnail_face_id as sa_thumbnail_face_id, sa.type as sa_type, sa.added_at as sa_added_at,
+                          sb.id as sb_id, sb.name as sb_name, sb.thumbnail_face_id as sb_thumbnail_face_id, sb.type as sb_type, sb.added_at as sb_added_at
+                   FROM merge_suggestions ms
+                   JOIN subjects sa ON ms.subject_id_a = sa.id
+                   JOIN subjects sb ON ms.subject_id_b = sb.id
+                   ORDER BY ms.score DESC, ms.id ASC"#
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
 
     Ok(rows
         .into_iter()
@@ -1028,6 +1049,16 @@ pub async fn get_merge_suggestions(pool: &SqlitePool) -> Result<Vec<crate::model
             },
             score: r.get("score"),
         })
+        .collect())
+}
+
+pub async fn get_subject_named_flags(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, bool>> {
+    let rows = sqlx::query("SELECT id, (name IS NOT NULL) as has_name FROM subjects")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>("id"), r.get::<bool, _>("has_name")))
         .collect())
 }
 
@@ -1253,6 +1284,63 @@ mod tests {
         pool
     }
 
+    async fn make_merge_pool() -> SqlitePool {
+        let pool = make_pool().await;
+        sqlx::query(
+            "CREATE TABLE merge_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                score REAL NOT NULL,
+                created_at INTEGER NOT NULL
+            )"
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn get_merge_suggestions_with_limit_returns_top_n_by_score() {
+        let pool = make_merge_pool().await;
+
+        let a: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let b: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let c: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Carol', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let d: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Dave', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let e: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Eve', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        for (sa, sb, score) in [
+            (a, b, 0.95f64),
+            (b, c, 0.90),
+            (c, d, 0.80),
+            (d, e, 0.70),
+            (a, e, 0.60),
+        ] {
+            sqlx::query(
+                "INSERT INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) VALUES (?, ?, ?, 0)"
+            ).bind(sa).bind(sb).bind(score).execute(&pool).await.unwrap();
+        }
+
+        let top3 = get_merge_suggestions(&pool, Some(3)).await.unwrap();
+        assert_eq!(top3.len(), 3);
+        assert!((top3[0].score - 0.95).abs() < 1e-9, "first should be highest score");
+        assert!((top3[1].score - 0.90).abs() < 1e-9);
+        assert!((top3[2].score - 0.80).abs() < 1e-9);
+
+        let all = get_merge_suggestions(&pool, None).await.unwrap();
+        assert_eq!(all.len(), 5, "no limit should return all 5");
+        assert!((all[0].score - 0.95).abs() < 1e-9, "first should still be highest score");
+    }
+
     /// A minimal in-memory pool containing only the folders + images tables,
     /// sufficient for testing image-level DB helpers without requiring a temp file.
     async fn make_images_pool() -> SqlitePool {
@@ -1385,5 +1473,21 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, subject_id);
         assert_eq!(results[0].1, manual_emb);
+    }
+
+    #[tokio::test]
+    async fn get_subject_named_flags_returns_true_for_named_and_false_for_unnamed() {
+        let pool = make_pool().await;
+        let named_id: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let unnamed_id: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let flags = get_subject_named_flags(&pool).await.unwrap();
+
+        assert_eq!(flags.get(&named_id), Some(&true));
+        assert_eq!(flags.get(&unnamed_id), Some(&false));
     }
 }

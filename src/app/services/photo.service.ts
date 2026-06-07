@@ -314,8 +314,8 @@ export class PhotoService {
     void this.refreshImages();
   }
 
-  async getMergeSuggestions(): Promise<MergeSuggestion[]> {
-    return await invoke<MergeSuggestion[]>('get_merge_suggestions');
+  async getMergeSuggestions(limit?: number): Promise<MergeSuggestion[]> {
+    return await invoke<MergeSuggestion[]>('get_merge_suggestions', { limit: limit ?? null });
   }
 
   async mergeSubjects(targetId: number, sourceId: number): Promise<void> {
