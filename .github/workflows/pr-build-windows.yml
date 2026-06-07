@@ -62,12 +62,13 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  # Acceptance test for TT-33: a *fresh* Windows machine (no VC++ 2015-2022
-  # runtime) must install and launch Nebula without a missing-DLL error.
-  # GitHub runners are saturated with VC++-dependent software and keep the CRT
-  # DLLs loaded, so they cannot be made truly clean. Instead we run the test
-  # inside a pristine Windows container (servercore), which ships with no VC++
-  # runtime at all - the real "fresh machine". See the script for the proof.
+  # Acceptance test for TT-33 on a genuinely *fresh* Windows machine. GitHub
+  # runners are saturated with VC++-dependent software and keep the CRT DLLs
+  # loaded, so they can't be made clean. We instead use a pristine Windows
+  # container (servercore) that ships with no VC++ runtime at all, and prove:
+  # on the clean machine the app aborts with STATUS_DLL_NOT_FOUND; after our
+  # installer runs, its POSTINSTALL hook has installed the exact VC++ runtime
+  # the bug names (MSVCP140_1.dll & co). See the script for details.
   verify-clean-install:
     needs: build-windows
     runs-on: windows-2022   # pin so servercore:ltsc2022 matches the host kernel
