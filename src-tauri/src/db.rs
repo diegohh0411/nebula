@@ -998,7 +998,7 @@ pub async fn insert_merge_suggestion(
 
 pub async fn get_merge_suggestions(pool: &SqlitePool, limit: Option<i64>) -> Result<Vec<crate::models::MergeSuggestion>> {
     let rows = match limit {
-        Some(n) => {
+        Some(n) if n > 0 => {
             sqlx::query(
                 r#"SELECT ms.id, ms.score,
                           sa.id as sa_id, sa.name as sa_name, sa.thumbnail_face_id as sa_thumbnail_face_id, sa.type as sa_type, sa.added_at as sa_added_at,
@@ -1013,6 +1013,7 @@ pub async fn get_merge_suggestions(pool: &SqlitePool, limit: Option<i64>) -> Res
             .fetch_all(pool)
             .await?
         }
+        Some(_) => return Ok(vec![]),
         None => {
             sqlx::query(
                 r#"SELECT ms.id, ms.score,
