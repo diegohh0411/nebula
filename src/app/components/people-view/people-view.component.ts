@@ -25,7 +25,7 @@ export class PeopleViewComponent implements OnInit {
 
   private async loadMergeSuggestions() {
     try {
-      const suggestions = await this.photoService.getMergeSuggestions();
+      const suggestions = await this.photoService.getMergeSuggestions(3);
       this.mergeSuggestions.set(suggestions);
       void this.loadSuggestionCrops(suggestions);
     } catch (e) {
