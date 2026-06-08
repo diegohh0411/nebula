@@ -1,0 +1,57 @@
+@if (suggestion) {
+  <div class="modal-backdrop" (click)="dismiss()">
+    <div class="modal-panel" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2 class="text-xl font-semibold">Review Possible Duplicate</h2>
+        <span class="text-sm text-muted-foreground">{{ suggestion.score | percent }} match</span>
+      </div>
+
+      <div class="subjects-grid" #subjectsGrid>
+        <div class="subject-col" #colA>
+          <div class="subject-name">
+            {{ suggestion.subject_a.name || 'Unnamed' }}
+            @if (mergeTarget?.target?.id === suggestion.subject_a.id) {
+              <span class="keep-badge">keep</span>
+            }
+          </div>
+          <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosA().length }} photos</div>
+          @if (loading()) {
+            <div class="text-muted-foreground text-sm">Loading…</div>
+          } @else {
+            <app-photo-grid [images]="photosA()" [rowHeight]="120" />
+          }
+        </div>
+
+        <div class="subject-col" #colB>
+          <div class="subject-name">
+            {{ suggestion.subject_b.name || 'Unnamed' }}
+            @if (mergeTarget?.target?.id === suggestion.subject_b.id) {
+              <span class="keep-badge">keep</span>
+            }
+          </div>
+          <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosB().length }} photos</div>
+          @if (loading()) {
+            <div class="text-muted-foreground text-sm">Loading…</div>
+          } @else {
+            <app-photo-grid [images]="photosB()" [rowHeight]="120" />
+          }
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button
+          class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+          (click)="dismiss()"
+        >
+          Dismiss
+        </button>
+        <button
+          class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          (click)="confirm()"
+        >
+          Merge as {{ mergeTarget?.target?.name || 'Unnamed' }}
+        </button>
+      </div>
+    </div>
+  </div>
+}

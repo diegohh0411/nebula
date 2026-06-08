@@ -1,0 +1,101 @@
+import {
+  Component,
+  Input,
+  Output,
+  EventEmitter,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { PhotoService } from '../../services/photo.service';
+import { MergeSuggestion, SearchResult, Subject } from '../../models/models';
+import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
+
+interface MergeTarget {
+  target: Subject;
+  source: Subject;
+}
+
+@Component({
+  selector: 'app-merge-review',
+  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [CommonModule, PhotoGridComponent],
+  templateUrl: './merge-review.component.html',
+  styleUrl: './merge-review.component.css',
+})
+export class MergeReviewComponent {
+  private _suggestion: MergeSuggestion | null = null;
+
+  @Input()
+  set suggestion(value: MergeSuggestion | null) {
+    this._suggestion = value;
+    void this.loadPhotos(value);
+  }
+  get suggestion(): MergeSuggestion | null { return this._suggestion; }
+
+  @Output() confirmed = new EventEmitter<void>();
+  @Output() dismissed = new EventEmitter<void>();
+
+  protected photoService = inject(PhotoService);
+
+  photosA = signal<SearchResult[]>([]);
+  photosB = signal<SearchResult[]>([]);
+  protected loading = signal(false);
+
+  get mergeTarget(): MergeTarget | null {
+    if (!this._suggestion) return null;
+    const { subject_a, subject_b } = this._suggestion;
+    const aName = !!subject_a.name;
+    const bName = !!subject_b.name;
+    if (aName && !bName) return { target: subject_a, source: subject_b };
+    if (bName && !aName) return { target: subject_b, source: subject_a };
+    // Both named or both unnamed: lower id wins
+    return subject_a.id <= subject_b.id
+      ? { target: subject_a, source: subject_b }
+      : { target: subject_b, source: subject_a };
+  }
+
+  private async loadPhotos(value: MergeSuggestion | null) {
+    if (!value) {
+      this.photosA.set([]);
+      this.photosB.set([]);
+      return;
+    }
+    this.loading.set(true);
+    try {
+      const [photosA, photosB] = await Promise.all([
+        this.photoService.getSubjectPhotos(value.subject_a.id),
+        this.photoService.getSubjectPhotos(value.subject_b.id),
+      ]);
+      this.photosA.set(photosA);
+      this.photosB.set(photosB);
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  async confirm() {
+    const target = this.mergeTarget;
+    if (!target) return;
+    await this.runMergeAnimation();
+    await this.photoService.mergeSubjects(target.target.id, target.source.id);
+    this.confirmed.emit();
+  }
+
+  async dismiss() {
+    if (!this._suggestion) return;
+    await this.photoService.dismissMergeSuggestion(this._suggestion.id);
+    this.dismissed.emit();
+  }
+
+  protected async runMergeAnimation() {
+    if (typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+    // GSAP animation added in Task 4
+  }
+}
