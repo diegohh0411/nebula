@@ -126,6 +126,15 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
             CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
         );
     "),
+    (2, "
+        CREATE TABLE IF NOT EXISTS dismissed_pairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            dismissed_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b);
+    "),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -1087,6 +1096,26 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
 }
 
 pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> {
+    let row = sqlx::query("SELECT subject_id_a, subject_id_b FROM merge_suggestions WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+    if let Some(r) = row {
+        let sid_a: i64 = r.get("subject_id_a");
+        let sid_b: i64 = r.get("subject_id_b");
+        let (lo, hi) = if sid_a < sid_b { (sid_a, sid_b) } else { (sid_b, sid_a) };
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT OR IGNORE INTO dismissed_pairs (subject_id_a, subject_id_b, dismissed_at) VALUES (?, ?, ?)"
+        )
+        .bind(lo)
+        .bind(hi)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    }
+
     sqlx::query("DELETE FROM merge_suggestions WHERE id = ?")
         .bind(id)
         .execute(pool)
@@ -1473,6 +1502,50 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, subject_id);
         assert_eq!(results[0].1, manual_emb);
+    }
+
+    async fn make_dismissal_pool() -> SqlitePool {
+        let pool = make_merge_pool().await;
+        sqlx::query(
+            "CREATE TABLE dismissed_pairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                dismissed_at INTEGER NOT NULL
+            )"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE UNIQUE INDEX idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)"
+        ).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn dismiss_persists_pair_in_dismissed_pairs() {
+        let pool = make_dismissal_pool().await;
+
+        let a: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let b: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let suggestion_id: i64 = sqlx::query_scalar(
+            "INSERT INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) VALUES (?, ?, 0.9, 0) RETURNING id"
+        ).bind(a).bind(b).fetch_one(&pool).await.unwrap();
+
+        dismiss_merge_suggestion(&pool, suggestion_id).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "suggestion should be deleted");
+
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        let dismissed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dismissed_pairs WHERE subject_id_a = ? AND subject_id_b = ?"
+        ).bind(lo).bind(hi).fetch_one(&pool).await.unwrap();
+        assert_eq!(dismissed, 1, "dismissed pair should be persisted");
     }
 
     #[tokio::test]
