@@ -1072,6 +1072,39 @@ pub async fn get_subject_named_flags(pool: &SqlitePool) -> Result<std::collectio
 }
 
 pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -> Result<()> {
+    if target_id == source_id {
+        return Ok(());
+    }
+
+    // Determine which subject has a name; if only one is named, ensure its name survives.
+    let rows = sqlx::query("SELECT id, name FROM subjects WHERE id = ? OR id = ?")
+        .bind(target_id)
+        .bind(source_id)
+        .fetch_all(pool)
+        .await?;
+
+    let mut target_name: Option<String> = None;
+    let mut source_name: Option<String> = None;
+    for row in rows {
+        let id: i64 = row.get("id");
+        let name: Option<String> = row.get("name");
+        if id == target_id {
+            target_name = name;
+        } else if id == source_id {
+            source_name = name;
+        }
+    }
+
+    // Rule: named subject's name always survives.
+    // If target is unnamed and source is named, copy the source name to target.
+    if target_name.is_none() && source_name.is_some() {
+        sqlx::query("UPDATE subjects SET name = ? WHERE id = ? AND name IS NULL")
+            .bind(&source_name)
+            .bind(target_id)
+            .execute(pool)
+            .await?;
+    }
+
     sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
         .bind(target_id)
         .bind(source_id)
@@ -1339,6 +1372,16 @@ mod tests {
             )"
         ).execute(&pool).await.unwrap();
         pool
+    }
+
+    async fn insert_subject(pool: &SqlitePool, name: Option<&str>) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (?, 'person', 0) RETURNING id"
+        )
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -1623,5 +1666,109 @@ mod tests {
 
         assert_eq!(flags.get(&named_id), Some(&true));
         assert_eq!(flags.get(&unnamed_id), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn merge_unnamed_into_named_preserves_name() {
+        let pool = make_merge_pool().await;
+
+        let named_id = insert_subject(&pool, Some("Casandra")).await;
+        let unnamed_id = insert_subject(&pool, None).await;
+
+        merge_subjects(&pool, named_id, unnamed_id).await.unwrap();
+
+        let surviving_name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM subjects WHERE id = ?"
+        )
+        .bind(named_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(surviving_name, Some("Casandra".to_string()));
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn merge_named_into_unnamed_preserves_name() {
+        let pool = make_merge_pool().await;
+
+        let unnamed_id = insert_subject(&pool, None).await;
+        let named_id = insert_subject(&pool, Some("Casandra")).await;
+
+        merge_subjects(&pool, unnamed_id, named_id).await.unwrap();
+
+        let surviving_name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM subjects WHERE id = ?"
+        )
+        .bind(unnamed_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(surviving_name, Some("Casandra".to_string()));
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn merge_named_into_named_preserves_target_name() {
+        let pool = make_merge_pool().await;
+
+        let target_id = insert_subject(&pool, Some("Cas")).await;
+        let source_id = insert_subject(&pool, Some("Ana")).await;
+
+        merge_subjects(&pool, target_id, source_id).await.unwrap();
+
+        let surviving_name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM subjects WHERE id = ?"
+        )
+        .bind(target_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(surviving_name, Some("Cas".to_string()));
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn merge_unnamed_into_unnamed_stays_unnamed() {
+        let pool = make_merge_pool().await;
+
+        let target_id = insert_subject(&pool, None).await;
+        let source_id = insert_subject(&pool, None).await;
+
+        merge_subjects(&pool, target_id, source_id).await.unwrap();
+
+        let surviving_name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM subjects WHERE id = ?"
+        )
+        .bind(target_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(surviving_name, None);
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
