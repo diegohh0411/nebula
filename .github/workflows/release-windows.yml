@@ -28,6 +28,16 @@ jobs:
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
+      - name: Download VC++ 2015-2022 redistributable (x64)
+        shell: pwsh
+        run: |
+          $dest = "src-tauri/redist/vc_redist.x64.exe"
+          New-Item -ItemType Directory -Force -Path src-tauri/redist | Out-Null
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $dest
+          if (-not (Test-Path $dest)) { throw "vc_redist download failed: $dest missing" }
+          $f = Get-Item $dest
+          Write-Host "Downloaded $($f.FullName) ($([math]::Round($f.Length/1MB,1)) MB)"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,3 +46,6 @@ jobs:
           releaseName: "Nebula ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
+          # NSIS only: it runs vc_redist via an installer hook (see
+          # src-tauri/nsis/hooks.nsh). MSI would not, so we don't ship it.
+          args: --bundles nsis
