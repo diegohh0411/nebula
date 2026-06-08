@@ -8,7 +8,7 @@
 
       <div class="subjects-grid" #subjectsGrid>
         <div class="subject-col" #colA>
-          <div class="subject-name">
+          <div class="subject-name" [class.opacity-50]="!suggestion.subject_a.name">
             {{ suggestion.subject_a.name || 'Unnamed' }}
             @if (mergeTarget?.target?.id === suggestion.subject_a.id) {
               <span class="keep-badge">keep</span>
@@ -23,7 +23,7 @@
         </div>
 
         <div class="subject-col" #colB>
-          <div class="subject-name">
+          <div class="subject-name" [class.opacity-50]="!suggestion.subject_b.name">
             {{ suggestion.subject_b.name || 'Unnamed' }}
             @if (mergeTarget?.target?.id === suggestion.subject_b.id) {
               <span class="keep-badge">keep</span>
@@ -52,7 +52,7 @@
           (click)="confirm()"
           [disabled]="submitting()"
         >
-          Merge as {{ mergeTarget?.target?.name || 'Unnamed' }}
+          Merge as <span [class.opacity-50]="!mergeTarget?.target?.name">{{ mergeTarget?.target?.name || 'Unnamed' }}</span>
         </button>
       </div>
     </div>

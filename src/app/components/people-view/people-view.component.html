@@ -26,9 +26,9 @@
               </div>
               <div class="min-w-0">
                 <div class="font-medium truncate">
-                  {{ suggestion.subject_a.name || 'Unnamed' }}
+                  <span [class.opacity-50]="!suggestion.subject_a.name">{{ suggestion.subject_a.name || 'Unnamed' }}</span>
                   &amp;
-                  {{ suggestion.subject_b.name || 'Unnamed' }}
+                  <span [class.opacity-50]="!suggestion.subject_b.name">{{ suggestion.subject_b.name || 'Unnamed' }}</span>
                 </div>
                 <div class="text-xs text-muted-foreground">
                   {{ suggestion.score | percent }} match
@@ -60,10 +60,10 @@
           }
         </div>
 
-        <div class="text-center">
-          <span class="font-medium block" [class.text-muted-foreground]="!subject.name">
-            {{ subject.name || 'Unnamed' }}
-          </span>
+        <div class="text-center h-6 flex items-center justify-center">
+          @if (subject.name) {
+            <span class="font-medium block">{{ subject.name }}</span>
+          }
         </div>
       </a>
     } @empty {
