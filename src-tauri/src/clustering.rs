@@ -106,6 +106,7 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
     crate::db::clear_merge_suggestions(pool).await?;
 
     let named_flags = crate::db::get_subject_named_flags(pool).await?;
+    let dismissed = crate::db::get_dismissed_pair_set(pool).await?;
 
     let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
@@ -132,6 +133,11 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
             let a_named = named_flags.get(id_a).copied().unwrap_or(false);
             let b_named = named_flags.get(id_b).copied().unwrap_or(false);
             if !a_named && !b_named {
+                continue;
+            }
+
+            let (lo, hi) = if id_a < id_b { (*id_a, *id_b) } else { (*id_b, *id_a) };
+            if dismissed.contains(&(lo, hi)) {
                 continue;
             }
 
