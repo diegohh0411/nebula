@@ -27,6 +27,7 @@ interface MergeTarget {
 })
 export class MergeReviewComponent {
   private _suggestion: MergeSuggestion | null = null;
+  private _loadGen = 0;
 
   @Input()
   set suggestion(value: MergeSuggestion | null) {
@@ -38,11 +39,12 @@ export class MergeReviewComponent {
   @Output() confirmed = new EventEmitter<void>();
   @Output() dismissed = new EventEmitter<void>();
 
-  protected photoService = inject(PhotoService);
+  private photoService = inject(PhotoService);
 
   photosA = signal<SearchResult[]>([]);
   photosB = signal<SearchResult[]>([]);
   protected loading = signal(false);
+  protected submitting = signal(false);
 
   get mergeTarget(): MergeTarget | null {
     if (!this._suggestion) return null;
@@ -58,6 +60,7 @@ export class MergeReviewComponent {
   }
 
   private async loadPhotos(value: MergeSuggestion | null) {
+    const gen = ++this._loadGen;
     if (!value) {
       this.photosA.set([]);
       this.photosB.set([]);
@@ -69,25 +72,36 @@ export class MergeReviewComponent {
         this.photoService.getSubjectPhotos(value.subject_a.id),
         this.photoService.getSubjectPhotos(value.subject_b.id),
       ]);
+      if (gen !== this._loadGen) return; // stale, discard
       this.photosA.set(photosA);
       this.photosB.set(photosB);
     } finally {
-      this.loading.set(false);
+      if (gen === this._loadGen) this.loading.set(false);
     }
   }
 
   async confirm() {
     const target = this.mergeTarget;
-    if (!target) return;
-    await this.runMergeAnimation();
-    await this.photoService.mergeSubjects(target.target.id, target.source.id);
-    this.confirmed.emit();
+    if (!target || this.submitting()) return;
+    this.submitting.set(true);
+    try {
+      await this.runMergeAnimation();
+      await this.photoService.mergeSubjects(target.target.id, target.source.id);
+      this.confirmed.emit();
+    } finally {
+      this.submitting.set(false);
+    }
   }
 
   async dismiss() {
-    if (!this._suggestion) return;
-    await this.photoService.dismissMergeSuggestion(this._suggestion.id);
-    this.dismissed.emit();
+    if (!this._suggestion || this.submitting()) return;
+    this.submitting.set(true);
+    try {
+      await this.photoService.dismissMergeSuggestion(this._suggestion.id);
+      this.dismissed.emit();
+    } finally {
+      this.submitting.set(false);
+    }
   }
 
   protected async runMergeAnimation() {
