@@ -384,7 +384,10 @@ mod tests {
         .unwrap();
 
         sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(subject_id_a, subject_id_b)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
+                CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
+                CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
+            )",
         )
         .execute(&pool)
         .await
@@ -459,7 +462,7 @@ mod tests {
 
         // Dismiss the suggestion.
         let suggestion_id: i64 =
-            sqlx::query_scalar("SELECT id FROM merge_suggestions LIMIT 1")
+            sqlx::query_scalar("SELECT id FROM merge_suggestions ORDER BY id LIMIT 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
