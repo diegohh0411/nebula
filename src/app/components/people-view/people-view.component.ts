@@ -3,11 +3,12 @@ import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, Subject } from '../../models/models';
 import { RouterLink } from '@angular/router';
+import { MergeReviewComponent } from '../merge-review/merge-review.component';
 
 @Component({
   selector: 'app-people-view',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, MergeReviewComponent],
   templateUrl: './people-view.component.html',
   styleUrl: './people-view.component.css'
 })
@@ -16,6 +17,7 @@ export class PeopleViewComponent implements OnInit {
   protected faceCropUrls = signal<Record<number, string>>({});
   protected mergeSuggestions = signal<MergeSuggestion[]>([]);
   protected suggestionCropUrls = signal<Record<number, string>>({});
+  protected reviewingSuggestion = signal<MergeSuggestion | null>(null);
 
   async ngOnInit() {
     await this.photoService.loadSubjects();
@@ -71,22 +73,21 @@ export class PeopleViewComponent implements OnInit {
     this.faceCropUrls.set(urls);
   }
 
-  async merge(suggestion: MergeSuggestion) {
-    try {
-      await this.photoService.mergeSubjects(suggestion.subject_a.id, suggestion.subject_b.id);
-      await Promise.all([this.loadThumbnails(), this.loadMergeSuggestions()]);
-    } catch (e) {
-      console.error('Merge failed', e);
-    }
+  protected openReview(suggestion: MergeSuggestion) {
+    this.reviewingSuggestion.set(suggestion);
   }
 
-  async dismiss(suggestion: MergeSuggestion) {
-    try {
-      await this.photoService.dismissMergeSuggestion(suggestion.id);
-      this.mergeSuggestions.update((list) => list.filter((s) => s.id !== suggestion.id));
-    } catch (e) {
-      console.error('Dismiss failed', e);
+  async onConfirmed() {
+    this.reviewingSuggestion.set(null);
+    await Promise.all([this.loadThumbnails(), this.loadMergeSuggestions()]);
+  }
+
+  async onDismissed() {
+    const current = this.reviewingSuggestion();
+    if (current) {
+      this.mergeSuggestions.update((list) => list.filter((s) => s.id !== current.id));
     }
+    this.reviewingSuggestion.set(null);
   }
 
   protected getThumbUrl(subject: Subject): string | null {
