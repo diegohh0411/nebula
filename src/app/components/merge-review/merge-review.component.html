@@ -1,8 +1,8 @@
 @if (suggestion) {
   <div class="modal-backdrop" (click)="dismiss()">
-    <div class="modal-panel" (click)="$event.stopPropagation()">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="merge-review-title" (click)="$event.stopPropagation()">
       <div class="modal-header">
-        <h2 class="text-xl font-semibold">Review Possible Duplicate</h2>
+        <h2 id="merge-review-title" class="text-xl font-semibold">Review Possible Duplicate</h2>
         <span class="text-sm text-muted-foreground">{{ suggestion.score | percent }} match</span>
       </div>
 

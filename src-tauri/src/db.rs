@@ -1101,7 +1101,11 @@ pub async fn get_dismissed_pair_set(pool: &SqlitePool) -> Result<std::collection
         .await?;
     Ok(rows
         .into_iter()
-        .map(|r| (r.get::<i64, _>("subject_id_a"), r.get::<i64, _>("subject_id_b")))
+        .map(|r| {
+            let a = r.get::<i64, _>("subject_id_a");
+            let b = r.get::<i64, _>("subject_id_b");
+            if a < b { (a, b) } else { (b, a) }
+        })
         .collect())
 }
 
@@ -1559,7 +1563,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dismissed_pair_not_re_suggested_after_find() {
+    async fn get_dismissed_pair_set_returns_stored_pairs() {
         // Pool needs: subjects, faces, dismissed_pairs, merge_suggestions tables
         let pool = make_dismissal_pool().await;
         sqlx::query(

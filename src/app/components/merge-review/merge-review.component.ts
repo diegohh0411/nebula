@@ -69,6 +69,7 @@ export class MergeReviewComponent {
     if (!value) {
       this.photosA.set([]);
       this.photosB.set([]);
+      this.loading.set(false);
       return;
     }
     this.loading.set(true);
@@ -93,6 +94,8 @@ export class MergeReviewComponent {
       await this.runMergeAnimation(target);
       await this.photoService.mergeSubjects(target.target.id, target.source.id);
       this.confirmed.emit();
+    } catch (e) {
+      console.error('MergeReview: merge failed', e);
     } finally {
       this.submitting.set(false);
     }
@@ -104,6 +107,8 @@ export class MergeReviewComponent {
     try {
       await this.photoService.dismissMergeSuggestion(this._suggestion.id);
       this.dismissed.emit();
+    } catch (e) {
+      console.error('MergeReview: dismiss failed', e);
     } finally {
       this.submitting.set(false);
     }
@@ -124,11 +129,10 @@ export class MergeReviewComponent {
     const isTargetA = target.target.id === this._suggestion!.subject_a.id;
     const sourceEl = isTargetA ? colB : colA;
     const targetEl = isTargetA ? colA : colB;
-    const direction = isTargetA ? -1 : 1;
 
     const sourceRect = sourceEl.getBoundingClientRect();
     const targetRect = targetEl.getBoundingClientRect();
-    const dx = (targetRect.left - sourceRect.left) * direction;
+    const dx = targetRect.left - sourceRect.left;
 
     await gsap.timeline()
       .to(sourceEl, { x: dx, opacity: 0, duration: 0.35, ease: 'power2.in' })
