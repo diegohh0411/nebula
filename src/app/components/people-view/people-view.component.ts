@@ -90,6 +90,10 @@ export class PeopleViewComponent implements OnInit {
     this.reviewingSuggestion.set(null);
   }
 
+  onClosed() {
+    this.reviewingSuggestion.set(null);
+  }
+
   protected getThumbUrl(subject: Subject): string | null {
     if (!subject.thumbnail_face_id) return null;
     return this.suggestionCropUrls()[subject.thumbnail_face_id] ?? this.faceCropUrls()[subject.id] ?? null;

@@ -8,8 +8,10 @@ import {
   ChangeDetectionStrategy,
   ViewChild,
   ElementRef,
+  HostListener,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, SearchResult, Subject } from '../../models/models';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
@@ -23,7 +25,7 @@ interface MergeTarget {
   selector: 'app-merge-review',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, PhotoGridComponent],
+  imports: [CommonModule, PhotoGridComponent, CdkTrapFocus],
   templateUrl: './merge-review.component.html',
   styleUrl: './merge-review.component.css',
 })
@@ -40,6 +42,7 @@ export class MergeReviewComponent {
 
   @Output() confirmed = new EventEmitter<void>();
   @Output() dismissed = new EventEmitter<void>();
+  @Output() closed = new EventEmitter<void>();
 
   @ViewChild('colA') colARef?: ElementRef<HTMLElement>;
   @ViewChild('colB') colBRef?: ElementRef<HTMLElement>;
@@ -112,6 +115,16 @@ export class MergeReviewComponent {
     } finally {
       this.submitting.set(false);
     }
+  }
+
+  close() {
+    if (!this._suggestion || this.submitting()) return;
+    this.closed.emit();
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscape() {
+    this.close();
   }
 
   protected async runMergeAnimation(target: MergeTarget) {
