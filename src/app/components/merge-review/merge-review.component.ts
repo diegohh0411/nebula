@@ -123,7 +123,8 @@ export class MergeReviewComponent {
   }
 
   @HostListener('document:keydown.escape')
-  onEscape() {
+  protected onEscape() {
+    if (!this._suggestion) return;
     this.close();
   }
 
