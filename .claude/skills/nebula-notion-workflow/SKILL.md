@@ -34,6 +34,22 @@ ntn login
 | Context Bits database | `370e954d-b476-80cc-8a33-d5d49a2b3a9b` |
 | Context Bits data source | `370e954d-b476-8079-939d-000bc4380470` |
 
+## ⚠️ Pagination — queries cap at 25 rows by default
+
+`ntn datasources query` (and the underlying Notion API) returns **only the first 25 results** unless you ask for more. The response includes `has_more: true` and a `next_cursor` when there are more rows. A default query against the Tasks data source (which has >25 rows) **silently omits tasks** — this will break any audit, status count, or overlap review that assumes it sees everything.
+
+**Always pass `--limit` when you need the full set**, and check `has_more`:
+
+```bash
+# Get all tasks (raise --limit above the row count)
+ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb --limit 100 --json
+
+# Or paginate explicitly with the cursor from a previous page
+ntn datasources query 36fe954d-b476-8008-9aca-000b5ef89feb --start-cursor <next_cursor> --json
+```
+
+After any list query, confirm `has_more` is `false` before trusting the result as complete. The same cap applies to the MCP `notion-search` / `notion-fetch(collection://…)` paths — page through until exhausted.
+
 ## Database Schemas
 
 ### 📜 User Stories
@@ -306,6 +322,7 @@ ntn api v1/pages/$t1_id -X PATCH 'properties[Blocked by][relation][0][id]=<other
 | **Using `--content-file` with `ntn pages update`** | Use `--content '<md>'` or stdin: `ntn pages update <id> < file.md` |
 | **Assuming a create succeeded and using a fabricated ID** | Always parse the create response and verify `'id'` exists |
 | **Running dependent calls in parallel** | Run sequentially; a single failure cascades and cancels the rest |
+| **Trusting a list query that silently capped at 25 rows** | Pass `--limit 100` and verify `has_more: false` before treating results as complete |
 | Merging PR yourself | Never. Set status to **Ready for review** and stop. |
 | Pushing commits directly to `main` | Always use a branch + PR. |
 | Forgetting LOC update after merge | Always run post-merge checklist above. |
