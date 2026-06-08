@@ -6,6 +6,8 @@ import {
   inject,
   signal,
   ChangeDetectionStrategy,
+  ViewChild,
+  ElementRef,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
@@ -38,6 +40,9 @@ export class MergeReviewComponent {
 
   @Output() confirmed = new EventEmitter<void>();
   @Output() dismissed = new EventEmitter<void>();
+
+  @ViewChild('colA') colARef?: ElementRef<HTMLElement>;
+  @ViewChild('colB') colBRef?: ElementRef<HTMLElement>;
 
   private photoService = inject(PhotoService);
 
@@ -85,7 +90,7 @@ export class MergeReviewComponent {
     if (!target || this.submitting()) return;
     this.submitting.set(true);
     try {
-      await this.runMergeAnimation();
+      await this.runMergeAnimation(target);
       await this.photoService.mergeSubjects(target.target.id, target.source.id);
       this.confirmed.emit();
     } finally {
@@ -104,12 +109,33 @@ export class MergeReviewComponent {
     }
   }
 
-  protected async runMergeAnimation() {
+  protected async runMergeAnimation(target: MergeTarget) {
     if (typeof window !== 'undefined' &&
         typeof window.matchMedia === 'function' &&
         window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       return;
     }
-    // GSAP animation added in Task 4
+    const colA = this.colARef?.nativeElement;
+    const colB = this.colBRef?.nativeElement;
+    if (!colA || !colB) return;
+
+    const { gsap } = await import('gsap');
+
+    const isTargetA = target.target.id === this._suggestion!.subject_a.id;
+    const sourceEl = isTargetA ? colB : colA;
+    const targetEl = isTargetA ? colA : colB;
+    const direction = isTargetA ? -1 : 1;
+
+    const sourceRect = sourceEl.getBoundingClientRect();
+    const targetRect = targetEl.getBoundingClientRect();
+    const dx = (targetRect.left - sourceRect.left) * direction;
+
+    await gsap.timeline()
+      .to(sourceEl, { x: dx, opacity: 0, duration: 0.35, ease: 'power2.in' })
+      .to(targetEl, { scale: 1.04, duration: 0.15, ease: 'power1.out' }, '<0.2')
+      .to(targetEl, { scale: 1, duration: 0.15, ease: 'power1.in' })
+      .then();
+
+    gsap.set([sourceEl, targetEl], { clearProps: 'all' });
   }
 }
