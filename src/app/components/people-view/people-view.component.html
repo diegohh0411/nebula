@@ -35,18 +35,12 @@
                 </div>
               </div>
             </div>
-            <div class="flex items-center gap-2 shrink-0">
+            <div class="shrink-0">
               <button
                 class="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                (click)="merge(suggestion)"
+                (click)="openReview(suggestion)"
               >
-                Merge
-              </button>
-              <button
-                class="px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
-                (click)="dismiss(suggestion)"
-              >
-                Dismiss
+                Review
               </button>
             </div>
           </div>
@@ -80,3 +74,10 @@
     }
   </div>
 </div>
+
+<app-merge-review
+  [suggestion]="reviewingSuggestion()"
+  (confirmed)="onConfirmed()"
+  (dismissed)="onDismissed()"
+  (closed)="onClosed()"
+/>

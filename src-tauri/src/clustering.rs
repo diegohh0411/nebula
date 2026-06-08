@@ -106,6 +106,7 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
     crate::db::clear_merge_suggestions(pool).await?;
 
     let named_flags = crate::db::get_subject_named_flags(pool).await?;
+    let dismissed = crate::db::get_dismissed_pair_set(pool).await?;
 
     let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
@@ -132,6 +133,11 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
             let a_named = named_flags.get(id_a).copied().unwrap_or(false);
             let b_named = named_flags.get(id_b).copied().unwrap_or(false);
             if !a_named && !b_named {
+                continue;
+            }
+
+            let (lo, hi) = if id_a < id_b { (*id_a, *id_b) } else { (*id_b, *id_a) };
+            if dismissed.contains(&(lo, hi)) {
                 continue;
             }
 
@@ -321,5 +327,161 @@ mod tests {
         assert!(!is_unnamed_pair(1, 2), "named+unnamed should not be skipped");
         assert!(!is_unnamed_pair(1, 1), "named+named should not be skipped");
         assert!(is_unnamed_pair(2, 3),  "unnamed+unnamed must be skipped");
+    }
+
+    #[tokio::test]
+    async fn dismissed_pair_not_re_suggested_after_find_merge_suggestions() {
+        // Helper: encode f32 slice as little-endian bytes.
+        fn emb_bytes(vals: &[f32]) -> Vec<u8> {
+            vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+        }
+
+        // Build an in-memory SQLite pool with all required tables.
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        sqlx::query(
+            "CREATE TABLE subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                type TEXT NOT NULL DEFAULT 'person',
+                thumbnail_face_id INTEGER,
+                added_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER NOT NULL DEFAULT 0,
+                subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+                bbox_x REAL NOT NULL DEFAULT 0,
+                bbox_y REAL NOT NULL DEFAULT 0,
+                bbox_w REAL NOT NULL DEFAULT 0.5,
+                bbox_h REAL NOT NULL DEFAULT 0.5,
+                embedding BLOB,
+                added_at INTEGER NOT NULL DEFAULT 0,
+                is_manual INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE merge_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                score REAL NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
+                CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
+                CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE dismissed_pairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                dismissed_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert two named subjects.
+        let alice_id: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let bob_id: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Insert a manual face embedding for each subject.
+        // Alice: [1.0, 0.0, 0.0], Bob: [0.95, 0.31, 0.0] — cosine sim ~0.95, above threshold.
+        let alice_emb = emb_bytes(&[1.0_f32, 0.0, 0.0]);
+        let bob_emb = emb_bytes(&[0.95_f32, 0.31, 0.0]);
+
+        sqlx::query(
+            "INSERT INTO faces (subject_id, embedding, is_manual) VALUES (?, ?, 1)",
+        )
+        .bind(alice_id)
+        .bind(&alice_emb)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (subject_id, embedding, is_manual) VALUES (?, ?, 1)",
+        )
+        .bind(bob_id)
+        .bind(&bob_emb)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // First call: pair should be suggested.
+        find_merge_suggestions(&pool).await.unwrap();
+
+        let count_after_first: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count_after_first, 1, "pair should be suggested on first call");
+
+        // Dismiss the suggestion.
+        let suggestion_id: i64 =
+            sqlx::query_scalar("SELECT id FROM merge_suggestions ORDER BY id LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        crate::db::dismiss_merge_suggestion(&pool, suggestion_id)
+            .await
+            .unwrap();
+
+        // Second call: dismissed pair must not be re-suggested.
+        find_merge_suggestions(&pool).await.unwrap();
+
+        let count_after_second: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            count_after_second, 0,
+            "dismissed pair must not appear in merge_suggestions after second call"
+        );
     }
 }
