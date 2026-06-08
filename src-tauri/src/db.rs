@@ -1072,6 +1072,10 @@ pub async fn get_subject_named_flags(pool: &SqlitePool) -> Result<std::collectio
 }
 
 pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -> Result<()> {
+    if target_id == source_id {
+        return Ok(());
+    }
+
     // Determine which subject has a name; if only one is named, ensure its name survives.
     let rows = sqlx::query("SELECT id, name FROM subjects WHERE id = ? OR id = ?")
         .bind(target_id)
@@ -1094,7 +1098,7 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
     // Rule: named subject's name always survives.
     // If target is unnamed and source is named, copy the source name to target.
     if target_name.is_none() && source_name.is_some() {
-        sqlx::query("UPDATE subjects SET name = ? WHERE id = ?")
+        sqlx::query("UPDATE subjects SET name = ? WHERE id = ? AND name IS NULL")
             .bind(&source_name)
             .bind(target_id)
             .execute(pool)
