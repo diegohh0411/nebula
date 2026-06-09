@@ -258,52 +258,58 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     })
 }
 
-const MERGE_CENTROID_SIMILARITY_THRESHOLD: f32 = 0.65;
-
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
-    crate::db::clear_merge_suggestions(pool).await?;
+    db::clear_merge_suggestions(pool).await?;
 
-    let named_flags = crate::db::get_subject_named_flags(pool).await?;
-    let dismissed = crate::db::get_dismissed_pair_set(pool).await?;
+    let now = chrono::Utc::now().timestamp();
 
-    let manual_raw = db::get_subject_face_embeddings(pool).await?;
-    let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
-        .into_iter()
-        .filter_map(|(sid, blob)| crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e)))
-        .collect();
+    // Cross-subject similarity edges: face_a and face_b belong to different subjects,
+    // at least one subject is named, and the face pair is not cannot-linked.
+    let rows = sqlx::query(
+        r#"SELECT
+               MIN(f1.subject_id, f2.subject_id) AS sid_a,
+               MAX(f1.subject_id, f2.subject_id) AS sid_b,
+               MAX(fe.weight)                    AS score
+           FROM face_edges fe
+           JOIN faces f1 ON f1.id = fe.face_a
+           JOIN faces f2 ON f2.id = fe.face_b
+           JOIN subjects s1 ON s1.id = f1.subject_id
+           JOIN subjects s2 ON s2.id = f2.subject_id
+           WHERE f1.subject_id IS NOT NULL
+             AND f2.subject_id IS NOT NULL
+             AND f1.subject_id != f2.subject_id
+             AND (s1.name IS NOT NULL OR s2.name IS NOT NULL)
+             AND NOT EXISTS (
+                 SELECT 1 FROM constraints c
+                 WHERE c.kind = 'cannot_link'
+                   AND c.face_a = MIN(fe.face_a, fe.face_b)
+                   AND c.face_b = MAX(fe.face_a, fe.face_b)
+             )
+           GROUP BY MIN(f1.subject_id, f2.subject_id), MAX(f1.subject_id, f2.subject_id)"#,
+    )
+    .fetch_all(pool)
+    .await?;
 
-    let all_raw = db::get_subject_embeddings(pool).await?;
-    let all_decoded: Vec<(i64, Vec<f32>)> = all_raw
-        .into_iter()
-        .filter_map(|(sid, blob)| crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e)))
-        .collect();
+    for row in rows {
+        let sid_a: i64 = row.get("sid_a");
+        let sid_b: i64 = row.get("sid_b");
+        let score: f64 = row.get("score");
 
-    let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
+        // Skip dismissed pairs (still track via dismissed_pairs table for UI)
+        let dismissed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM dismissed_pairs
+             WHERE (subject_id_a = ? AND subject_id_b = ?) OR (subject_id_a = ? AND subject_id_b = ?)"
+        )
+        .bind(sid_a).bind(sid_b).bind(sid_b).bind(sid_a)
+        .fetch_one(pool).await?;
+        if dismissed > 0 { continue; }
 
-    let mut subject_embeddings: Vec<(i64, Vec<f32>)> = anchor_centroids.into_iter().collect();
-    subject_embeddings.sort_unstable_by_key(|(id, _)| *id);
-
-    for i in 0..subject_embeddings.len() {
-        for j in (i + 1)..subject_embeddings.len() {
-            let (id_a, emb_a) = &subject_embeddings[i];
-            let (id_b, emb_b) = &subject_embeddings[j];
-
-            let a_named = named_flags.get(id_a).copied().unwrap_or(false);
-            let b_named = named_flags.get(id_b).copied().unwrap_or(false);
-            if !a_named && !b_named {
-                continue;
-            }
-
-            let (lo, hi) = if id_a < id_b { (*id_a, *id_b) } else { (*id_b, *id_a) };
-            if dismissed.contains(&(lo, hi)) {
-                continue;
-            }
-
-            let sim = crate::embedder::cosine_similarity(emb_a, emb_b);
-            if sim > MERGE_CENTROID_SIMILARITY_THRESHOLD {
-                crate::db::insert_merge_suggestion(pool, *id_a, *id_b, sim as f64).await?;
-            }
-        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at)
+             VALUES (?, ?, ?, ?)"
+        )
+        .bind(sid_a).bind(sid_b).bind(score).bind(now)
+        .execute(pool).await?;
     }
 
     Ok(())
@@ -851,5 +857,71 @@ mod tests {
         let distinct: HashSet<Option<i64>> = subjects.into_iter().collect();
         assert_eq!(distinct.len(), 1, "all four faces must share one subject after recluster (must_link is durable)");
         assert!(distinct.iter().next().unwrap().is_some(), "subject must not be NULL");
+    }
+
+    #[tokio::test]
+    async fn graph_suggestions_emitted_for_cross_subject_edges() {
+        let pool = make_integration_pool().await;
+
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let bob: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let fa: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
+        ).bind(alice).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fa).bind(emb_bytes(&[1.0f32, 0.0, 0.0])).execute(&pool).await.unwrap();
+
+        let fb: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id"
+        ).bind(bob).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fb).bind(emb_bytes(&[0.99f32, 0.14, 0.0])).execute(&pool).await.unwrap();
+
+        // Manually insert a face_edge between them (as recluster would)
+        db::upsert_face_edge(&pool, fa, fb, 0.99).await.unwrap();
+
+        find_merge_suggestions(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "one suggestion expected for Alice-Bob cross edge");
+    }
+
+    #[tokio::test]
+    async fn graph_suggestions_skipped_for_cannot_link_pair() {
+        let pool = make_integration_pool().await;
+
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let bob: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let fa: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
+        ).bind(alice).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fa).bind(emb_bytes(&[1.0f32, 0.0, 0.0])).execute(&pool).await.unwrap();
+
+        let fb: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id"
+        ).bind(bob).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fb).bind(emb_bytes(&[0.99f32, 0.14, 0.0])).execute(&pool).await.unwrap();
+
+        db::upsert_face_edge(&pool, fa, fb, 0.99).await.unwrap();
+        crate::db::add_cannot_link(&pool, fa, fb, "dismiss").await.unwrap();
+
+        find_merge_suggestions(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "dismissed pair (cannot_link) must not be suggested");
     }
 }
