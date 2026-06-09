@@ -104,9 +104,7 @@ pub struct Face {
     pub bbox_y: f64,
     pub bbox_w: f64,
     pub bbox_h: f64,
-    pub embedding: Option<Vec<u8>>,
     pub added_at: i64,
-    pub is_manual: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

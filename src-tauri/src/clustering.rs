@@ -378,8 +378,10 @@ mod tests {
             vals.iter().flat_map(|v| v.to_le_bytes()).collect()
         }
 
+        crate::db::ensure_sqlite_vec_registered();
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
+        // Minimal schema matching the B1 state (no embedding, no is_manual, no face_corrections)
         sqlx::query(
             "CREATE TABLE subjects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -402,22 +404,27 @@ mod tests {
                 bbox_y REAL NOT NULL DEFAULT 0,
                 bbox_w REAL NOT NULL DEFAULT 0.5,
                 bbox_h REAL NOT NULL DEFAULT 0.5,
-                embedding BLOB,
-                added_at INTEGER NOT NULL DEFAULT 0,
-                is_manual INTEGER NOT NULL DEFAULT 0
+                added_at INTEGER NOT NULL DEFAULT 0
             )",
         )
         .execute(&pool)
         .await
         .unwrap();
 
+        // Use float[3] for compact test vectors
+        sqlx::query("CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])")
+            .execute(&pool)
+            .await
+            .unwrap();
+
         sqlx::query(
-            "CREATE TABLE face_corrections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                face_id INTEGER NOT NULL,
-                old_subject_id INTEGER,
-                new_subject_id INTEGER,
-                created_at INTEGER NOT NULL DEFAULT 0
+            "CREATE TABLE constraints (
+                face_a INTEGER NOT NULL,
+                face_b INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (face_a, face_b, kind)
             )",
         )
         .execute(&pool)
@@ -438,7 +445,7 @@ mod tests {
         .unwrap();
 
         sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
+            "CREATE UNIQUE INDEX idx_merge_pair ON merge_suggestions(
                 CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
                 CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
             )",
@@ -460,13 +467,13 @@ mod tests {
         .unwrap();
 
         sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
+            "CREATE UNIQUE INDEX idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
         )
         .execute(&pool)
         .await
         .unwrap();
 
-        // Subject S: named, with a manual anchor face close to [1, 0, 0]
+        // Subject S: named, with anchor face close to [1, 0, 0]
         let subject_s: i64 = sqlx::query_scalar(
             "INSERT INTO subjects (name, type, added_at) VALUES ('S', 'person', 0) RETURNING id",
         )
@@ -474,19 +481,22 @@ mod tests {
         .await
         .unwrap();
 
-        let anchor_emb = emb_bytes(&[1.0f32, 0.0, 0.0]);
-        sqlx::query(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) \
-             VALUES (1, ?, 0, 0, 0.5, 0.5, ?, 0, 1)",
+        let anchor_s: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
         )
         .bind(subject_s)
-        .bind(&anchor_emb)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
 
-        // Subject S2: a second subject whose anchor is near face_f's embedding.
-        // When S is forbidden, face_f should be assigned here instead.
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(anchor_s)
+            .bind(emb_bytes(&[1.0f32, 0.0, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Subject S2: named, anchor near face_f's embedding — should absorb F when S is forbidden
         let subject_s2: i64 = sqlx::query_scalar(
             "INSERT INTO subjects (name, type, added_at) VALUES ('S2', 'person', 0) RETURNING id",
         )
@@ -494,43 +504,44 @@ mod tests {
         .await
         .unwrap();
 
-        let anchor_s2_emb = emb_bytes(&[0.998f32, 0.06, 0.0]);
-        sqlx::query(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) \
-             VALUES (3, ?, 0, 0, 0.5, 0.5, ?, 0, 1)",
+        let anchor_s2: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (3, ?, 0) RETURNING id",
         )
         .bind(subject_s2)
-        .bind(&anchor_s2_emb)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Face F: unassigned (subject_id IS NULL, is_manual = 1), embedding very close to S's anchor.
-        // Without cannot-link, Pass 1 would assign F back to S (cosine sim ~0.999 > 0.75 threshold).
-        let face_f_emb = emb_bytes(&[0.999f32, 0.05, 0.0]);
-        let face_f: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) \
-             VALUES (2, NULL, 0, 0, 0.5, 0.5, ?, 0, 1) RETURNING id",
-        )
-        .bind(&face_f_emb)
         .fetch_one(&pool)
         .await
         .unwrap();
 
-        // Record removal: F was taken out of S (new_subject_id IS NULL)
-        sqlx::query(
-            "INSERT INTO face_corrections (face_id, old_subject_id, new_subject_id, created_at) VALUES (?, ?, NULL, 0)",
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(anchor_s2)
+            .bind(emb_bytes(&[0.998f32, 0.06, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Face F: unassigned, embedding very close to S's anchor
+        let face_f: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, NULL, 0) RETURNING id",
         )
-        .bind(face_f)
-        .bind(subject_s)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
+
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(face_f)
+            .bind(emb_bytes(&[0.999f32, 0.05, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Record cannot_link: F was removed from S — link F to S's anchor face
+        crate::db::add_cannot_link(&pool, face_f, anchor_s, "removal")
+            .await
+            .unwrap();
 
         // Run recluster
         cluster_unassigned_faces(&pool).await.unwrap();
 
-        // F must NOT be re-assigned to S
         let assigned: Option<i64> =
             sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
                 .bind(face_f)
@@ -557,6 +568,7 @@ mod tests {
             vals.iter().flat_map(|v| v.to_le_bytes()).collect()
         }
 
+        crate::db::ensure_sqlite_vec_registered();
         // Build an in-memory SQLite pool with all required tables.
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
@@ -582,14 +594,18 @@ mod tests {
                 bbox_y REAL NOT NULL DEFAULT 0,
                 bbox_w REAL NOT NULL DEFAULT 0.5,
                 bbox_h REAL NOT NULL DEFAULT 0.5,
-                embedding BLOB,
-                added_at INTEGER NOT NULL DEFAULT 0,
-                is_manual INTEGER NOT NULL DEFAULT 0
+                added_at INTEGER NOT NULL DEFAULT 0
             )",
         )
         .execute(&pool)
         .await
         .unwrap();
+
+        // Use float[3] for compact test vectors
+        sqlx::query("CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         sqlx::query(
             "CREATE TABLE merge_suggestions (
@@ -648,28 +664,37 @@ mod tests {
         .await
         .unwrap();
 
-        // Insert a manual face embedding for each subject.
+        // Insert a face with vector for each subject.
         // Alice: [1.0, 0.0, 0.0], Bob: [0.95, 0.31, 0.0] — cosine sim ~0.95, above threshold.
-        let alice_emb = emb_bytes(&[1.0_f32, 0.0, 0.0]);
-        let bob_emb = emb_bytes(&[0.95_f32, 0.31, 0.0]);
-
-        sqlx::query(
-            "INSERT INTO faces (subject_id, embedding, is_manual) VALUES (?, ?, 1)",
+        let alice_face_id: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
         )
         .bind(alice_id)
-        .bind(&alice_emb)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
 
-        sqlx::query(
-            "INSERT INTO faces (subject_id, embedding, is_manual) VALUES (?, ?, 1)",
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(alice_face_id)
+            .bind(emb_bytes(&[1.0_f32, 0.0, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let bob_face_id: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id",
         )
         .bind(bob_id)
-        .bind(&bob_emb)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
+
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(bob_face_id)
+            .bind(emb_bytes(&[0.95_f32, 0.31, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // First call: pair should be suggested.
         find_merge_suggestions(&pool).await.unwrap();

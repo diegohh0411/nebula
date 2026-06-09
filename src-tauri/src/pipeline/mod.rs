@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
-async fn write_faces(
+async fn save_faces(
     pool: &sqlx::SqlitePool,
     image_id: i64,
     sub_qid: i64,
@@ -44,22 +44,21 @@ async fn write_faces(
 ) {
     let mut all_ok = true;
     for (bbox, face_emb) in faces {
-        let face_blob = crate::embedder::f32_slice_to_bytes(&face_emb);
         let rel_x = bbox.x1 as f64;
         let rel_y = bbox.y1 as f64;
         let rel_w = (bbox.x2 - bbox.x1) as f64;
         let rel_h = (bbox.y2 - bbox.y1) as f64;
-        if let Err(e) = crate::db::insert_face(
-            pool,
-            image_id,
-            None,
-            (rel_x, rel_y, rel_w, rel_h),
-            Some(&face_blob),
-        )
-        .await
-        {
-            eprintln!("[pipeline] insert_face failed for image {image_id}: {e}");
-            all_ok = false;
+        match crate::db::insert_face(pool, image_id, None, (rel_x, rel_y, rel_w, rel_h)).await {
+            Ok(face_id) => {
+                if let Err(e) = crate::face_store::upsert_vector(pool, face_id, &face_emb).await {
+                    eprintln!("[pipeline] upsert_vector failed for face {face_id}: {e}");
+                    all_ok = false;
+                }
+            }
+            Err(e) => {
+                eprintln!("[pipeline] insert_face failed for image {image_id}: {e}");
+                all_ok = false;
+            }
         }
     }
     if all_ok {
@@ -268,7 +267,7 @@ pub async fn run_pipeline(
                     match face_result {
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                write_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
                                 processed_subject_work = true;
                             }
                         }
@@ -312,7 +311,7 @@ pub async fn run_pipeline(
                     match frx.await {
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                write_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
                                 processed_subject_work = true;
                             }
                         }
