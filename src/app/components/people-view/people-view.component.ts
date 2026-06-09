@@ -23,6 +23,8 @@ export class PeopleViewComponent implements OnInit {
   editingName = signal<string>('');
   protected namingConflict = signal<MergeSuggestion | null>(null);
 
+  private _conflictOriginalSubject: Subject | null = null;
+
   @ViewChildren('nameInput') private nameInputRefs!: QueryList<ElementRef<HTMLInputElement>>;
 
   async ngOnInit() {
@@ -116,13 +118,24 @@ export class PeopleViewComponent implements OnInit {
     const name = this.editingName().trim();
     if (!name) { this.cancelEditing(); return; }
 
+    this._conflictOriginalSubject = { ...subject };
     this.photoService.subjects.update(subjects =>
       subjects.map(s => s.id === subject.id ? { ...s, name } : s)
     );
     this.editingSubjectId.set(null);
     this.editingName.set('');
 
-    const result = await this.photoService.nameSubject(subject.id, name);
+    let result: { duplicate_subject_id: number | null };
+    try {
+      result = await this.photoService.nameSubject(subject.id, name);
+    } catch (e) {
+      console.error('nameSubject failed, reverting', e);
+      this.photoService.subjects.update(subjects =>
+        subjects.map(s => s.id === subject.id ? { ...s, name: null } : s)
+      );
+      this._conflictOriginalSubject = null;
+      return;
+    }
 
     if (result.duplicate_subject_id) {
       const duplicate = this.photoService.subjects().find(s => s.id === result.duplicate_subject_id);
@@ -131,6 +144,8 @@ export class PeopleViewComponent implements OnInit {
         const currentWithName: Subject = { ...currentSubject, name };
         this.namingConflict.set({ id: -1, subject_a: duplicate, subject_b: currentWithName, score: 1.0 });
       }
+    } else {
+      this._conflictOriginalSubject = null;
     }
   }
 
@@ -164,6 +179,13 @@ export class PeopleViewComponent implements OnInit {
   }
 
   protected onConflictDismissed(): void {
+    if (this._conflictOriginalSubject) {
+      const original = this._conflictOriginalSubject;
+      this.photoService.subjects.update(subjects =>
+        subjects.map(s => s.id === original.id ? original : s)
+      );
+      this._conflictOriginalSubject = null;
+    }
     this.namingConflict.set(null);
   }
 }
