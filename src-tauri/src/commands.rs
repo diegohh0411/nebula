@@ -383,13 +383,7 @@ pub async fn unassign_face(
     face_id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let old_subject_id = db::get_face_subject_id(&state.pool, face_id)
-        .await
-        .map_err(map_err)?;
     db::unassign_face(&state.pool, face_id)
-        .await
-        .map_err(map_err)?;
-    db::record_face_correction(&state.pool, face_id, old_subject_id, None)
         .await
         .map_err(map_err)?;
     let _ = db::auto_assign_missing_thumbnails(&state.pool).await;
