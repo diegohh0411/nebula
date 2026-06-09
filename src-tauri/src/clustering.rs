@@ -1,5 +1,4 @@
 use anyhow::Result;
-use hdbscan::{Hdbscan, HdbscanHyperParams};
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 
