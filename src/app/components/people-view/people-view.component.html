@@ -53,8 +53,8 @@
     @for (subject of photoService.subjects(); track subject.id) {
       <a
         class="group cursor-pointer flex flex-col items-center gap-3 transition-transform hover:scale-105"
-        routerLink
         [routerLink]="['/subject', subject.id]"
+        data-testid="subject-link"
       >
         <div class="w-32 h-32 rounded-full overflow-hidden border-2 border-border group-hover:border-accent bg-muted flex items-center justify-center transition-colors">
           @if (faceCropUrls()[subject.id]) {

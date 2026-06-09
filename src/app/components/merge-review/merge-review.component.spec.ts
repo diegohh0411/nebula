@@ -133,7 +133,7 @@ describe('MergeReviewComponent', () => {
     component.suggestion = makeSuggestion(subA, subB);
     fixture.detectChanges();
     const dismissBtn = fixture.debugElement.query(By.css('button[cdkFocusInitial]'));
-    expect(dismissBtn.nativeElement.textContent.trim()).toBe('Cancel');
+    expect(dismissBtn.nativeElement.textContent.trim()).toBe('Not the same person');
 
     await component.dismiss();
 

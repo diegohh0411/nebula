@@ -94,7 +94,7 @@ describe('PeopleViewComponent — inline naming', () => {
     vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
     fixture.detectChanges();
 
-    const cardLink = fixture.debugElement.query(By.css('a[routerLink]'));
+    const cardLink = fixture.debugElement.query(By.css('a[data-testid="subject-link"]'));
     cardLink.triggerEventHandler('click', new MouseEvent('click', { bubbles: true }));
     fixture.detectChanges();
 
@@ -145,7 +145,7 @@ describe('PeopleViewComponent — name conflict', () => {
     expect(conflict!.score).toBe(1.0);
   });
 
-  it('clears _conflictOriginalSubject when duplicate_subject_id is not found in subjects list', async () => {
+  it('clears originalSubjects map when duplicate_subject_id is not found in subjects list', async () => {
     const current = makeSubject(1, null);
     photoService.subjects.set([current]); // no subject with id 99
     vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 99 });
@@ -156,7 +156,7 @@ describe('PeopleViewComponent — name conflict', () => {
     await component['commitName'](current);
 
     expect(component['namingConflict']()).toBeNull();
-    expect(component['_conflictOriginalSubject']).toBeNull();
+    expect(component['_originalSubjects'].has(1)).toBe(false);
   });
 });
 

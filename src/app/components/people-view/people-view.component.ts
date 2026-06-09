@@ -23,7 +23,7 @@ export class PeopleViewComponent implements OnInit {
   editingName = signal<string>('');
   protected namingConflict = signal<MergeSuggestion | null>(null);
 
-  private _conflictOriginalSubject: Subject | null = null;
+  private _originalSubjects = new Map<number, Subject>();
 
   @ViewChildren('nameInput') private nameInputRefs!: QueryList<ElementRef<HTMLInputElement>>;
 
@@ -118,7 +118,7 @@ export class PeopleViewComponent implements OnInit {
     const name = this.editingName().trim();
     if (!name) { this.cancelEditing(); return; }
 
-    this._conflictOriginalSubject = { ...subject };
+    this._originalSubjects.set(subject.id, { ...subject });
     this.photoService.subjects.update(subjects =>
       subjects.map(s => s.id === subject.id ? { ...s, name } : s)
     );
@@ -130,8 +130,8 @@ export class PeopleViewComponent implements OnInit {
       result = await this.photoService.nameSubject(subject.id, name);
     } catch (e) {
       console.error('nameSubject failed, reverting', e);
-      const original = this._conflictOriginalSubject;
-      this._conflictOriginalSubject = null;
+      const original = this._originalSubjects.get(subject.id);
+      this._originalSubjects.delete(subject.id);
       if (original) {
         this.photoService.subjects.update(subjects =>
           subjects.map(s => s.id === original.id ? original : s)
@@ -147,10 +147,10 @@ export class PeopleViewComponent implements OnInit {
         const currentWithName: Subject = { ...currentSubject, name };
         this.namingConflict.set({ id: -1, subject_a: duplicate, subject_b: currentWithName, score: 1.0 });
       } else {
-        this._conflictOriginalSubject = null;
+        this._originalSubjects.delete(subject.id);
       }
     } else {
-      this._conflictOriginalSubject = null;
+      this._originalSubjects.delete(subject.id);
     }
   }
 
@@ -184,13 +184,6 @@ export class PeopleViewComponent implements OnInit {
   }
 
   protected onConflictDismissed(): void {
-    if (this._conflictOriginalSubject) {
-      const original = this._conflictOriginalSubject;
-      this.photoService.subjects.update(subjects =>
-        subjects.map(s => s.id === original.id ? original : s)
-      );
-      this._conflictOriginalSubject = null;
-    }
     this.namingConflict.set(null);
   }
 }

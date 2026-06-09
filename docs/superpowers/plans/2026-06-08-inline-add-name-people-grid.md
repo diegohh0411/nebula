@@ -100,7 +100,7 @@ In `src/app/components/merge-review/merge-review.component.html`, replace the di
   (click)="dismiss()"
   [disabled]="submitting()"
 >
-  {{ canDismiss ? 'Dismiss' : 'Cancel' }}
+  {{ canDismiss ? 'Dismiss' : 'Not the same person' }}
 </button>
 ```
 
@@ -702,7 +702,7 @@ gh pr create \
 - [ ] Hover an unnamed card — "+ Add a name" hint appears
 - [ ] Click hint — inline input appears, focused
 - [ ] Type a name and press Enter — card immediately shows name, input disappears
-- [ ] Type a name that already exists on another cluster — merge review modal opens with Cancel (not Dismiss)
+- [ ] Type a name that already exists on another cluster — merge review modal opens with "Not the same person" (not Dismiss)
 - [ ] Cancel the conflict → modal closes, both clusters retain the typed name
 - [ ] Confirm the conflict → clusters merge, grid reloads
 - [ ] Press Tab after naming — focus moves to next unnamed card's input

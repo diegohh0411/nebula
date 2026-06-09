@@ -11,7 +11,7 @@ Let the user name an unnamed cluster directly from the People grid without navig
 ## Decisions
 
 - **Affordance trigger:** Hover-reveal — caption area is empty by default; hovering shows a "+ Add a name" ghost hint; clicking the hint opens the input (stops propagation so card routerLink does not fire).
-- **Conflict flow:** Extend `MergeReviewComponent` with `@Input() canDismiss = true`. When `false`, the dismiss button becomes "Cancel" and emits `dismissed` directly without calling `dismissMergeSuggestion`. The full side-by-side photo review modal is shown so the user can verify faces before merging.
+- **Conflict flow:** Extend `MergeReviewComponent` with `@Input() canDismiss = true`. When `false`, the dismiss button becomes "Not the same person" and emits `dismissed` directly without calling `dismissMergeSuggestion`. The full side-by-side photo review modal is shown so the user can verify faces before merging.
 
 ## State (PeopleViewComponent)
 
@@ -34,7 +34,7 @@ Five new methods:
 - **`cancelEditing()`** — clear both editing signals
 - **`onKeydown(event, subject)`** — Enter → `commitName`; Escape → `cancelEditing`; Tab → `commitName` then move focus to next unnamed card's input
 - **`onConflictConfirmed()`** — call `mergeSubjects(currentId, conflictId)`, reload subjects + thumbnails, clear `namingConflict`
-- **`onConflictDismissed()`** — revert optimistic name update, clear `namingConflict`
+- **`onConflictDismissed()`** — clear `namingConflict` (name is already saved, keep it)
 
 ### `people-view.component.html`
 
@@ -48,7 +48,7 @@ Caption area per card:
 
 - Add `@Input() canDismiss = true`
 - In `dismiss()`: when `!canDismiss`, skip API call and emit `dismissed` directly
-- In template: button label is "Cancel" when `!canDismiss`, "Not the same person" when `canDismiss`
+- In template: button label is "Dismiss" when `canDismiss`, "Not the same person" when `!canDismiss`
 
 ## Data Flow
 
@@ -67,7 +67,7 @@ Caption area per card:
 2. Look up subject N from `photoService.subjects()` to build synthetic `MergeSuggestion { id: -1, subject_a: current, subject_b: duplicate, score: 1.0 }`
 3. Set `namingConflict` → merge review modal opens with `[canDismiss]="false"`
 4. Confirm → `mergeSubjects` → reload subjects + thumbnails → clear conflict
-5. Cancel → restore subject from the pre-edit snapshot (preserves the old name, which may be `null` for unnamed cards) → clear conflict
+5. "Not the same person" → keep the typed name on both subjects, clear conflict
 6. If `duplicate_subject_id` is returned but the subject is not found in the local list, treat as no conflict and clear state
 
 ### Error path
