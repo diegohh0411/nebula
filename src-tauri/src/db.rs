@@ -739,11 +739,11 @@ pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u
         .collect())
 }
 
-pub async fn get_manual_face_embeddings_by_subject(
+pub async fn get_subject_face_embeddings(
     pool: &SqlitePool,
 ) -> Result<Vec<(i64, Vec<u8>)>> {
-    // is_manual column removed in B1; return all subject-assigned faces.
-    // compute_anchor_centroids already uses all-faces as its fallback.
+    // Post-B1: returns embeddings for all faces assigned to a subject.
+    // Used to build anchor centroids for clustering and merge suggestions.
     let rows = sqlx::query(
         "SELECT f.subject_id, fv.embedding
          FROM face_vectors fv
@@ -1271,6 +1271,9 @@ fn ordered_pair(a: i64, b: i64) -> (i64, i64) {
 
 #[allow(dead_code)]
 pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
+    if face_a == face_b {
+        return Ok(());
+    }
     let (a, b) = ordered_pair(face_a, face_b);
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
@@ -1288,6 +1291,9 @@ pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: 
 
 #[allow(dead_code)]
 pub async fn add_cannot_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
+    if face_a == face_b {
+        return Ok(());
+    }
     let (a, b) = ordered_pair(face_a, face_b);
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
@@ -1620,8 +1626,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_manual_face_embeddings_returns_subject_assigned_faces() {
-        // Post-B1: is_manual is gone; function returns all subject-assigned faces via face_vectors.
+    async fn get_subject_face_embeddings_returns_all_subject_assigned_faces() {
+        // Post-B1: returns embeddings for all faces assigned to a subject.
         let pool = init_test_pool().await;
         let subject_id = sqlx::query_scalar::<_, i64>(
             "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
@@ -1641,7 +1647,7 @@ mod tests {
         crate::face_store::upsert_vector(&pool, f1, &emb1).await.unwrap();
         crate::face_store::upsert_vector(&pool, f2, &emb2).await.unwrap();
 
-        let results = get_manual_face_embeddings_by_subject(&pool).await.unwrap();
+        let results = get_subject_face_embeddings(&pool).await.unwrap();
         assert_eq!(results.len(), 2, "both subject-assigned faces should be returned");
         for (sid, _emb) in &results {
             assert_eq!(*sid, subject_id);

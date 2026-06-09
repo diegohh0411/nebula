@@ -7,7 +7,7 @@ use crate::db;
 
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     // 1. Build anchor centroids first.
-    let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
+    let manual_raw = db::get_subject_face_embeddings(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
         .into_iter()
         .filter_map(|(sid, blob)| {
@@ -111,7 +111,7 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
     let named_flags = crate::db::get_subject_named_flags(pool).await?;
     let dismissed = crate::db::get_dismissed_pair_set(pool).await?;
 
-    let manual_raw = db::get_manual_face_embeddings_by_subject(pool).await?;
+    let manual_raw = db::get_subject_face_embeddings(pool).await?;
     let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
         .into_iter()
         .filter_map(|(sid, blob)| crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e)))
