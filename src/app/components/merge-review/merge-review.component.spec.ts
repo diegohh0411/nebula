@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { MergeReviewComponent } from './merge-review.component';
 import { PhotoService } from '../../services/photo.service';
 import { TauriEventsService } from '../../services/tauri-events.service';
@@ -130,6 +131,10 @@ describe('MergeReviewComponent', () => {
 
     component.canDismiss = false;
     component.suggestion = makeSuggestion(subA, subB);
+    fixture.detectChanges();
+    const dismissBtn = fixture.debugElement.query(By.css('button[cdkFocusInitial]'));
+    expect(dismissBtn.nativeElement.textContent.trim()).toBe('Cancel');
+
     await component.dismiss();
 
     expect(photoService.dismissMergeSuggestion).not.toHaveBeenCalled();

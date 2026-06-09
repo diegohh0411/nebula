@@ -40,11 +40,11 @@ export class MergeReviewComponent {
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
 
+  @Input() canDismiss = true;
+
   @Output() confirmed = new EventEmitter<void>();
   @Output() dismissed = new EventEmitter<void>();
   @Output() closed = new EventEmitter<void>();
-
-  @Input() canDismiss = true;
 
   @ViewChild('colA') colARef?: ElementRef<HTMLElement>;
   @ViewChild('colB') colBRef?: ElementRef<HTMLElement>;
