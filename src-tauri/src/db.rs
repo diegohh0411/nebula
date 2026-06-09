@@ -1260,7 +1260,6 @@ fn ordered_pair(a: i64, b: i64) -> (i64, i64) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-#[allow(dead_code)]
 pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
     if face_a == face_b {
         return Ok(());
@@ -1280,7 +1279,6 @@ pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: 
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn add_cannot_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
     if face_a == face_b {
         return Ok(());
