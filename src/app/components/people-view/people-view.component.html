@@ -31,7 +31,7 @@
                   <span [class.opacity-50]="!suggestion.subject_b.name">{{ suggestion.subject_b.name || 'Unnamed' }}</span>
                 </div>
                 <div class="text-xs text-muted-foreground">
-                  {{ suggestion.score | percent }} match
+                  {{ suggestion.score | percent }}  match
                 </div>
               </div>
             </div>
@@ -51,7 +51,11 @@
 
   <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
     @for (subject of photoService.subjects(); track subject.id) {
-      <a class="group cursor-pointer flex flex-col items-center gap-3 transition-transform hover:scale-105" [routerLink]="['/subject', subject.id]">
+      <a
+        class="group cursor-pointer flex flex-col items-center gap-3 transition-transform hover:scale-105"
+        routerLink
+        [routerLink]="['/subject', subject.id]"
+      >
         <div class="w-32 h-32 rounded-full overflow-hidden border-2 border-border group-hover:border-accent bg-muted flex items-center justify-center transition-colors">
           @if (faceCropUrls()[subject.id]) {
             <img [src]="faceCropUrls()[subject.id]" alt="Face Crop" class="w-full h-full object-cover" />
@@ -63,6 +67,24 @@
         <div class="text-center h-6 flex items-center justify-center">
           @if (subject.name) {
             <span class="font-medium block">{{ subject.name }}</span>
+          } @else if (editingSubjectId() === subject.id) {
+            <input
+              #nameInput
+              data-testid="name-input"
+              class="w-28 text-center text-sm border border-border rounded px-2 py-0.5 focus:outline-none focus:border-accent bg-background"
+              [value]="editingName()"
+              (input)="editingName.set($any($event.target).value)"
+              (keydown)="onKeydown($event, subject)"
+              (blur)="commitName(subject)"
+              (click)="$event.stopPropagation()"
+              autofocus
+            />
+          } @else {
+            <span
+              data-testid="add-name-hint"
+              class="text-xs text-accent opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity select-none"
+              (click)="startEditing(subject, $event)"
+            >+ Add a name</span>
           }
         </div>
       </a>
@@ -75,9 +97,19 @@
   </div>
 </div>
 
+<!-- Merge suggestion review modal -->
 <app-merge-review
   [suggestion]="reviewingSuggestion()"
   (confirmed)="onConfirmed()"
   (dismissed)="onDismissed()"
   (closed)="onClosed()"
+/>
+
+<!-- Naming conflict merge modal (no dismiss-to-API) -->
+<app-merge-review
+  [suggestion]="namingConflict()"
+  [canDismiss]="false"
+  (confirmed)="onConflictConfirmed()"
+  (dismissed)="onConflictDismissed()"
+  (closed)="onConflictDismissed()"
 />
