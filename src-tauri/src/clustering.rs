@@ -1,7 +1,7 @@
 use anyhow::Result;
 use hdbscan::{Hdbscan, HdbscanHyperParams};
 use sqlx::SqlitePool;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::db;
 
@@ -25,6 +25,8 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
 
     let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
 
+    let cannot_link = db::get_face_cannot_link_subjects(pool).await?;
+
     // 2. Fetch ONLY unassigned faces
     let unassigned = db::get_unassigned_faces_with_embeddings(pool).await?;
 
@@ -35,11 +37,12 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     // 3. Pass 1: Greedy Centroid Match
     for (face_id, emb_blob) in unassigned {
         if let Ok(emb) = crate::embedder::bytes_to_f32_vec(&emb_blob) {
-            if let Some(sid) = find_nearest_anchor(&emb, &anchor_centroids, ANCHOR_MATCH_THRESHOLD) {
-                // Match found, assign immediately
+            let forbidden = cannot_link.get(&face_id);
+            if let Some(sid) =
+                find_nearest_anchor(&emb, &anchor_centroids, ANCHOR_MATCH_THRESHOLD, forbidden)
+            {
                 db::update_face_subject(pool, face_id, Some(sid)).await?;
             } else {
-                // No match, keep for HDBSCAN
                 residual_faces.push((face_id, emb));
             }
         } else {
@@ -208,9 +211,11 @@ fn find_nearest_anchor(
     cluster_centroid: &[f32],
     anchors: &HashMap<i64, Vec<f32>>,
     threshold: f32,
+    forbidden: Option<&HashSet<i64>>,
 ) -> Option<i64> {
     anchors
         .iter()
+        .filter(|(&id, _)| forbidden.map_or(true, |f| !f.contains(&id)))
         .map(|(&id, emb)| (id, crate::embedder::cosine_similarity(cluster_centroid, emb)))
         .filter(|(_, sim)| *sim > threshold)
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
@@ -281,7 +286,7 @@ mod tests {
         anchors.insert(10i64, emb(&[1.0, 0.0, 0.0]));
 
         let cluster_centroid = emb(&[0.9, 0.1, 0.0]);
-        let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD);
+        let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD, None);
 
         assert_eq!(result, Some(10));
     }
@@ -293,7 +298,7 @@ mod tests {
         anchors.insert(10i64, emb(&[1.0, 0.0, 0.0]));
 
         let cluster_centroid = emb(&[0.0, 1.0, 0.0]);
-        let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD);
+        let result = find_nearest_anchor(&cluster_centroid, &anchors, ANCHOR_MATCH_THRESHOLD, None);
 
         assert_eq!(result, None);
     }
@@ -304,11 +309,11 @@ mod tests {
         anchors.insert(1i64, emb(&[1.0, 0.0, 0.0]));
 
         // Cluster A centroid: near subject 1 anchor
-        let a = find_nearest_anchor(&emb(&[0.95, 0.05, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD);
+        let a = find_nearest_anchor(&emb(&[0.95, 0.05, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD, None);
         assert_eq!(a, Some(1), "cluster A should match subject 1");
 
         // Cluster B centroid: orthogonal — no match
-        let b = find_nearest_anchor(&emb(&[0.0, 1.0, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD);
+        let b = find_nearest_anchor(&emb(&[0.0, 1.0, 0.0]), &anchors, ANCHOR_MATCH_THRESHOLD, None);
         assert_eq!(b, None, "cluster B should get no match (creates new subject)");
     }
 
@@ -327,6 +332,222 @@ mod tests {
         assert!(!is_unnamed_pair(1, 2), "named+unnamed should not be skipped");
         assert!(!is_unnamed_pair(1, 1), "named+named should not be skipped");
         assert!(is_unnamed_pair(2, 3),  "unnamed+unnamed must be skipped");
+    }
+
+    #[test]
+    fn find_nearest_anchor_skips_forbidden_subject() {
+        use std::collections::HashSet;
+        let mut anchors = HashMap::new();
+        anchors.insert(10i64, emb(&[1.0, 0.0, 0.0]));
+        anchors.insert(20i64, emb(&[0.9, 0.3, 0.0]));
+
+        // Without forbidden: both 10 and 20 are above threshold, 10 should win (sim=1.0)
+        let without_forbidden = find_nearest_anchor(
+            &emb(&[1.0, 0.0, 0.0]),
+            &anchors,
+            ANCHOR_MATCH_THRESHOLD,
+            None,
+        );
+        assert_eq!(without_forbidden, Some(10));
+
+        // With forbidden = {10}: subject 10 is skipped; 20 wins
+        let mut forbidden = HashSet::new();
+        forbidden.insert(10i64);
+        let with_forbidden = find_nearest_anchor(
+            &emb(&[1.0, 0.0, 0.0]),
+            &anchors,
+            ANCHOR_MATCH_THRESHOLD,
+            Some(&forbidden),
+        );
+        assert_eq!(with_forbidden, Some(20));
+
+        // With forbidden = {10, 20}: no subjects left above threshold
+        forbidden.insert(20i64);
+        let all_forbidden = find_nearest_anchor(
+            &emb(&[1.0, 0.0, 0.0]),
+            &anchors,
+            ANCHOR_MATCH_THRESHOLD,
+            Some(&forbidden),
+        );
+        assert_eq!(all_forbidden, None);
+    }
+
+    #[tokio::test]
+    async fn recluster_does_not_reassign_removed_face_to_forbidden_subject() {
+        fn emb_bytes(vals: &[f32]) -> Vec<u8> {
+            vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+        }
+
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        sqlx::query(
+            "CREATE TABLE subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                type TEXT NOT NULL DEFAULT 'person',
+                thumbnail_face_id INTEGER,
+                added_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER NOT NULL DEFAULT 0,
+                subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+                bbox_x REAL NOT NULL DEFAULT 0,
+                bbox_y REAL NOT NULL DEFAULT 0,
+                bbox_w REAL NOT NULL DEFAULT 0.5,
+                bbox_h REAL NOT NULL DEFAULT 0.5,
+                embedding BLOB,
+                added_at INTEGER NOT NULL DEFAULT 0,
+                is_manual INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE face_corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                face_id INTEGER NOT NULL,
+                old_subject_id INTEGER,
+                new_subject_id INTEGER,
+                created_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE merge_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id_a INTEGER NOT NULL,
+                subject_id_b INTEGER NOT NULL,
+                score REAL NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
+                CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
+                CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE dismissed_pairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_id_a INTEGER NOT NULL,
+                subject_id_b INTEGER NOT NULL,
+                dismissed_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Subject S: named, with a manual anchor face close to [1, 0, 0]
+        let subject_s: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('S', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let anchor_emb = emb_bytes(&[1.0f32, 0.0, 0.0]);
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) \
+             VALUES (1, ?, 0, 0, 0.5, 0.5, ?, 0, 1)",
+        )
+        .bind(subject_s)
+        .bind(&anchor_emb)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Subject S2: a second subject whose anchor is near face_f's embedding.
+        // When S is forbidden, face_f should be assigned here instead.
+        let subject_s2: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('S2', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let anchor_s2_emb = emb_bytes(&[0.998f32, 0.06, 0.0]);
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) \
+             VALUES (3, ?, 0, 0, 0.5, 0.5, ?, 0, 1)",
+        )
+        .bind(subject_s2)
+        .bind(&anchor_s2_emb)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Face F: unassigned (subject_id IS NULL, is_manual = 1), embedding very close to S's anchor.
+        // Without cannot-link, Pass 1 would assign F back to S (cosine sim ~0.999 > 0.75 threshold).
+        let face_f_emb = emb_bytes(&[0.999f32, 0.05, 0.0]);
+        let face_f: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, embedding, added_at, is_manual) \
+             VALUES (2, NULL, 0, 0, 0.5, 0.5, ?, 0, 1) RETURNING id",
+        )
+        .bind(&face_f_emb)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Record removal: F was taken out of S (new_subject_id IS NULL)
+        sqlx::query(
+            "INSERT INTO face_corrections (face_id, old_subject_id, new_subject_id, created_at) VALUES (?, ?, NULL, 0)",
+        )
+        .bind(face_f)
+        .bind(subject_s)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Run recluster
+        cluster_unassigned_faces(&pool).await.unwrap();
+
+        // F must NOT be re-assigned to S
+        let assigned: Option<i64> =
+            sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+                .bind(face_f)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        assert!(
+            assigned != Some(subject_s),
+            "face F should NOT be reassigned to forbidden subject S (got {:?})",
+            assigned
+        );
+        assert_eq!(
+            assigned,
+            Some(subject_s2),
+            "face F should be assigned to the nearest non-forbidden subject S2"
+        );
     }
 
     #[tokio::test]
