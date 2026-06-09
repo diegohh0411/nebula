@@ -60,6 +60,27 @@ impl UnionFind {
     }
 }
 
+fn compute_mutual_sim_edges(
+    all_knn: &HashMap<i64, Vec<(i64, f32)>>,
+    tau_sim: f32,
+) -> Vec<(i64, i64, f32)> {
+    let mut edges = Vec::new();
+    for (&face_a, neighbors) in all_knn {
+        for &(face_b, sim) in neighbors {
+            if sim < tau_sim { continue; }
+            if face_a >= face_b { continue; }  // deduplicate: only emit with a < b
+            // Check mutuality: face_a must appear in face_b's knn
+            let is_mutual = all_knn
+                .get(&face_b)
+                .map_or(false, |nb| nb.iter().any(|(id, _)| *id == face_a));
+            if is_mutual {
+                edges.push((face_a, face_b, sim));
+            }
+        }
+    }
+    edges
+}
+
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     // 1. Build anchor centroids first.
     let manual_raw = db::get_subject_face_embeddings(pool).await?;
@@ -819,5 +840,52 @@ mod tests {
             count_after_second, 0,
             "dismissed pair must not appear in merge_suggestions after second call"
         );
+    }
+
+    #[test]
+    fn mutual_knn_both_directions_required() {
+        // Face 1's knn contains face 2; face 2's knn does NOT contain face 1 → no edge
+        let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
+        all_knn.insert(1, vec![(2, 0.9), (3, 0.8)]);
+        all_knn.insert(2, vec![(3, 0.85), (4, 0.7)]);  // face 1 absent from face 2's list
+        all_knn.insert(3, vec![(2, 0.85), (1, 0.8)]);
+        all_knn.insert(4, vec![(2, 0.7), (3, 0.6)]);
+
+        let edges = compute_mutual_sim_edges(&all_knn, 0.55);
+        let has_1_2 = edges.iter().any(|(a, b, _)| (*a == 1 && *b == 2) || (*a == 2 && *b == 1));
+        assert!(!has_1_2, "1-2 must not be an edge: non-mutual (face 1 not in face 2's knn)");
+    }
+
+    #[test]
+    fn mutual_knn_creates_edge_when_both_in_each_others_topk() {
+        let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
+        all_knn.insert(1, vec![(2, 0.9)]);
+        all_knn.insert(2, vec![(1, 0.9)]);
+
+        let edges = compute_mutual_sim_edges(&all_knn, 0.55);
+        assert_eq!(edges.len(), 1);
+        assert!((edges[0].2 - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mutual_knn_filters_below_tau_sim() {
+        // Both in each other's top-k but similarity is below τ_sim
+        let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
+        all_knn.insert(1, vec![(2, 0.4)]);  // 0.4 < 0.55
+        all_knn.insert(2, vec![(1, 0.4)]);
+
+        let edges = compute_mutual_sim_edges(&all_knn, 0.55);
+        assert!(edges.is_empty(), "below-tau mutual pair must not create an edge");
+    }
+
+    #[test]
+    fn mutual_knn_no_duplicate_edges() {
+        // Each side would generate (1,2) and (2,1); function must deduplicate
+        let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
+        all_knn.insert(1, vec![(2, 0.9)]);
+        all_knn.insert(2, vec![(1, 0.9)]);
+
+        let edges = compute_mutual_sim_edges(&all_knn, 0.55);
+        assert_eq!(edges.len(), 1, "each pair must appear at most once");
     }
 }
