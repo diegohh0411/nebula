@@ -731,41 +731,6 @@ pub async fn list_faces_for_subject(pool: &SqlitePool, subject_id: i64) -> Resul
         .collect())
 }
 
-pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
-    let rows = sqlx::query(
-        "SELECT f.subject_id, fv.embedding
-         FROM face_vectors fv
-         JOIN faces f ON f.id = fv.rowid
-         WHERE f.subject_id IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get("subject_id"), r.get("embedding")))
-        .collect())
-}
-
-pub async fn get_subject_face_embeddings(
-    pool: &SqlitePool,
-) -> Result<Vec<(i64, Vec<u8>)>> {
-    // Post-B1: returns embeddings for all faces assigned to a subject.
-    // Used to build anchor centroids for clustering and merge suggestions.
-    let rows = sqlx::query(
-        "SELECT f.subject_id, fv.embedding
-         FROM face_vectors fv
-         JOIN faces f ON f.id = fv.rowid
-         WHERE f.subject_id IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get("subject_id"), r.get("embedding")))
-        .collect())
-}
 
 pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> {
     let row = sqlx::query(
@@ -1107,15 +1072,6 @@ pub async fn get_merge_suggestions(pool: &SqlitePool, limit: Option<i64>) -> Res
         .collect())
 }
 
-pub async fn get_subject_named_flags(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, bool>> {
-    let rows = sqlx::query("SELECT id, (name IS NOT NULL) as has_name FROM subjects")
-        .fetch_all(pool)
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get::<i64, _>("id"), r.get::<bool, _>("has_name")))
-        .collect())
-}
 
 pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -> Result<()> {
     if target_id == source_id {
@@ -1410,35 +1366,6 @@ pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool) -> Result<Vec<i64>
     Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
 }
 
-pub async fn get_face_cannot_link_subjects(
-    pool: &SqlitePool,
-) -> Result<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
-    // For a constraint (face_a, face_b, cannot_link):
-    // - face_a is forbidden from face_b's current subject
-    // - face_b is forbidden from face_a's current subject
-    let rows = sqlx::query(
-        "SELECT c.face_a AS queried_face, f2.subject_id AS forbidden_subject
-         FROM constraints c
-         JOIN faces f2 ON f2.id = c.face_b
-         WHERE c.kind = 'cannot_link' AND f2.subject_id IS NOT NULL
-         UNION ALL
-         SELECT c.face_b AS queried_face, f2.subject_id AS forbidden_subject
-         FROM constraints c
-         JOIN faces f2 ON f2.id = c.face_a
-         WHERE c.kind = 'cannot_link' AND f2.subject_id IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let mut map: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
-        std::collections::HashMap::new();
-    for row in rows {
-        let face_id: i64 = row.get("queried_face");
-        let forbidden: i64 = row.get("forbidden_subject");
-        map.entry(face_id).or_default().insert(forbidden);
-    }
-    Ok(map)
-}
 
 pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = NULL WHERE id = ?")
@@ -1736,35 +1663,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[tokio::test]
-    async fn get_subject_face_embeddings_returns_all_subject_assigned_faces() {
-        // Post-B1: returns embeddings for all faces assigned to a subject.
-        let pool = init_test_pool().await;
-        let subject_id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-
-        // Insert two assigned faces with vectors
-        let f1: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
-        ).bind(subject_id).fetch_one(&pool).await.unwrap();
-
-        let f2: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
-        ).bind(subject_id).fetch_one(&pool).await.unwrap();
-
-        let emb1 = vec![1.0f32; 512];
-        let emb2 = vec![2.0f32; 512];
-        crate::face_store::upsert_vector(&pool, f1, &emb1).await.unwrap();
-        crate::face_store::upsert_vector(&pool, f2, &emb2).await.unwrap();
-
-        let results = get_subject_face_embeddings(&pool).await.unwrap();
-        assert_eq!(results.len(), 2, "both subject-assigned faces should be returned");
-        for (sid, _emb) in &results {
-            assert_eq!(*sid, subject_id);
-        }
-    }
-
     async fn make_dismissal_pool() -> SqlitePool {
         let pool = make_merge_pool().await;
         sqlx::query(
@@ -1852,22 +1750,6 @@ mod tests {
         // (clustering will call this after checking the set, so test the set check logic)
         let is_dismissed = dismissed.contains(&(lo, hi));
         assert!(is_dismissed, "pair should be flagged as dismissed so clustering skips it");
-    }
-
-    #[tokio::test]
-    async fn get_subject_named_flags_returns_true_for_named_and_false_for_unnamed() {
-        let pool = make_pool().await;
-        let named_id: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-        let unnamed_id: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-
-        let flags = get_subject_named_flags(&pool).await.unwrap();
-
-        assert_eq!(flags.get(&named_id), Some(&true));
-        assert_eq!(flags.get(&unnamed_id), Some(&false));
     }
 
     #[tokio::test]
@@ -1972,64 +1854,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[tokio::test]
-    async fn get_face_cannot_link_subjects_returns_constraints_based_forbidden_set() {
-        // Post-B1: uses constraints table + face subject_id lookup instead of face_corrections.
-        // Semantics: face_a is forbidden from face_b's current subject (and vice versa).
-        let pool = init_test_pool().await;
-
-        let s1: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (type, added_at) VALUES ('person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let s2: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (type, added_at) VALUES ('person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        // anchor_s1: assigned to s1 (represents the anchor of s1)
-        let anchor_s1: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,0.5,0.5,0) RETURNING id"
-        ).bind(s1).fetch_one(&pool).await.unwrap();
-
-        // anchor_s2: assigned to s2
-        let anchor_s2: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (2, ?, 0,0,0.5,0.5,0) RETURNING id"
-        ).bind(s2).fetch_one(&pool).await.unwrap();
-
-        // f1: unassigned — was removed from s1 (cannot_link with anchor_s1)
-        let f1: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (3, NULL, 0,0,0.5,0.5,0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-
-        // f1 cannot_link with anchor_s1 → f1 is forbidden from s1
-        add_cannot_link(&pool, f1, anchor_s1, "removal").await.unwrap();
-        // f1 cannot_link with anchor_s2 → f1 is also forbidden from s2
-        add_cannot_link(&pool, f1, anchor_s2, "removal").await.unwrap();
-
-        // f3: no constraints at all → must NOT appear
-        let f3: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (4, NULL, 0,0,0.5,0.5,0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-        let _ = f3;
-
-        let result = get_face_cannot_link_subjects(&pool).await.unwrap();
-
-        let f1_forbidden = result.get(&f1).expect("f1 must have forbidden set");
-        assert!(f1_forbidden.contains(&s1), "f1 must be forbidden from s1");
-        assert!(f1_forbidden.contains(&s2), "f1 must be forbidden from s2");
-        assert_eq!(f1_forbidden.len(), 2);
-
-        assert!(
-            !result.contains_key(&f3),
-            "f3 has no constraints — must not appear"
-        );
     }
 
     #[tokio::test]

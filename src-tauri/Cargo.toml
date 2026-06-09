@@ -40,7 +40,6 @@ sqlite-vec = "0.1"
 rayon = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 face_id = { version = "0.4.1", features = ["directml"] }
-hdbscan = "0.12"
 hf-hub = "0.5"
 ndarray = "0.17"
 half = "2"
