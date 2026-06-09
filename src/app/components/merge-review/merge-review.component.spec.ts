@@ -119,4 +119,20 @@ describe('MergeReviewComponent', () => {
     expect(photoService.dismissMergeSuggestion).toHaveBeenCalledWith(1);
     expect(dismissedSpy).toHaveBeenCalled();
   });
+
+  it('with canDismiss=false, dismiss() emits dismissed without calling dismissMergeSuggestion', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, null);
+    vi.spyOn(photoService, 'getSubjectPhotos').mockResolvedValue([]);
+    vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const dismissedSpy = vi.fn();
+    component.dismissed.subscribe(dismissedSpy);
+
+    component.canDismiss = false;
+    component.suggestion = makeSuggestion(subA, subB);
+    await component.dismiss();
+
+    expect(photoService.dismissMergeSuggestion).not.toHaveBeenCalled();
+    expect(dismissedSpy).toHaveBeenCalled();
+  });
 });
