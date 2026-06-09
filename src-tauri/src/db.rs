@@ -164,6 +164,13 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
             PRIMARY KEY (face_a, face_b, kind)
         )
     "),
+    (5, "
+        INSERT OR REPLACE INTO face_vectors(rowid, embedding)
+            SELECT id, embedding FROM faces WHERE embedding IS NOT NULL;
+        ALTER TABLE faces DROP COLUMN embedding;
+        ALTER TABLE faces DROP COLUMN is_manual;
+        DROP TABLE IF EXISTS face_corrections
+    "),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -2038,6 +2045,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 2, "must_link and cannot_link on the same pair are distinct rows");
+    }
+
+    #[tokio::test]
+    async fn migration_5_drops_embedding_and_is_manual_columns() {
+        let pool = init_test_pool().await;
+
+        // Verify neither column exists after migration
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+
+        assert!(
+            !cols.contains(&"embedding".to_string()),
+            "faces.embedding must be dropped by migration 5"
+        );
+        assert!(
+            !cols.contains(&"is_manual".to_string()),
+            "faces.is_manual must be dropped by migration 5"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_5_face_corrections_table_dropped() {
+        let pool = init_test_pool().await;
+
+        // face_corrections should not exist after migration 5
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+
+        assert!(
+            !tables.contains(&"face_corrections".to_string()),
+            "face_corrections table must be dropped by migration 5"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_5_preserves_existing_vectors_in_face_vectors() {
+        let pool = init_test_pool().await;
+
+        // Insert a face (post-migration state — no embedding column)
+        sqlx::query("INSERT INTO faces (image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 0,0,1,1,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let face_id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()").fetch_one(&pool).await.unwrap();
+
+        // Manually insert a vector (simulating what the pipeline will do post-migration)
+        // face_vectors uses float[512]; build a unit vector in the first dimension.
+        let mut vec512 = vec![0.0f32; 512];
+        vec512[0] = 1.0;
+        crate::face_store::upsert_vector(&pool, face_id, &vec512).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "face_vectors should store the upserted vector");
     }
 
     #[tokio::test]
