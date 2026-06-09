@@ -40,6 +40,8 @@ export class MergeReviewComponent {
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
 
+  @Input() canDismiss = true;
+
   @Output() confirmed = new EventEmitter<void>();
   @Output() dismissed = new EventEmitter<void>();
   @Output() closed = new EventEmitter<void>();
@@ -106,6 +108,10 @@ export class MergeReviewComponent {
 
   async dismiss() {
     if (!this._suggestion || this.submitting()) return;
+    if (!this.canDismiss) {
+      this.dismissed.emit();
+      return;
+    }
     this.submitting.set(true);
     try {
       await this.photoService.dismissMergeSuggestion(this._suggestion.id);

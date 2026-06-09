@@ -45,7 +45,7 @@
           (click)="dismiss()"
           [disabled]="submitting()"
         >
-          Dismiss
+          {{ canDismiss ? 'Dismiss' : 'Not the same person' }}
         </button>
         <button
           class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"

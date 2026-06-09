@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { MergeReviewComponent } from './merge-review.component';
 import { PhotoService } from '../../services/photo.service';
 import { TauriEventsService } from '../../services/tauri-events.service';
@@ -117,6 +118,26 @@ describe('MergeReviewComponent', () => {
     await component.dismiss();
 
     expect(photoService.dismissMergeSuggestion).toHaveBeenCalledWith(1);
+    expect(dismissedSpy).toHaveBeenCalled();
+  });
+
+  it('with canDismiss=false, dismiss() emits dismissed without calling dismissMergeSuggestion', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, null);
+    vi.spyOn(photoService, 'getSubjectPhotos').mockResolvedValue([]);
+    vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const dismissedSpy = vi.fn();
+    component.dismissed.subscribe(dismissedSpy);
+
+    component.canDismiss = false;
+    component.suggestion = makeSuggestion(subA, subB);
+    fixture.detectChanges();
+    const dismissBtn = fixture.debugElement.query(By.css('button[cdkFocusInitial]'));
+    expect(dismissBtn.nativeElement.textContent.trim()).toBe('Not the same person');
+
+    await component.dismiss();
+
+    expect(photoService.dismissMergeSuggestion).not.toHaveBeenCalled();
     expect(dismissedSpy).toHaveBeenCalled();
   });
 });
