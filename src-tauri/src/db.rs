@@ -1,8 +1,26 @@
 use anyhow::Result;
 use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
 use std::path::Path;
+use std::sync::Once;
 
 use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
+
+static SQLITE_VEC_INIT: Once = Once::new();
+
+/// Register the sqlite-vec extension with every new SQLite connection.
+/// Idempotent: safe to call multiple times; registers exactly once per process.
+pub fn ensure_sqlite_vec_registered() {
+    SQLITE_VEC_INIT.call_once(|| unsafe {
+        extern "C" {
+            fn sqlite3_auto_extension(xInit: Option<unsafe extern "C" fn()>) -> i32;
+        }
+        // sqlite_vec::sqlite3_vec_init matches the standard extension init signature.
+        // We transmute to the void-fn type that sqlite3_auto_extension demands per the C API.
+        let f: unsafe extern "C" fn() =
+            std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ());
+        sqlite3_auto_extension(Some(f));
+    });
+}
 
 const BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -138,6 +156,7 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
+    ensure_sqlite_vec_registered();
     let db_path = data_dir.join("nebula.db");
     let opts = SqliteConnectOptions::new()
         .filename(&db_path)
@@ -1912,6 +1931,17 @@ mod tests {
             !result.contains_key(&f3),
             "f3 has no corrections — must not appear"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_vec_extension_loads() {
+        crate::db::ensure_sqlite_vec_registered();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let version: String = sqlx::query_scalar("SELECT vec_version()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!version.is_empty(), "vec_version() should return a non-empty string");
     }
 
     #[tokio::test]
