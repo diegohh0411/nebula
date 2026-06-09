@@ -1,4 +1,4 @@
-import { Component, inject, OnInit, signal, ViewChildren, QueryList, ElementRef } from '@angular/core';
+import { Component, inject, OnInit, signal, ViewChildren, QueryList, ElementRef, afterNextRender } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, Subject } from '../../models/models';
@@ -24,8 +24,20 @@ export class PeopleViewComponent implements OnInit {
   protected namingConflict = signal<MergeSuggestion | null>(null);
 
   private _originalSubjects = new Map<number, Subject>();
+  private _focusPending = signal(false);
 
   @ViewChildren('nameInput') private nameInputRefs!: QueryList<ElementRef<HTMLInputElement>>;
+
+  constructor() {
+    afterNextRender({
+      read: () => {
+        if (this._focusPending()) {
+          this._focusPending.set(false);
+          this.nameInputRefs.first?.nativeElement.focus();
+        }
+      }
+    });
+  }
 
   async ngOnInit() {
     await this.photoService.loadSubjects();
@@ -173,7 +185,7 @@ export class PeopleViewComponent implements OnInit {
       if (nextUnnamed) {
         this.editingSubjectId.set(nextUnnamed.id);
         this.editingName.set('');
-        setTimeout(() => this.nameInputRefs.first?.nativeElement.focus(), 0);
+        this._focusPending.set(true);
       }
     }
   }
