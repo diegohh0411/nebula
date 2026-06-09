@@ -142,5 +142,6 @@ describe('PeopleViewComponent — name conflict', () => {
     expect(conflict!.id).toBe(-1);
     expect(conflict!.subject_a.id).toBe(2);
     expect(conflict!.subject_b.id).toBe(1);
+    expect(conflict!.score).toBe(1.0);
   });
 });
