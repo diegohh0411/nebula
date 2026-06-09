@@ -171,6 +171,14 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         ALTER TABLE faces DROP COLUMN is_manual;
         DROP TABLE IF EXISTS face_corrections
     "),
+    (6, "
+    CREATE TABLE IF NOT EXISTS face_edges (
+        face_a  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+        face_b  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+        weight  REAL NOT NULL,
+        PRIMARY KEY (face_a, face_b)
+    )
+"),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -1310,6 +1318,71 @@ pub async fn add_cannot_link(pool: &SqlitePool, face_a: i64, face_b: i64, source
 }
 
 
+pub async fn upsert_face_edge(pool: &SqlitePool, face_a: i64, face_b: i64, weight: f32) -> Result<()> {
+    let (a, b) = if face_a < face_b { (face_a, face_b) } else { (face_b, face_a) };
+    sqlx::query(
+        "INSERT OR REPLACE INTO face_edges (face_a, face_b, weight) VALUES (?, ?, ?)",
+    )
+    .bind(a)
+    .bind(b)
+    .bind(weight)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn clear_all_face_edges(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("DELETE FROM face_edges").execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_all_similarity_edges(pool: &SqlitePool) -> Result<Vec<(i64, i64, f32)>> {
+    let rows = sqlx::query("SELECT face_a, face_b, weight FROM face_edges")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.get("face_a"), r.get("face_b"), r.get::<f32, _>("weight"))).collect())
+}
+
+pub async fn get_all_must_link_pairs(pool: &SqlitePool) -> Result<Vec<(i64, i64)>> {
+    let rows = sqlx::query("SELECT face_a, face_b FROM constraints WHERE kind = 'must_link'")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.get("face_a"), r.get("face_b"))).collect())
+}
+
+pub async fn get_all_cannot_link_pairs(pool: &SqlitePool) -> Result<std::collections::HashSet<(i64, i64)>> {
+    let rows = sqlx::query("SELECT face_a, face_b FROM constraints WHERE kind = 'cannot_link'")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| {
+        let a: i64 = r.get("face_a");
+        let b: i64 = r.get("face_b");
+        if a < b { (a, b) } else { (b, a) }
+    }).collect())
+}
+
+pub async fn get_assigned_face_subject_map(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, i64>> {
+    let rows = sqlx::query("SELECT id, subject_id FROM faces WHERE subject_id IS NOT NULL")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.get::<i64, _>("id"), r.get::<i64, _>("subject_id"))).collect())
+}
+
+pub async fn get_face_ids_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<i64>> {
+    let rows = sqlx::query("SELECT id FROM faces WHERE subject_id = ?")
+        .bind(subject_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
+}
+
+pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool) -> Result<Vec<i64>> {
+    let rows = sqlx::query("SELECT rowid FROM face_vectors")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
+}
+
 pub async fn get_face_cannot_link_subjects(
     pool: &SqlitePool,
 ) -> Result<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
@@ -1919,6 +1992,55 @@ mod tests {
             !result.contains_key(&f3),
             "f3 has no constraints — must not appear"
         );
+    }
+
+    #[tokio::test]
+    async fn migration_6_creates_face_edges_table() {
+        let pool = init_test_pool().await;
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            tables.contains(&"face_edges".to_string()),
+            "face_edges table must exist after migration 6"
+        );
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('face_edges')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(cols.contains(&"face_a".to_string()));
+        assert!(cols.contains(&"face_b".to_string()));
+        assert!(cols.contains(&"weight".to_string()));
+    }
+
+    #[tokio::test]
+    async fn upsert_face_edge_normalizes_order_and_deduplicates() {
+        let pool = init_test_pool().await;
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1,1,0,0,1,1,0),(2,1,0,0,1,1,0)")
+            .execute(&pool).await.unwrap();
+
+        upsert_face_edge(&pool, 2, 1, 0.8).await.unwrap();  // reversed order
+        upsert_face_edge(&pool, 1, 2, 0.9).await.unwrap();  // should replace
+
+        let edges = get_all_similarity_edges(&pool).await.unwrap();
+        assert_eq!(edges.len(), 1, "duplicate upsert must replace");
+        assert_eq!(edges[0].0, 1, "face_a must be smaller id");
+        assert_eq!(edges[0].1, 2, "face_b must be larger id");
+        assert!((edges[0].2 - 0.9).abs() < 1e-6, "latest weight must win");
+    }
+
+    #[tokio::test]
+    async fn clear_all_face_edges_removes_all_rows() {
+        let pool = init_test_pool().await;
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1,1,0,0,1,1,0),(2,1,0,0,1,1,0)")
+            .execute(&pool).await.unwrap();
+        upsert_face_edge(&pool, 1, 2, 0.7).await.unwrap();
+        clear_all_face_edges(&pool).await.unwrap();
+        let edges = get_all_similarity_edges(&pool).await.unwrap();
+        assert!(edges.is_empty());
     }
 
     // --- helper for constraint tests ---
