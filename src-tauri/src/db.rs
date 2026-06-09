@@ -153,6 +153,7 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b);
     "),
+    (3, "CREATE VIRTUAL TABLE IF NOT EXISTS face_vectors USING vec0(embedding float[512])"),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {

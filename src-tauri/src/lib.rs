@@ -1,4 +1,5 @@
 mod clustering;
+mod face_store;
 mod commands;
 mod db;
 mod embedder;
