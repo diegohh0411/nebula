@@ -171,6 +171,14 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         ALTER TABLE faces DROP COLUMN is_manual;
         DROP TABLE IF EXISTS face_corrections
     "),
+    (6, "
+    CREATE TABLE IF NOT EXISTS face_edges (
+        face_a  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+        face_b  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+        weight  REAL NOT NULL,
+        PRIMARY KEY (face_a, face_b)
+    )
+"),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -723,41 +731,6 @@ pub async fn list_faces_for_subject(pool: &SqlitePool, subject_id: i64) -> Resul
         .collect())
 }
 
-pub async fn get_subject_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
-    let rows = sqlx::query(
-        "SELECT f.subject_id, fv.embedding
-         FROM face_vectors fv
-         JOIN faces f ON f.id = fv.rowid
-         WHERE f.subject_id IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get("subject_id"), r.get("embedding")))
-        .collect())
-}
-
-pub async fn get_subject_face_embeddings(
-    pool: &SqlitePool,
-) -> Result<Vec<(i64, Vec<u8>)>> {
-    // Post-B1: returns embeddings for all faces assigned to a subject.
-    // Used to build anchor centroids for clustering and merge suggestions.
-    let rows = sqlx::query(
-        "SELECT f.subject_id, fv.embedding
-         FROM face_vectors fv
-         JOIN faces f ON f.id = fv.rowid
-         WHERE f.subject_id IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get("subject_id"), r.get("embedding")))
-        .collect())
-}
 
 pub async fn get_face_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Face>> {
     let row = sqlx::query(
@@ -1099,15 +1072,6 @@ pub async fn get_merge_suggestions(pool: &SqlitePool, limit: Option<i64>) -> Res
         .collect())
 }
 
-pub async fn get_subject_named_flags(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, bool>> {
-    let rows = sqlx::query("SELECT id, (name IS NOT NULL) as has_name FROM subjects")
-        .fetch_all(pool)
-        .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| (r.get::<i64, _>("id"), r.get::<bool, _>("has_name")))
-        .collect())
-}
 
 pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -> Result<()> {
     if target_id == source_id {
@@ -1141,6 +1105,19 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
             .bind(target_id)
             .execute(pool)
             .await?;
+    }
+
+    // Write must_link between all faces of target and all faces of source (durable merge)
+    let target_faces = get_face_ids_for_subject(pool, target_id).await?;
+    let source_faces = get_face_ids_for_subject(pool, source_id).await?;
+    let now_c = chrono::Utc::now().timestamp();
+    for &tf in &target_faces {
+        for &sf in &source_faces {
+            let (a, b) = if tf < sf { (tf, sf) } else { (sf, tf) };
+            sqlx::query(
+                "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) VALUES (?, ?, 'must_link', 'merge', ?)"
+            ).bind(a).bind(b).bind(now_c).execute(pool).await?;
+        }
     }
 
     sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
@@ -1199,6 +1176,20 @@ pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> 
         .bind(now)
         .execute(pool)
         .await?;
+
+        // Add cannot_link between one representative face from each subject (source='dismiss')
+        let rep_a: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM faces WHERE subject_id = ? LIMIT 1"
+        ).bind(lo).fetch_optional(pool).await?;
+        let rep_b: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM faces WHERE subject_id = ? LIMIT 1"
+        ).bind(hi).fetch_optional(pool).await?;
+        if let (Some(fa), Some(fb)) = (rep_a, rep_b) {
+            let (a, b) = if fa < fb { (fa, fb) } else { (fb, fa) };
+            sqlx::query(
+                "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) VALUES (?, ?, 'cannot_link', 'dismiss', ?)"
+            ).bind(a).bind(b).bind(now).execute(pool).await?;
+        }
     }
 
     sqlx::query("DELETE FROM merge_suggestions WHERE id = ?")
@@ -1269,7 +1260,6 @@ fn ordered_pair(a: i64, b: i64) -> (i64, i64) {
     if a <= b { (a, b) } else { (b, a) }
 }
 
-#[allow(dead_code)]
 pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
     if face_a == face_b {
         return Ok(());
@@ -1289,7 +1279,6 @@ pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: 
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn add_cannot_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
     if face_a == face_b {
         return Ok(());
@@ -1310,35 +1299,71 @@ pub async fn add_cannot_link(pool: &SqlitePool, face_a: i64, face_b: i64, source
 }
 
 
-pub async fn get_face_cannot_link_subjects(
-    pool: &SqlitePool,
-) -> Result<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
-    // For a constraint (face_a, face_b, cannot_link):
-    // - face_a is forbidden from face_b's current subject
-    // - face_b is forbidden from face_a's current subject
-    let rows = sqlx::query(
-        "SELECT c.face_a AS queried_face, f2.subject_id AS forbidden_subject
-         FROM constraints c
-         JOIN faces f2 ON f2.id = c.face_b
-         WHERE c.kind = 'cannot_link' AND f2.subject_id IS NOT NULL
-         UNION ALL
-         SELECT c.face_b AS queried_face, f2.subject_id AS forbidden_subject
-         FROM constraints c
-         JOIN faces f2 ON f2.id = c.face_a
-         WHERE c.kind = 'cannot_link' AND f2.subject_id IS NOT NULL",
+pub async fn upsert_face_edge(pool: &SqlitePool, face_a: i64, face_b: i64, weight: f32) -> Result<()> {
+    let (a, b) = if face_a < face_b { (face_a, face_b) } else { (face_b, face_a) };
+    sqlx::query(
+        "INSERT OR REPLACE INTO face_edges (face_a, face_b, weight) VALUES (?, ?, ?)",
     )
-    .fetch_all(pool)
+    .bind(a)
+    .bind(b)
+    .bind(weight)
+    .execute(pool)
     .await?;
-
-    let mut map: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
-        std::collections::HashMap::new();
-    for row in rows {
-        let face_id: i64 = row.get("queried_face");
-        let forbidden: i64 = row.get("forbidden_subject");
-        map.entry(face_id).or_default().insert(forbidden);
-    }
-    Ok(map)
+    Ok(())
 }
+
+pub async fn clear_all_face_edges(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("DELETE FROM face_edges").execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_all_similarity_edges(pool: &SqlitePool) -> Result<Vec<(i64, i64, f32)>> {
+    let rows = sqlx::query("SELECT face_a, face_b, weight FROM face_edges")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.get("face_a"), r.get("face_b"), r.get::<f32, _>("weight"))).collect())
+}
+
+pub async fn get_all_must_link_pairs(pool: &SqlitePool) -> Result<Vec<(i64, i64)>> {
+    let rows = sqlx::query("SELECT face_a, face_b FROM constraints WHERE kind = 'must_link'")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.get("face_a"), r.get("face_b"))).collect())
+}
+
+pub async fn get_all_cannot_link_pairs(pool: &SqlitePool) -> Result<std::collections::HashSet<(i64, i64)>> {
+    let rows = sqlx::query("SELECT face_a, face_b FROM constraints WHERE kind = 'cannot_link'")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| {
+        let a: i64 = r.get("face_a");
+        let b: i64 = r.get("face_b");
+        if a < b { (a, b) } else { (b, a) }
+    }).collect())
+}
+
+pub async fn get_assigned_face_subject_map(pool: &SqlitePool) -> Result<std::collections::HashMap<i64, i64>> {
+    let rows = sqlx::query("SELECT id, subject_id FROM faces WHERE subject_id IS NOT NULL")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| (r.get::<i64, _>("id"), r.get::<i64, _>("subject_id"))).collect())
+}
+
+pub async fn get_face_ids_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<i64>> {
+    let rows = sqlx::query("SELECT id FROM faces WHERE subject_id = ?")
+        .bind(subject_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
+}
+
+pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool) -> Result<Vec<i64>> {
+    let rows = sqlx::query("SELECT rowid FROM face_vectors")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
+}
+
 
 pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = NULL WHERE id = ?")
@@ -1457,6 +1482,17 @@ mod tests {
                 subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
                 score REAL NOT NULL,
                 created_at INTEGER NOT NULL
+            )"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE constraints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                face_a INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                face_b INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL CHECK(kind IN ('must_link', 'cannot_link')),
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(face_a, face_b, kind)
             )"
         ).execute(&pool).await.unwrap();
         pool
@@ -1625,35 +1661,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[tokio::test]
-    async fn get_subject_face_embeddings_returns_all_subject_assigned_faces() {
-        // Post-B1: returns embeddings for all faces assigned to a subject.
-        let pool = init_test_pool().await;
-        let subject_id = sqlx::query_scalar::<_, i64>(
-            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-
-        // Insert two assigned faces with vectors
-        let f1: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
-        ).bind(subject_id).fetch_one(&pool).await.unwrap();
-
-        let f2: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
-        ).bind(subject_id).fetch_one(&pool).await.unwrap();
-
-        let emb1 = vec![1.0f32; 512];
-        let emb2 = vec![2.0f32; 512];
-        crate::face_store::upsert_vector(&pool, f1, &emb1).await.unwrap();
-        crate::face_store::upsert_vector(&pool, f2, &emb2).await.unwrap();
-
-        let results = get_subject_face_embeddings(&pool).await.unwrap();
-        assert_eq!(results.len(), 2, "both subject-assigned faces should be returned");
-        for (sid, _emb) in &results {
-            assert_eq!(*sid, subject_id);
-        }
-    }
-
     async fn make_dismissal_pool() -> SqlitePool {
         let pool = make_merge_pool().await;
         sqlx::query(
@@ -1741,22 +1748,6 @@ mod tests {
         // (clustering will call this after checking the set, so test the set check logic)
         let is_dismissed = dismissed.contains(&(lo, hi));
         assert!(is_dismissed, "pair should be flagged as dismissed so clustering skips it");
-    }
-
-    #[tokio::test]
-    async fn get_subject_named_flags_returns_true_for_named_and_false_for_unnamed() {
-        let pool = make_pool().await;
-        let named_id: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-        let unnamed_id: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-
-        let flags = get_subject_named_flags(&pool).await.unwrap();
-
-        assert_eq!(flags.get(&named_id), Some(&true));
-        assert_eq!(flags.get(&unnamed_id), Some(&false));
     }
 
     #[tokio::test]
@@ -1864,61 +1855,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_face_cannot_link_subjects_returns_constraints_based_forbidden_set() {
-        // Post-B1: uses constraints table + face subject_id lookup instead of face_corrections.
-        // Semantics: face_a is forbidden from face_b's current subject (and vice versa).
+    async fn migration_6_creates_face_edges_table() {
         let pool = init_test_pool().await;
-
-        let s1: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (type, added_at) VALUES ('person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let s2: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (type, added_at) VALUES ('person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        // anchor_s1: assigned to s1 (represents the anchor of s1)
-        let anchor_s1: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,0.5,0.5,0) RETURNING id"
-        ).bind(s1).fetch_one(&pool).await.unwrap();
-
-        // anchor_s2: assigned to s2
-        let anchor_s2: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (2, ?, 0,0,0.5,0.5,0) RETURNING id"
-        ).bind(s2).fetch_one(&pool).await.unwrap();
-
-        // f1: unassigned — was removed from s1 (cannot_link with anchor_s1)
-        let f1: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (3, NULL, 0,0,0.5,0.5,0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-
-        // f1 cannot_link with anchor_s1 → f1 is forbidden from s1
-        add_cannot_link(&pool, f1, anchor_s1, "removal").await.unwrap();
-        // f1 cannot_link with anchor_s2 → f1 is also forbidden from s2
-        add_cannot_link(&pool, f1, anchor_s2, "removal").await.unwrap();
-
-        // f3: no constraints at all → must NOT appear
-        let f3: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (4, NULL, 0,0,0.5,0.5,0) RETURNING id"
-        ).fetch_one(&pool).await.unwrap();
-        let _ = f3;
-
-        let result = get_face_cannot_link_subjects(&pool).await.unwrap();
-
-        let f1_forbidden = result.get(&f1).expect("f1 must have forbidden set");
-        assert!(f1_forbidden.contains(&s1), "f1 must be forbidden from s1");
-        assert!(f1_forbidden.contains(&s2), "f1 must be forbidden from s2");
-        assert_eq!(f1_forbidden.len(), 2);
-
+        let tables: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert!(
-            !result.contains_key(&f3),
-            "f3 has no constraints — must not appear"
+            tables.contains(&"face_edges".to_string()),
+            "face_edges table must exist after migration 6"
         );
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('face_edges')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(cols.contains(&"face_a".to_string()));
+        assert!(cols.contains(&"face_b".to_string()));
+        assert!(cols.contains(&"weight".to_string()));
+    }
+
+    #[tokio::test]
+    async fn upsert_face_edge_normalizes_order_and_deduplicates() {
+        let pool = init_test_pool().await;
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1,1,0,0,1,1,0),(2,1,0,0,1,1,0)")
+            .execute(&pool).await.unwrap();
+
+        upsert_face_edge(&pool, 2, 1, 0.8).await.unwrap();  // reversed order
+        upsert_face_edge(&pool, 1, 2, 0.9).await.unwrap();  // should replace
+
+        let edges = get_all_similarity_edges(&pool).await.unwrap();
+        assert_eq!(edges.len(), 1, "duplicate upsert must replace");
+        assert_eq!(edges[0].0, 1, "face_a must be smaller id");
+        assert_eq!(edges[0].1, 2, "face_b must be larger id");
+        assert!((edges[0].2 - 0.9).abs() < 1e-6, "latest weight must win");
+    }
+
+    #[tokio::test]
+    async fn clear_all_face_edges_removes_all_rows() {
+        let pool = init_test_pool().await;
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1,1,0,0,1,1,0),(2,1,0,0,1,1,0)")
+            .execute(&pool).await.unwrap();
+        upsert_face_edge(&pool, 1, 2, 0.7).await.unwrap();
+        clear_all_face_edges(&pool).await.unwrap();
+        let edges = get_all_similarity_edges(&pool).await.unwrap();
+        assert!(edges.is_empty());
     }
 
     // --- helper for constraint tests ---
@@ -2106,5 +2088,40 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(f2_subject, Some(target), "src_face2 must move to target");
+    }
+
+    #[tokio::test]
+    async fn merge_subjects_writes_must_link_constraints() {
+        let pool = init_test_pool().await;
+
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let bob: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let fa: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
+        ).bind(alice).fetch_one(&pool).await.unwrap();
+        let fb: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (2, ?, 0,0,1,1,0) RETURNING id"
+        ).bind(bob).fetch_one(&pool).await.unwrap();
+
+        merge_subjects(&pool, alice, bob).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM constraints WHERE kind = 'must_link' AND source = 'merge'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "one must_link expected for fa-fb cross-group pair");
+
+        // Verify the pair is stored with face_a < face_b
+        let (stored_a, stored_b): (i64, i64) = sqlx::query_as(
+            "SELECT face_a, face_b FROM constraints WHERE kind = 'must_link'"
+        ).fetch_one(&pool).await.unwrap();
+        let expected_a = fa.min(fb);
+        let expected_b = fa.max(fb);
+        assert_eq!(stored_a, expected_a);
+        assert_eq!(stored_b, expected_b);
     }
 }

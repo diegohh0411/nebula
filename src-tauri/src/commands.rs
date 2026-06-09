@@ -362,7 +362,14 @@ pub async fn assign_face_to_subject(
     subject_id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    db::assign_face_to_subject(&state.pool, face_id, subject_id)
+    let pool = &state.pool;
+    // must_link between face_id and existing faces in target subject
+    if let Ok(existing) = db::get_face_ids_for_subject(pool, subject_id).await {
+        for existing_face in existing {
+            let _ = db::add_must_link(pool, face_id, existing_face, "manual_assign").await;
+        }
+    }
+    db::assign_face_to_subject(pool, face_id, subject_id)
         .await
         .map_err(map_err)
 }
@@ -383,10 +390,21 @@ pub async fn unassign_face(
     face_id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    db::unassign_face(&state.pool, face_id)
-        .await
-        .map_err(map_err)?;
-    let _ = db::auto_assign_missing_thumbnails(&state.pool).await;
-    let _ = db::delete_subjects_with_no_faces(&state.pool).await;
+    let pool = &state.pool;
+    // Record cannot_link between face_id and all current sibling faces in the subject
+    if let Ok(Some(face)) = db::get_face_by_id(pool, face_id).await {
+        if let Some(subject_id) = face.subject_id {
+            if let Ok(siblings) = db::get_face_ids_for_subject(pool, subject_id).await {
+                for sibling_id in siblings {
+                    if sibling_id != face_id {
+                        let _ = db::add_cannot_link(pool, face_id, sibling_id, "removal").await;
+                    }
+                }
+            }
+        }
+    }
+    db::unassign_face(pool, face_id).await.map_err(map_err)?;
+    let _ = db::auto_assign_missing_thumbnails(pool).await;
+    let _ = db::delete_subjects_with_no_faces(pool).await;
     Ok(())
 }
