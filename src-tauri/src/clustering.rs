@@ -81,6 +81,50 @@ fn compute_mutual_sim_edges(
     edges
 }
 
+fn build_components_with_constraints(
+    mut sim_edges: Vec<(i64, i64, f32)>,
+    must_links: &[(i64, i64)],
+    cannot_links: &HashSet<(i64, i64)>,
+    all_faces: &[i64],
+) -> UnionFind {
+    let mut uf = UnionFind::new();
+    for &f in all_faces { uf.add(f); }
+
+    // Kruskal: strongest-first, skip any edge that would newly co-locate a cannot-linked pair
+    sim_edges.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    for (fa, fb, _) in &sim_edges {
+        let root_fa = uf.find(*fa);
+        let root_fb = uf.find(*fb);
+        if root_fa == root_fb { continue; }
+
+        let would_violate = cannot_links.iter().any(|&(ca, cb)| {
+            let root_ca = uf.find(ca);
+            let root_cb = uf.find(cb);
+            if root_ca == root_cb { return false; }  // already co-located (pre-existing)
+            let root_fa2 = uf.find(*fa);
+            let root_fb2 = uf.find(*fb);
+            (root_ca == root_fa2 || root_ca == root_fb2) &&
+            (root_cb == root_fa2 || root_cb == root_fb2)
+        });
+
+        if !would_violate {
+            uf.union(*fa, *fb);
+        }
+    }
+
+    // Must-link: always apply (flag contradiction but don't block)
+    for &(fa, fb) in must_links {
+        let ordered = if fa < fb { (fa, fb) } else { (fb, fa) };
+        if cannot_links.contains(&ordered) {
+            eprintln!("[clustering] WARNING: must_link/cannot_link contradiction for faces {} and {}", fa, fb);
+        }
+        uf.union(fa, fb);
+    }
+
+    uf
+}
+
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     // 1. Build anchor centroids first.
     let manual_raw = db::get_subject_face_embeddings(pool).await?;
@@ -887,5 +931,56 @@ mod tests {
 
         let edges = compute_mutual_sim_edges(&all_knn, 0.55);
         assert_eq!(edges.len(), 1, "each pair must appear at most once");
+    }
+
+    #[test]
+    fn must_link_joins_below_threshold() {
+        // sim=0.3 < TAU_SIM — would be filtered out of sim_edges
+        // but must_link forces co-location
+        let sim_edges: Vec<(i64, i64, f32)> = vec![];  // no similarity edges pass tau
+        let must_links = vec![(1i64, 2i64)];
+        let cannot_links: HashSet<(i64, i64)> = HashSet::new();
+        let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &[1, 2, 3]);
+        assert!(uf.connected(1, 2), "must_link must co-locate faces regardless of similarity");
+        assert!(!uf.connected(1, 3), "face 3 has no edges — must stay isolated");
+    }
+
+    #[test]
+    fn cannot_link_prevents_weakest_bridge_edge() {
+        // Chain 1-2 (sim=0.9), 2-3 (sim=0.6); cannot-link (1,3)
+        // Kruskal: add (1,2,0.9) → ok. Try (2,3,0.6) → would put 1 and 3 together → skip.
+        let sim_edges = vec![(1i64, 2, 0.9_f32), (2, 3, 0.6)];
+        let must_links: Vec<(i64, i64)> = vec![];
+        let mut cannot_links: HashSet<(i64, i64)> = HashSet::new();
+        cannot_links.insert((1i64, 3i64));
+        let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &[1, 2, 3]);
+        assert!(uf.connected(1, 2));
+        assert!(!uf.connected(2, 3));
+        assert!(!uf.connected(1, 3));
+    }
+
+    #[test]
+    fn cannot_link_between_independent_groups_not_violated() {
+        // Group A: 1-2; Group B: 3-4; cannot-link (1,3); no cross edges → fine
+        let sim_edges = vec![(1i64, 2, 0.9_f32), (3, 4, 0.85)];
+        let mut cannot_links: HashSet<(i64, i64)> = HashSet::new();
+        cannot_links.insert((1i64, 3i64));
+        let mut uf = build_components_with_constraints(sim_edges, &[], &cannot_links, &[1, 2, 3, 4]);
+        assert!(uf.connected(1, 2));
+        assert!(uf.connected(3, 4));
+        assert!(!uf.connected(1, 3));
+    }
+
+    #[test]
+    fn must_link_always_overrides_even_with_cannot_link_warning() {
+        // Direct contradiction: must_link AND cannot_link on same pair.
+        // Per spec: flag (we eprintln), but must_link still wins.
+        let sim_edges: Vec<(i64, i64, f32)> = vec![];
+        let must_links = vec![(1i64, 2i64)];
+        let mut cannot_links: HashSet<(i64, i64)> = HashSet::new();
+        cannot_links.insert((1i64, 2i64));
+        let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &[1, 2]);
+        // must_link is applied after sim-edge pass, so 1 and 2 end up connected
+        assert!(uf.connected(1, 2), "must_link wins over cannot_link contradiction");
     }
 }
