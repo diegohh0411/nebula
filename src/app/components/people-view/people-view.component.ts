@@ -127,8 +127,9 @@ export class PeopleViewComponent implements OnInit {
     if (result.duplicate_subject_id) {
       const duplicate = this.photoService.subjects().find(s => s.id === result.duplicate_subject_id);
       if (duplicate) {
-        const current = this.photoService.subjects().find(s => s.id === subject.id) ?? { ...subject, name };
-        this.namingConflict.set({ id: -1, subject_a: duplicate, subject_b: current, score: 1.0 });
+        const currentSubject = this.photoService.subjects().find(s => s.id === subject.id) ?? { ...subject };
+        const currentWithName: Subject = { ...currentSubject, name };
+        this.namingConflict.set({ id: -1, subject_a: duplicate, subject_b: currentWithName, score: 1.0 });
       }
     }
   }
@@ -138,7 +139,7 @@ export class PeopleViewComponent implements OnInit {
     this.editingName.set('');
   }
 
-  protected onKeydown(event: KeyboardEvent, subject: Subject): void {
+  protected async onKeydown(event: KeyboardEvent, subject: Subject): Promise<void> {
     if (event.key === 'Enter') {
       void this.commitName(subject);
     } else if (event.key === 'Escape') {
@@ -148,7 +149,7 @@ export class PeopleViewComponent implements OnInit {
       const subjects = this.photoService.subjects();
       const idx = subjects.findIndex(s => s.id === subject.id);
       const nextUnnamed = subjects.slice(idx + 1).find(s => !s.name) ?? null;
-      void this.commitName(subject);
+      await this.commitName(subject);
       if (nextUnnamed) {
         this.editingSubjectId.set(nextUnnamed.id);
         this.editingName.set('');
