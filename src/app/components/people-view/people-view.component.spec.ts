@@ -101,3 +101,46 @@ describe('PeopleViewComponent — inline naming', () => {
     expect(component.editingSubjectId()).toBeNull();
   });
 });
+
+describe('PeopleViewComponent — name conflict', () => {
+  let component: PeopleViewComponent;
+  let fixture: ComponentFixture<PeopleViewComponent>;
+  let photoService: PhotoService;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [PeopleViewComponent],
+      providers: [
+        PhotoService,
+        provideRouter([]),
+        { provide: TauriEventsService, useValue: mockTauriEvents },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(PeopleViewComponent);
+    component = fixture.componentInstance;
+    photoService = TestBed.inject(PhotoService);
+
+    vi.spyOn(photoService, 'loadSubjects').mockResolvedValue(undefined);
+    vi.spyOn(photoService, 'getMergeSuggestions').mockResolvedValue([]);
+    vi.spyOn(photoService, 'getFaceCrop').mockResolvedValue('');
+  });
+
+  it('sets namingConflict with synthetic suggestion when duplicate_subject_id returned', async () => {
+    const current = makeSubject(1, null);
+    const duplicate = makeSubject(2, 'Emma');
+    photoService.subjects.set([current, duplicate]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 2 });
+
+    fixture.detectChanges();
+    component.editingSubjectId.set(1);
+    component.editingName.set('Emma');
+    await component['commitName'](current);
+
+    const conflict = component['namingConflict']();
+    expect(conflict).not.toBeNull();
+    expect(conflict!.id).toBe(-1);
+    expect(conflict!.subject_a.id).toBe(2);
+    expect(conflict!.subject_b.id).toBe(1);
+  });
+});
