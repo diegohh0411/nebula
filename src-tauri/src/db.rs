@@ -1249,6 +1249,26 @@ pub async fn record_face_correction(pool: &SqlitePool, face_id: i64, old_subject
     Ok(())
 }
 
+pub async fn get_face_cannot_link_subjects(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashMap<i64, std::collections::HashSet<i64>>> {
+    let rows = sqlx::query(
+        "SELECT face_id, old_subject_id FROM face_corrections \
+         WHERE new_subject_id IS NULL AND old_subject_id IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut map: std::collections::HashMap<i64, std::collections::HashSet<i64>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let face_id: i64 = row.get("face_id");
+        let forbidden: i64 = row.get("old_subject_id");
+        map.entry(face_id).or_default().insert(forbidden);
+    }
+    Ok(map)
+}
+
 pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = NULL, is_manual = 1 WHERE id = ?")
         .bind(face_id)
@@ -1770,5 +1790,127 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn get_face_cannot_link_subjects_returns_removal_rows_only() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "CREATE TABLE subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                thumbnail_face_id INTEGER,
+                type TEXT NOT NULL DEFAULT 'person',
+                added_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER NOT NULL DEFAULT 0,
+                subject_id INTEGER,
+                bbox_x REAL NOT NULL DEFAULT 0,
+                bbox_y REAL NOT NULL DEFAULT 0,
+                bbox_w REAL NOT NULL DEFAULT 0.5,
+                bbox_h REAL NOT NULL DEFAULT 0.5,
+                embedding BLOB,
+                added_at INTEGER NOT NULL DEFAULT 0,
+                is_manual INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE face_corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                face_id INTEGER NOT NULL,
+                old_subject_id INTEGER,
+                new_subject_id INTEGER,
+                created_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let s1: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (type, added_at) VALUES ('person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let s2: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (type, added_at) VALUES ('person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let f1: i64 = sqlx::query_scalar("INSERT INTO faces (added_at) VALUES (0) RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let f2: i64 = sqlx::query_scalar("INSERT INTO faces (added_at) VALUES (0) RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let f3: i64 = sqlx::query_scalar("INSERT INTO faces (added_at) VALUES (0) RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        // f1 removed from s1 (new_subject_id IS NULL) → forbidden {f1: {s1}}
+        sqlx::query(
+            "INSERT INTO face_corrections (face_id, old_subject_id, new_subject_id, created_at) VALUES (?, ?, NULL, 0)",
+        )
+        .bind(f1)
+        .bind(s1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // f1 also removed from s2 → forbidden {f1: {s1, s2}}
+        sqlx::query(
+            "INSERT INTO face_corrections (face_id, old_subject_id, new_subject_id, created_at) VALUES (?, ?, NULL, 0)",
+        )
+        .bind(f1)
+        .bind(s2)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // f2 moved from s1 to s2 (new_subject_id NOT NULL) → must NOT appear
+        sqlx::query(
+            "INSERT INTO face_corrections (face_id, old_subject_id, new_subject_id, created_at) VALUES (?, ?, ?, 0)",
+        )
+        .bind(f2)
+        .bind(s1)
+        .bind(s2)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // f3 has no corrections at all → must NOT appear
+        let _ = f3;
+
+        let result = get_face_cannot_link_subjects(&pool).await.unwrap();
+
+        let f1_forbidden = result.get(&f1).expect("f1 must have forbidden set");
+        assert!(f1_forbidden.contains(&s1), "f1 must be forbidden from s1");
+        assert!(f1_forbidden.contains(&s2), "f1 must be forbidden from s2");
+        assert_eq!(f1_forbidden.len(), 2);
+
+        assert!(
+            !result.contains_key(&f2),
+            "f2 was moved (not removed) — must not appear"
+        );
+        assert!(
+            !result.contains_key(&f3),
+            "f3 has no corrections — must not appear"
+        );
     }
 }
