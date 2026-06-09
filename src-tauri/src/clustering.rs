@@ -5,6 +5,61 @@ use std::collections::{HashMap, HashSet};
 
 use crate::db;
 
+struct UnionFind {
+    parent: HashMap<i64, i64>,
+    rank: HashMap<i64, u32>,
+}
+
+impl UnionFind {
+    fn new() -> Self {
+        Self { parent: HashMap::new(), rank: HashMap::new() }
+    }
+
+    fn add(&mut self, x: i64) {
+        self.parent.entry(x).or_insert(x);
+        self.rank.entry(x).or_insert(0);
+    }
+
+    fn find(&mut self, x: i64) -> i64 {
+        self.add(x);
+        if self.parent[&x] != x {
+            let root = self.find(self.parent[&x]);
+            self.parent.insert(x, root);
+        }
+        self.parent[&x]
+    }
+
+    fn union(&mut self, a: i64, b: i64) {
+        self.add(a);
+        self.add(b);
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra == rb { return; }
+        match self.rank[&ra].cmp(&self.rank[&rb]) {
+            std::cmp::Ordering::Less    => { self.parent.insert(ra, rb); }
+            std::cmp::Ordering::Greater => { self.parent.insert(rb, ra); }
+            std::cmp::Ordering::Equal   => {
+                self.parent.insert(rb, ra);
+                *self.rank.entry(ra).or_insert(0) += 1;
+            }
+        }
+    }
+
+    fn connected(&mut self, a: i64, b: i64) -> bool {
+        self.add(a); self.add(b);
+        self.find(a) == self.find(b)
+    }
+
+    fn components(&mut self, nodes: &[i64]) -> HashMap<i64, Vec<i64>> {
+        let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
+        for &node in nodes {
+            let root = self.find(node);
+            groups.entry(root).or_default().push(node);
+        }
+        groups
+    }
+}
+
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     // 1. Build anchor centroids first.
     let manual_raw = db::get_subject_face_embeddings(pool).await?;
@@ -228,6 +283,41 @@ mod tests {
 
     fn emb(vals: &[f32]) -> Vec<f32> {
         vals.to_vec()
+    }
+
+    #[test]
+    fn union_find_transitive_chain() {
+        let mut uf = UnionFind::new();
+        uf.union(1, 2);
+        uf.union(2, 3);
+        assert!(uf.connected(1, 3), "A-B + B-C edges must put A and C in same component");
+        let comps = uf.components(&[1, 2, 3]);
+        assert_eq!(comps.len(), 1, "all three must be in one component");
+    }
+
+    #[test]
+    fn union_find_independent_components_stay_separate() {
+        let mut uf = UnionFind::new();
+        uf.union(1, 2);
+        uf.union(3, 4);
+        assert!(!uf.connected(1, 3));
+        let comps = uf.components(&[1, 2, 3, 4]);
+        assert_eq!(comps.len(), 2);
+    }
+
+    #[test]
+    fn union_find_components_groups_by_root() {
+        let mut uf = UnionFind::new();
+        uf.union(1, 2);
+        uf.union(1, 3);
+        let comps = uf.components(&[1, 2, 3, 4]);
+        assert_eq!(comps.len(), 2, "component {{1,2,3}} and singleton {{4}}");
+        let sizes: Vec<usize> = {
+            let mut s: Vec<usize> = comps.values().map(|v| v.len()).collect();
+            s.sort_unstable();
+            s
+        };
+        assert_eq!(sizes, vec![1, 3]);
     }
 
     #[test]
