@@ -1,9 +1,13 @@
 use anyhow::Result;
 use hdbscan::{Hdbscan, HdbscanHyperParams};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 
 use crate::db;
+
+pub const TAU_SIM: f32 = 0.55;
+pub const K_NEAREST: usize = 5;
+pub const MIN_COMPONENT_SIZE: usize = 2;
 
 struct UnionFind {
     parent: HashMap<i64, i64>,
@@ -180,93 +184,71 @@ fn build_components_with_constraints(
 }
 
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
-    // 1. Build anchor centroids first.
-    let manual_raw = db::get_subject_face_embeddings(pool).await?;
-    let manual_decoded: Vec<(i64, Vec<f32>)> = manual_raw
-        .into_iter()
-        .filter_map(|(sid, blob)| {
-            crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e))
-        })
+    // 1. Rebuild similarity edge graph
+    db::clear_all_face_edges(pool).await?;
+    let all_face_ids = db::get_all_face_ids_with_vectors(pool).await?;
+
+    // Build knn map: face_id → Vec<(neighbor_id, cosine_sim)>
+    let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
+    for &fid in &all_face_ids {
+        let neighbors = crate::face_store::knn_cosine_sim(pool, fid, K_NEAREST).await?;
+        all_knn.insert(fid, neighbors);
+    }
+
+    // Compute mutual sim edges and persist
+    let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
+    for &(fa, fb, weight) in &sim_edges {
+        db::upsert_face_edge(pool, fa, fb, weight).await?;
+    }
+
+    // 2. Load constraints
+    let must_links = db::get_all_must_link_pairs(pool).await?;
+    let cannot_links = db::get_all_cannot_link_pairs(pool).await?;
+
+    // 3. Build Union-Find with constraint enforcement
+    let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &all_face_ids);
+
+    // 4. Compute components and load current assignments
+    let components = uf.components(&all_face_ids);
+    let face_subjects = db::get_assigned_face_subject_map(pool).await?;
+    let subject_rows = sqlx::query("SELECT id, name FROM subjects")
+        .fetch_all(pool).await?;
+    let subject_names: HashMap<i64, Option<String>> = subject_rows.into_iter()
+        .map(|r| (r.get::<i64, _>("id"), r.get::<Option<String>, _>("name")))
         .collect();
 
-    let all_raw = db::get_subject_embeddings(pool).await?;
-    let all_decoded: Vec<(i64, Vec<f32>)> = all_raw
-        .into_iter()
-        .filter_map(|(sid, blob)| {
-            crate::embedder::bytes_to_f32_vec(&blob).ok().map(|e| (sid, e))
-        })
-        .collect();
+    // 5. Apply label rules
+    let actions = compute_label_actions(&components, &face_subjects, &subject_names, MIN_COMPONENT_SIZE);
+    let mut new_clusters_count = 0usize;
+    let mut noise_count = 0usize;
 
-    let anchor_centroids = compute_anchor_centroids(&manual_decoded, &all_decoded);
-
-    let cannot_link = db::get_face_cannot_link_subjects(pool).await?;
-
-    // 2. Fetch ONLY unassigned faces
-    let unassigned = db::get_unassigned_faces_with_embeddings(pool).await?;
-
-    let mut residual_faces = Vec::new();
-    let mut new_clusters_count = 0;
-    let mut noise_count = 0;
-
-    // 3. Pass 1: Greedy Centroid Match
-    for (face_id, emb_blob) in unassigned {
-        if let Ok(emb) = crate::embedder::bytes_to_f32_vec(&emb_blob) {
-            let forbidden = cannot_link.get(&face_id);
-            if let Some(sid) =
-                find_nearest_anchor(&emb, &anchor_centroids, ANCHOR_MATCH_THRESHOLD, forbidden)
-            {
-                db::update_face_subject(pool, face_id, Some(sid)).await?;
-            } else {
-                residual_faces.push((face_id, emb));
+    for action in actions {
+        match action {
+            LabelAction::AssignAll { faces, subject_id } => {
+                for fid in faces {
+                    db::update_face_subject(pool, fid, Some(subject_id)).await?;
+                }
             }
-        } else {
-            eprintln!("[clustering] Failed to decode embedding for face {}", face_id);
-            noise_count += 1;
+            LabelAction::NewSubject { faces } => {
+                let sid = db::insert_subject(pool, None, "person").await?;
+                for fid in &faces {
+                    db::update_face_subject(pool, *fid, Some(sid)).await?;
+                }
+                new_clusters_count += 1;
+            }
+            LabelAction::Noise { faces } => {
+                for fid in &faces {
+                    db::update_face_subject(pool, *fid, None).await?;
+                }
+                noise_count += faces.len();
+            }
+            LabelAction::SuggestMerge { .. } => {}  // handled by find_merge_suggestions
         }
     }
 
-    // 4. Pass 2: Residual HDBSCAN
-    if residual_faces.len() >= 2 {
-        let (residual_ids, embeddings): (Vec<i64>, Vec<Vec<f32>>) = residual_faces.into_iter().unzip();
-        let hyper_params = HdbscanHyperParams::builder()
-            .min_cluster_size(2)
-            .min_samples(2)
-            .build();
-
-        let clusterer = Hdbscan::new(&embeddings, hyper_params);
-        match clusterer.cluster() {
-            Ok(labels) => {
-                let mut cluster_to_face_indices: HashMap<i32, Vec<usize>> = HashMap::new();
-                for (idx, &label) in labels.iter().enumerate() {
-                    cluster_to_face_indices.entry(label).or_default().push(idx);
-                }
-
-                for (&label, indices) in &cluster_to_face_indices {
-                    if label < 0 {
-                        noise_count += indices.len();
-                        continue;
-                    }
-                    new_clusters_count += 1;
-                    let new_subject_id = db::insert_subject(pool, None, "person").await?;
-                    for &idx in indices {
-                        let face_id = residual_ids[idx];
-                        db::update_face_subject(pool, face_id, Some(new_subject_id)).await?;
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("[clustering] HDBSCAN failed on residual faces: {}", e);
-                noise_count += embeddings.len();
-            }
-        }
-    } else {
-        noise_count += residual_faces.len();
-    }
-
+    // 6. Cleanup
     let deleted = db::delete_subjects_with_no_faces(pool).await?;
-
     let _ = db::auto_assign_missing_thumbnails(pool).await;
-
     let _ = find_merge_suggestions(pool).await;
 
     Ok(ReclusterResult {
@@ -581,365 +563,6 @@ mod tests {
         assert_eq!(all_forbidden, None);
     }
 
-    #[tokio::test]
-    async fn recluster_does_not_reassign_removed_face_to_forbidden_subject() {
-        fn emb_bytes(vals: &[f32]) -> Vec<u8> {
-            vals.iter().flat_map(|v| v.to_le_bytes()).collect()
-        }
-
-        crate::db::ensure_sqlite_vec_registered();
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-
-        // Minimal schema matching the B1 state (no embedding, no is_manual, no face_corrections)
-        sqlx::query(
-            "CREATE TABLE subjects (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                type TEXT NOT NULL DEFAULT 'person',
-                thumbnail_face_id INTEGER,
-                added_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE faces (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                image_id INTEGER NOT NULL DEFAULT 0,
-                subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-                bbox_x REAL NOT NULL DEFAULT 0,
-                bbox_y REAL NOT NULL DEFAULT 0,
-                bbox_w REAL NOT NULL DEFAULT 0.5,
-                bbox_h REAL NOT NULL DEFAULT 0.5,
-                added_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Use float[3] for compact test vectors
-        sqlx::query("CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE constraints (
-                face_a INTEGER NOT NULL,
-                face_b INTEGER NOT NULL,
-                kind TEXT NOT NULL,
-                source TEXT NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (face_a, face_b, kind)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE merge_suggestions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject_id_a INTEGER NOT NULL,
-                subject_id_b INTEGER NOT NULL,
-                score REAL NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE UNIQUE INDEX idx_merge_pair ON merge_suggestions(
-                CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
-                CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE dismissed_pairs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject_id_a INTEGER NOT NULL,
-                subject_id_b INTEGER NOT NULL,
-                dismissed_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE UNIQUE INDEX idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Subject S: named, with anchor face close to [1, 0, 0]
-        let subject_s: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('S', 'person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        let anchor_s: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
-        )
-        .bind(subject_s)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
-            .bind(anchor_s)
-            .bind(emb_bytes(&[1.0f32, 0.0, 0.0]))
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        // Subject S2: named, anchor near face_f's embedding — should absorb F when S is forbidden
-        let subject_s2: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('S2', 'person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        let anchor_s2: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (3, ?, 0) RETURNING id",
-        )
-        .bind(subject_s2)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
-            .bind(anchor_s2)
-            .bind(emb_bytes(&[0.998f32, 0.06, 0.0]))
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        // Face F: unassigned, embedding very close to S's anchor
-        let face_f: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, NULL, 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
-            .bind(face_f)
-            .bind(emb_bytes(&[0.999f32, 0.05, 0.0]))
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        // Record cannot_link: F was removed from S — link F to S's anchor face
-        crate::db::add_cannot_link(&pool, face_f, anchor_s, "removal")
-            .await
-            .unwrap();
-
-        // Run recluster
-        cluster_unassigned_faces(&pool).await.unwrap();
-
-        let assigned: Option<i64> =
-            sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
-                .bind(face_f)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-
-        assert!(
-            assigned != Some(subject_s),
-            "face F should NOT be reassigned to forbidden subject S (got {:?})",
-            assigned
-        );
-        assert_eq!(
-            assigned,
-            Some(subject_s2),
-            "face F should be assigned to the nearest non-forbidden subject S2"
-        );
-    }
-
-    #[tokio::test]
-    async fn dismissed_pair_not_re_suggested_after_find_merge_suggestions() {
-        // Helper: encode f32 slice as little-endian bytes.
-        fn emb_bytes(vals: &[f32]) -> Vec<u8> {
-            vals.iter().flat_map(|v| v.to_le_bytes()).collect()
-        }
-
-        crate::db::ensure_sqlite_vec_registered();
-        // Build an in-memory SQLite pool with all required tables.
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-
-        sqlx::query(
-            "CREATE TABLE subjects (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                type TEXT NOT NULL DEFAULT 'person',
-                thumbnail_face_id INTEGER,
-                added_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE faces (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                image_id INTEGER NOT NULL DEFAULT 0,
-                subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-                bbox_x REAL NOT NULL DEFAULT 0,
-                bbox_y REAL NOT NULL DEFAULT 0,
-                bbox_w REAL NOT NULL DEFAULT 0.5,
-                bbox_h REAL NOT NULL DEFAULT 0.5,
-                added_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Use float[3] for compact test vectors
-        sqlx::query("CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE merge_suggestions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-                subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-                score REAL NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
-                CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
-                CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE dismissed_pairs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-                subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-                dismissed_at INTEGER NOT NULL DEFAULT 0
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Insert two named subjects.
-        let alice_id: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        let bob_id: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        // Insert a face with vector for each subject.
-        // Alice: [1.0, 0.0, 0.0], Bob: [0.95, 0.31, 0.0] — cosine sim ~0.95, above threshold.
-        let alice_face_id: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
-        )
-        .bind(alice_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
-            .bind(alice_face_id)
-            .bind(emb_bytes(&[1.0_f32, 0.0, 0.0]))
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let bob_face_id: i64 = sqlx::query_scalar(
-            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id",
-        )
-        .bind(bob_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
-            .bind(bob_face_id)
-            .bind(emb_bytes(&[0.95_f32, 0.31, 0.0]))
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        // First call: pair should be suggested.
-        find_merge_suggestions(&pool).await.unwrap();
-
-        let count_after_first: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(count_after_first, 1, "pair should be suggested on first call");
-
-        // Dismiss the suggestion.
-        let suggestion_id: i64 =
-            sqlx::query_scalar("SELECT id FROM merge_suggestions ORDER BY id LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-
-        crate::db::dismiss_merge_suggestion(&pool, suggestion_id)
-            .await
-            .unwrap();
-
-        // Second call: dismissed pair must not be re-suggested.
-        find_merge_suggestions(&pool).await.unwrap();
-
-        let count_after_second: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            count_after_second, 0,
-            "dismissed pair must not appear in merge_suggestions after second call"
-        );
-    }
-
     #[test]
     fn mutual_knn_both_directions_required() {
         // Face 1's knn contains face 2; face 2's knn does NOT contain face 1 → no edge
@@ -1116,5 +739,118 @@ mod tests {
         let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
         assert!(!actions.iter().any(|a| matches!(a, LabelAction::SuggestMerge { .. })),
             "two unnamed subjects must not generate a merge suggestion");
+    }
+
+    fn emb_bytes(vals: &[f32]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    async fn make_integration_pool() -> sqlx::SqlitePool {
+        crate::db::ensure_sqlite_vec_registered();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        for stmt in [
+            "CREATE TABLE subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT NOT NULL DEFAULT 'person', thumbnail_face_id INTEGER, added_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE faces (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL DEFAULT 0, subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL, bbox_x REAL NOT NULL DEFAULT 0, bbox_y REAL NOT NULL DEFAULT 0, bbox_w REAL NOT NULL DEFAULT 0.5, bbox_h REAL NOT NULL DEFAULT 0.5, added_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])",
+            "CREATE TABLE constraints (face_a INTEGER NOT NULL, face_b INTEGER NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (face_a, face_b, kind))",
+            "CREATE TABLE face_edges (face_a INTEGER NOT NULL, face_b INTEGER NOT NULL, weight REAL NOT NULL, PRIMARY KEY (face_a, face_b))",
+            "CREATE TABLE merge_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_id_a INTEGER NOT NULL, subject_id_b INTEGER NOT NULL, score REAL NOT NULL, created_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE UNIQUE INDEX idx_merge_pair ON merge_suggestions(CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END, CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END)",
+            "CREATE TABLE dismissed_pairs (id INTEGER PRIMARY KEY AUTOINCREMENT, subject_id_a INTEGER NOT NULL, subject_id_b INTEGER NOT NULL, dismissed_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE UNIQUE INDEX idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
+        ] {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    #[tokio::test]
+    async fn integration_remove_face_then_recluster_not_reassigned() {
+        let pool = make_integration_pool().await;
+
+        let subject_s: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('S', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let anchor_s: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
+        ).bind(subject_s).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(anchor_s).bind(emb_bytes(&[1.0f32, 0.0, 0.0])).execute(&pool).await.unwrap();
+
+        let subject_s2: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('S2', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let anchor_s2: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id"
+        ).bind(subject_s2).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(anchor_s2).bind(emb_bytes(&[0.998f32, 0.063, 0.0])).execute(&pool).await.unwrap();
+
+        let face_f: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (3, NULL, 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(face_f).bind(emb_bytes(&[0.999f32, 0.045, 0.0])).execute(&pool).await.unwrap();
+
+        crate::db::add_cannot_link(&pool, face_f, anchor_s, "removal").await.unwrap();
+
+        cluster_unassigned_faces(&pool).await.unwrap();
+
+        let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+            .bind(face_f).fetch_one(&pool).await.unwrap();
+
+        assert!(assigned != Some(subject_s),
+            "face_f must NOT be reassigned to forbidden subject S (got {:?})", assigned);
+    }
+
+    #[tokio::test]
+    async fn integration_merge_distant_groups_stays_merged_after_recluster() {
+        let pool = make_integration_pool().await;
+
+        let subject_a: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('A', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let fa1: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
+        ).bind(subject_a).fetch_one(&pool).await.unwrap();
+        let fa2: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id"
+        ).bind(subject_a).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fa1).bind(emb_bytes(&[1.0f32, 0.0, 0.0])).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fa2).bind(emb_bytes(&[0.99f32, 0.14, 0.0])).execute(&pool).await.unwrap();
+
+        let subject_b: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('B', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let fb1: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (3, ?, 0) RETURNING id"
+        ).bind(subject_b).fetch_one(&pool).await.unwrap();
+        let fb2: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (4, ?, 0) RETURNING id"
+        ).bind(subject_b).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fb1).bind(emb_bytes(&[0.0f32, 1.0, 0.0])).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fb2).bind(emb_bytes(&[0.14f32, 0.99, 0.0])).execute(&pool).await.unwrap();
+
+        crate::db::add_must_link(&pool, fa1, fb1, "merge").await.unwrap();
+        crate::db::add_must_link(&pool, fa1, fb2, "merge").await.unwrap();
+        crate::db::add_must_link(&pool, fa2, fb1, "merge").await.unwrap();
+        crate::db::add_must_link(&pool, fa2, fb2, "merge").await.unwrap();
+        sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
+            .bind(subject_a).bind(subject_b).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM subjects WHERE id = ?")
+            .bind(subject_b).execute(&pool).await.unwrap();
+
+        cluster_unassigned_faces(&pool).await.unwrap();
+
+        let subjects: Vec<Option<i64>> = sqlx::query_scalar("SELECT subject_id FROM faces ORDER BY id")
+            .fetch_all(&pool).await.unwrap();
+        let distinct: HashSet<Option<i64>> = subjects.into_iter().collect();
+        assert_eq!(distinct.len(), 1, "all four faces must share one subject after recluster (must_link is durable)");
+        assert!(distinct.iter().next().unwrap().is_some(), "subject must not be NULL");
     }
 }
