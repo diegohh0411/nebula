@@ -67,11 +67,12 @@ Caption area per card:
 2. Look up subject N from `photoService.subjects()` to build synthetic `MergeSuggestion { id: -1, subject_a: current, subject_b: duplicate, score: 1.0 }`
 3. Set `namingConflict` → merge review modal opens with `[canDismiss]="false"`
 4. Confirm → `mergeSubjects` → reload subjects + thumbnails → clear conflict
-5. Cancel → revert optimistic name → clear conflict
+5. Cancel → restore subject from the pre-edit snapshot (preserves the old name, which may be `null` for unnamed cards) → clear conflict
+6. If `duplicate_subject_id` is returned but the subject is not found in the local list, treat as no conflict and clear state
 
 ### Error path
 
-If `nameSubject` throws, revert the optimistic update and log to console. No toast (matches existing patterns).
+If `nameSubject` throws, restore the subject from the pre-edit snapshot and log to console. No toast (matches existing patterns).
 
 ### Card click guard
 

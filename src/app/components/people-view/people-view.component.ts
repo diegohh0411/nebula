@@ -130,10 +130,13 @@ export class PeopleViewComponent implements OnInit {
       result = await this.photoService.nameSubject(subject.id, name);
     } catch (e) {
       console.error('nameSubject failed, reverting', e);
-      this.photoService.subjects.update(subjects =>
-        subjects.map(s => s.id === subject.id ? { ...s, name: null } : s)
-      );
+      const original = this._conflictOriginalSubject;
       this._conflictOriginalSubject = null;
+      if (original) {
+        this.photoService.subjects.update(subjects =>
+          subjects.map(s => s.id === original.id ? original : s)
+        );
+      }
       return;
     }
 
@@ -143,6 +146,8 @@ export class PeopleViewComponent implements OnInit {
         const currentSubject = this.photoService.subjects().find(s => s.id === subject.id) ?? { ...subject };
         const currentWithName: Subject = { ...currentSubject, name };
         this.namingConflict.set({ id: -1, subject_a: duplicate, subject_b: currentWithName, score: 1.0 });
+      } else {
+        this._conflictOriginalSubject = null;
       }
     } else {
       this._conflictOriginalSubject = null;
@@ -164,7 +169,7 @@ export class PeopleViewComponent implements OnInit {
       const subjects = this.photoService.subjects();
       const idx = subjects.findIndex(s => s.id === subject.id);
       const nextUnnamed = subjects.slice(idx + 1).find(s => !s.name) ?? null;
-      await this.commitName(subject);
+      void this.commitName(subject);
       if (nextUnnamed) {
         this.editingSubjectId.set(nextUnnamed.id);
         this.editingName.set('');
