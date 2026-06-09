@@ -81,6 +81,60 @@ fn compute_mutual_sim_edges(
     edges
 }
 
+#[derive(Debug)]
+enum LabelAction {
+    AssignAll { faces: Vec<i64>, subject_id: i64 },
+    NewSubject { faces: Vec<i64> },
+    Noise { faces: Vec<i64> },
+    SuggestMerge { subject_ids: Vec<i64> },
+}
+
+fn compute_label_actions(
+    components: &HashMap<i64, Vec<i64>>,
+    face_subjects: &HashMap<i64, i64>,
+    subject_names: &HashMap<i64, Option<String>>,
+    min_component_size: usize,
+) -> Vec<LabelAction> {
+    let mut actions = Vec::new();
+    for faces in components.values() {
+        let mut subject_to_faces: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut unlabeled: Vec<i64> = Vec::new();
+        for &fid in faces {
+            match face_subjects.get(&fid) {
+                Some(&sid) => subject_to_faces.entry(sid).or_default().push(fid),
+                None => unlabeled.push(fid),
+            }
+        }
+        match subject_to_faces.len() {
+            0 => {
+                if faces.len() >= min_component_size {
+                    actions.push(LabelAction::NewSubject { faces: faces.clone() });
+                } else {
+                    actions.push(LabelAction::Noise { faces: faces.clone() });
+                }
+            }
+            1 => {
+                let &sid = subject_to_faces.keys().next().unwrap();
+                if !unlabeled.is_empty() {
+                    actions.push(LabelAction::AssignAll { faces: unlabeled, subject_id: sid });
+                }
+            }
+            _ => {
+                let any_named = subject_to_faces.keys().any(|sid| {
+                    subject_names.get(sid).and_then(|n| n.as_ref()).is_some()
+                });
+                if any_named {
+                    actions.push(LabelAction::SuggestMerge {
+                        subject_ids: subject_to_faces.keys().copied().collect(),
+                    });
+                }
+                // Unlabeled faces in multi-subject component stay unassigned (precision-leaning)
+            }
+        }
+    }
+    actions
+}
+
 fn build_components_with_constraints(
     mut sim_edges: Vec<(i64, i64, f32)>,
     must_links: &[(i64, i64)],
@@ -982,5 +1036,85 @@ mod tests {
         let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &[1, 2]);
         // must_link is applied after sim-edge pass, so 1 and 2 end up connected
         assert!(uf.connected(1, 2), "must_link wins over cannot_link contradiction");
+    }
+
+    #[test]
+    fn label_assign_one_subject_fills_unlabeled_faces() {
+        let components: HashMap<i64, Vec<i64>> = [(1i64, vec![1i64, 2, 3])].into_iter().collect();
+        let face_subjects: HashMap<i64, i64> = [(1i64, 10i64)].into_iter().collect(); // face 1 → subject 10
+        let subject_names: HashMap<i64, Option<String>> = [(10i64, Some("Alice".to_string()))].into_iter().collect();
+
+        let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
+        let assign = actions.iter().find(|a| matches!(a, LabelAction::AssignAll { .. }));
+        assert!(assign.is_some(), "should emit AssignAll for unlabeled faces 2 and 3");
+        if let Some(LabelAction::AssignAll { faces, subject_id }) = assign {
+            assert!(faces.contains(&2) && faces.contains(&3));
+            assert_eq!(*subject_id, 10);
+        }
+    }
+
+    #[test]
+    fn label_two_named_subjects_emits_suggestion_no_fuse() {
+        let components: HashMap<i64, Vec<i64>> = [(1i64, vec![1i64, 2, 3])].into_iter().collect();
+        let face_subjects: HashMap<i64, i64> = [(1i64, 10i64), (2i64, 20i64)].into_iter().collect();
+        let subject_names: HashMap<i64, Option<String>> = [
+            (10i64, Some("Alice".to_string())),
+            (20i64, Some("Bob".to_string())),
+        ].into_iter().collect();
+
+        let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
+        assert!(actions.iter().any(|a| matches!(a, LabelAction::SuggestMerge { .. })),
+            "two named subjects must emit a suggestion");
+        assert!(!actions.iter().any(|a| matches!(a, LabelAction::AssignAll { .. })),
+            "unlabeled face 3 must NOT be auto-assigned in a two-subject component");
+    }
+
+    #[test]
+    fn label_unlabeled_small_component_is_noise() {
+        let components: HashMap<i64, Vec<i64>> = [(1i64, vec![1i64])].into_iter().collect();
+        let face_subjects: HashMap<i64, i64> = HashMap::new();
+        let subject_names: HashMap<i64, Option<String>> = HashMap::new();
+
+        let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
+        assert!(actions.iter().any(|a| matches!(a, LabelAction::Noise { .. })),
+            "size-1 unlabeled component must be noise (below MIN_COMPONENT_SIZE=2)");
+    }
+
+    #[test]
+    fn label_unlabeled_large_enough_component_gets_new_subject() {
+        let components: HashMap<i64, Vec<i64>> = [(1i64, vec![1i64, 2])].into_iter().collect();
+        let face_subjects: HashMap<i64, i64> = HashMap::new();
+        let subject_names: HashMap<i64, Option<String>> = HashMap::new();
+
+        let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
+        assert!(actions.iter().any(|a| matches!(a, LabelAction::NewSubject { .. })),
+            "size>=2 unlabeled component must trigger new subject creation");
+    }
+
+    #[test]
+    fn label_user_labeled_size_one_is_not_noise() {
+        // A user-assigned face in a size-1 component must NOT be classified as noise.
+        let components: HashMap<i64, Vec<i64>> = [(1i64, vec![1i64])].into_iter().collect();
+        let face_subjects: HashMap<i64, i64> = [(1i64, 10i64)].into_iter().collect();
+        let subject_names: HashMap<i64, Option<String>> = [(10i64, Some("Alice".to_string()))].into_iter().collect();
+
+        let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
+        assert!(!actions.iter().any(|a| matches!(a, LabelAction::Noise { faces } if faces.contains(&1))),
+            "user-labeled face must not become noise even at size 1");
+    }
+
+    #[test]
+    fn label_suggestion_requires_at_least_one_named_subject() {
+        // Two UNNAMED subjects in same component → no suggestion emitted (neither is named)
+        let components: HashMap<i64, Vec<i64>> = [(1i64, vec![1i64, 2])].into_iter().collect();
+        let face_subjects: HashMap<i64, i64> = [(1i64, 10i64), (2i64, 20i64)].into_iter().collect();
+        let subject_names: HashMap<i64, Option<String>> = [
+            (10i64, None::<String>),
+            (20i64, None::<String>),
+        ].into_iter().collect();
+
+        let actions = compute_label_actions(&components, &face_subjects, &subject_names, 2);
+        assert!(!actions.iter().any(|a| matches!(a, LabelAction::SuggestMerge { .. })),
+            "two unnamed subjects must not generate a merge suggestion");
     }
 }
