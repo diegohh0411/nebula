@@ -1105,7 +1105,7 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
             .await?;
     }
 
-    sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
+    sqlx::query("UPDATE faces SET subject_id = ?, is_manual = 1 WHERE subject_id = ?")
         .bind(target_id)
         .bind(source_id)
         .execute(pool)
@@ -1912,5 +1912,77 @@ mod tests {
             !result.contains_key(&f3),
             "f3 has no corrections — must not appear"
         );
+    }
+
+    #[tokio::test]
+    async fn merge_marks_source_faces_as_manual() {
+        let pool = make_merge_pool().await;
+
+        let target = insert_subject(&pool, Some("Alice")).await;
+        let source = insert_subject(&pool, Some("Bob")).await;
+
+        // Two faces for target (not manual yet)
+        sqlx::query(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) \
+             VALUES (1, ?, 0, 0, 0.5, 0.5, 0), (2, ?, 0, 0, 0.5, 0.5, 0)",
+        )
+        .bind(target)
+        .bind(target)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Two faces for source (not manual yet)
+        let src_face1: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) \
+             VALUES (3, ?, 0, 0, 0.5, 0.5, 0) RETURNING id",
+        )
+        .bind(source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let src_face2: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) \
+             VALUES (4, ?, 0, 0, 0.5, 0.5, 0) RETURNING id",
+        )
+        .bind(source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        merge_subjects(&pool, target, source).await.unwrap();
+
+        // Source faces must now belong to target
+        let f1_subject: Option<i64> =
+            sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+                .bind(src_face1)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(f1_subject, Some(target), "src_face1 must move to target");
+
+        let f2_subject: Option<i64> =
+            sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+                .bind(src_face2)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(f2_subject, Some(target), "src_face2 must move to target");
+
+        // Source faces must be marked is_manual = 1
+        let f1_manual: i32 = sqlx::query_scalar("SELECT is_manual FROM faces WHERE id = ?")
+            .bind(src_face1)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(f1_manual, 1, "src_face1 must be marked is_manual after merge");
+
+        let f2_manual: i32 = sqlx::query_scalar("SELECT is_manual FROM faces WHERE id = ?")
+            .bind(src_face2)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(f2_manual, 1, "src_face2 must be marked is_manual after merge");
     }
 }
