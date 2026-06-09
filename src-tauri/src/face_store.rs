@@ -60,6 +60,24 @@ pub async fn knn(pool: &SqlitePool, face_id: i64, k: usize) -> Result<Vec<(i64, 
         .collect())
 }
 
+/// Convert sqlite-vec L2 distance to cosine similarity (valid for L2-normalized unit vectors).
+/// cos_sim = 1 - d² / 2
+pub fn l2_dist_to_cosine_sim(l2_dist: f32) -> f32 {
+    1.0 - (l2_dist * l2_dist) / 2.0
+}
+
+/// k nearest neighbors of `face_id` by cosine similarity, descending.
+/// Excludes `face_id` itself. Returns at most k results.
+pub async fn knn_cosine_sim(pool: &SqlitePool, face_id: i64, k: usize) -> Result<Vec<(i64, f32)>> {
+    let mut sims: Vec<(i64, f32)> = knn(pool, face_id, k)
+        .await?
+        .into_iter()
+        .map(|(id, dist)| (id, l2_dist_to_cosine_sim(dist)))
+        .collect();
+    sims.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(sims)
+}
+
 pub async fn get_all_face_vectors(pool: &SqlitePool) -> Result<Vec<(i64, Vec<f32>)>> {
     let rows = sqlx::query("SELECT rowid, embedding FROM face_vectors")
         .fetch_all(pool)
@@ -149,5 +167,31 @@ mod tests {
         delete_vector(&pool, 1).await.unwrap();
         let all = get_all_face_vectors(&pool).await.unwrap();
         assert!(all.is_empty());
+    }
+
+    #[tokio::test]
+    async fn knn_cosine_sim_returns_similarity_descending() {
+        let pool = make_pool(3).await;
+        // A=[1,0,0], B=[0.9,0.44,0] (close to A), C=[0,0,1] (orthogonal)
+        upsert_vector(&pool, 1, &[1.0, 0.0, 0.0]).await.unwrap();
+        upsert_vector(&pool, 2, &[0.9, 0.44, 0.0]).await.unwrap();
+        upsert_vector(&pool, 3, &[0.0, 0.0, 1.0]).await.unwrap();
+
+        let sims = knn_cosine_sim(&pool, 1, 2).await.unwrap();
+        assert_eq!(sims.len(), 2, "should return k=2 results");
+        assert_eq!(sims[0].0, 2, "B should be most similar to A");
+        assert!(sims[0].1 > sims[1].1, "similarities must be descending");
+        assert!(sims[0].1 > 0.5, "B-A cosine similarity should be > 0.5");
+        assert!(sims[1].1 < 0.2, "C-A cosine similarity should be near 0");
+    }
+
+    #[tokio::test]
+    async fn l2_dist_to_cosine_sim_unit_vector_identity() {
+        // For identical unit vectors: L2 dist = 0 → cosine sim = 1.0
+        assert!((l2_dist_to_cosine_sim(0.0) - 1.0).abs() < 1e-6);
+        // For orthogonal unit vectors: L2 dist = sqrt(2) → cosine sim = 0.0
+        assert!((l2_dist_to_cosine_sim(2.0f32.sqrt()) - 0.0).abs() < 0.01);
+        // For opposite unit vectors: L2 dist = 2.0 → cosine sim = -1.0
+        assert!((l2_dist_to_cosine_sim(2.0) - (-1.0)).abs() < 1e-6);
     }
 }
