@@ -154,6 +154,16 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b);
     "),
     (3, "CREATE VIRTUAL TABLE IF NOT EXISTS face_vectors USING vec0(embedding float[512])"),
+    (4, "
+        CREATE TABLE IF NOT EXISTS constraints (
+            face_a      INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+            face_b      INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+            kind        TEXT NOT NULL CHECK(kind IN ('must_link', 'cannot_link')),
+            source      TEXT NOT NULL CHECK(source IN ('merge', 'manual_assign', 'removal', 'dismiss')),
+            created_at  INTEGER NOT NULL,
+            PRIMARY KEY (face_a, face_b, kind)
+        )
+    "),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -1255,6 +1265,42 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>>
     Ok(row.map(|r| r.get("value")))
 }
 
+fn ordered_pair(a: i64, b: i64) -> (i64, i64) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+pub async fn add_must_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
+    let (a, b) = ordered_pair(face_a, face_b);
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) \
+         VALUES (?, ?, 'must_link', ?, ?)",
+    )
+    .bind(a)
+    .bind(b)
+    .bind(source)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn add_cannot_link(pool: &SqlitePool, face_a: i64, face_b: i64, source: &str) -> Result<()> {
+    let (a, b) = ordered_pair(face_a, face_b);
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query(
+        "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) \
+         VALUES (?, ?, 'cannot_link', ?, ?)",
+    )
+    .bind(a)
+    .bind(b)
+    .bind(source)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn record_face_correction(pool: &SqlitePool, face_id: i64, old_subject_id: Option<i64>, new_subject_id: Option<i64>) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
@@ -1932,6 +1978,66 @@ mod tests {
             !result.contains_key(&f3),
             "f3 has no corrections — must not appear"
         );
+    }
+
+    // --- helper for constraint tests ---
+    async fn init_test_pool() -> SqlitePool {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        crate::db::ensure_sqlite_vec_registered();
+        let tmp = std::env::temp_dir().join(format!("nebula_test_{}_{}", std::process::id(), n));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pool = init_db(&tmp).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn constraint_enforces_face_a_less_than_face_b() {
+        let pool = init_test_pool().await;
+        // Insert two faces so FK constraints are satisfied
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (3, 1, 0,0,1,1,0), (5, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
+
+        // Call with larger id first — should normalize to (3, 5)
+        add_cannot_link(&pool, 5, 3, "removal").await.unwrap();
+
+        let (a, b): (i64, i64) =
+            sqlx::query_as("SELECT face_a, face_b FROM constraints WHERE kind = 'cannot_link'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(a, 3, "face_a must be the smaller id");
+        assert_eq!(b, 5, "face_b must be the larger id");
+    }
+
+    #[tokio::test]
+    async fn constraint_insert_or_ignore_deduplicates() {
+        let pool = init_test_pool().await;
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 0,0,1,1,0), (2, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
+
+        add_cannot_link(&pool, 1, 2, "removal").await.unwrap();
+        add_cannot_link(&pool, 1, 2, "removal").await.unwrap(); // second insert must be silently ignored
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM constraints")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "duplicate insert must not create a second row");
+    }
+
+    #[tokio::test]
+    async fn must_link_and_cannot_link_are_independent_rows() {
+        let pool = init_test_pool().await;
+        sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 0,0,1,1,0), (2, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
+
+        add_must_link(&pool, 1, 2, "merge").await.unwrap();
+        add_cannot_link(&pool, 1, 2, "removal").await.unwrap(); // same pair, different kind → OK
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM constraints")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2, "must_link and cannot_link on the same pair are distinct rows");
     }
 
     #[tokio::test]
