@@ -1151,6 +1151,19 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
             .await?;
     }
 
+    // Write must_link between all faces of target and all faces of source (durable merge)
+    let target_faces = get_face_ids_for_subject(pool, target_id).await?;
+    let source_faces = get_face_ids_for_subject(pool, source_id).await?;
+    let now_c = chrono::Utc::now().timestamp();
+    for &tf in &target_faces {
+        for &sf in &source_faces {
+            let (a, b) = if tf < sf { (tf, sf) } else { (sf, tf) };
+            sqlx::query(
+                "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) VALUES (?, ?, 'must_link', 'merge', ?)"
+            ).bind(a).bind(b).bind(now_c).execute(pool).await?;
+        }
+    }
+
     sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
         .bind(target_id)
         .bind(source_id)
@@ -1207,6 +1220,20 @@ pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> 
         .bind(now)
         .execute(pool)
         .await?;
+
+        // Add cannot_link between one representative face from each subject (source='dismiss')
+        let rep_a: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM faces WHERE subject_id = ? LIMIT 1"
+        ).bind(lo).fetch_optional(pool).await?;
+        let rep_b: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM faces WHERE subject_id = ? LIMIT 1"
+        ).bind(hi).fetch_optional(pool).await?;
+        if let (Some(fa), Some(fb)) = (rep_a, rep_b) {
+            let (a, b) = if fa < fb { (fa, fb) } else { (fb, fa) };
+            sqlx::query(
+                "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) VALUES (?, ?, 'cannot_link', 'dismiss', ?)"
+            ).bind(a).bind(b).bind(now).execute(pool).await?;
+        }
     }
 
     sqlx::query("DELETE FROM merge_suggestions WHERE id = ?")
@@ -1530,6 +1557,17 @@ mod tests {
                 subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
                 score REAL NOT NULL,
                 created_at INTEGER NOT NULL
+            )"
+        ).execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE constraints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                face_a INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                face_b INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL CHECK(kind IN ('must_link', 'cannot_link')),
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(face_a, face_b, kind)
             )"
         ).execute(&pool).await.unwrap();
         pool
@@ -2228,5 +2266,40 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(f2_subject, Some(target), "src_face2 must move to target");
+    }
+
+    #[tokio::test]
+    async fn merge_subjects_writes_must_link_constraints() {
+        let pool = init_test_pool().await;
+
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let bob: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        let fa: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
+        ).bind(alice).fetch_one(&pool).await.unwrap();
+        let fb: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (2, ?, 0,0,1,1,0) RETURNING id"
+        ).bind(bob).fetch_one(&pool).await.unwrap();
+
+        merge_subjects(&pool, alice, bob).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM constraints WHERE kind = 'must_link' AND source = 'merge'"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "one must_link expected for fa-fb cross-group pair");
+
+        // Verify the pair is stored with face_a < face_b
+        let (stored_a, stored_b): (i64, i64) = sqlx::query_as(
+            "SELECT face_a, face_b FROM constraints WHERE kind = 'must_link'"
+        ).fetch_one(&pool).await.unwrap();
+        let expected_a = fa.min(fb);
+        let expected_b = fa.max(fb);
+        assert_eq!(stored_a, expected_a);
+        assert_eq!(stored_b, expected_b);
     }
 }
