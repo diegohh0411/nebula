@@ -866,6 +866,32 @@ pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Ve
         .collect())
 }
 
+/// Returns (image_path, (bbox_x, bbox_y, bbox_w, bbox_h)) for a face, or None if missing.
+pub async fn get_face_with_image(
+    pool: &SqlitePool,
+    face_id: i64,
+) -> Result<Option<(String, (f64, f64, f64, f64))>> {
+    let row = sqlx::query(
+        "SELECT i.path AS path, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h
+         FROM faces f JOIN images i ON i.id = f.image_id
+         WHERE f.id = ?",
+    )
+    .bind(face_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| {
+        (
+            r.get::<String, _>("path"),
+            (
+                r.get::<f64, _>("bbox_x"),
+                r.get::<f64, _>("bbox_y"),
+                r.get::<f64, _>("bbox_w"),
+                r.get::<f64, _>("bbox_h"),
+            ),
+        )
+    }))
+}
+
 pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
     let like_query = format!("%{}%", query);
     let rows = sqlx::query(
@@ -2229,5 +2255,33 @@ mod tests {
         // Idempotent: no change when nothing better appears.
         let changed3 = upgrade_subject_thumbnails(&pool).await.unwrap();
         assert!(changed3.is_empty(), "stable state reports no changes");
+    }
+
+    #[tokio::test]
+    async fn get_face_with_image_returns_bbox_and_path() {
+        let pool = init_test_pool().await;
+        // images.folder_id is a NOT NULL FK to folders(id) and foreign_keys=ON,
+        // so insert a folder first, then the image, then a face referencing it.
+        let folder_id: i64 = sqlx::query_scalar(
+            "INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let img_id: i64 = sqlx::query_scalar(
+            "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at)
+             VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0) RETURNING id",
+        )
+        .bind(folder_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let fid = insert_face(&pool, img_id, None, (0.1, 0.2, 0.3, 0.4), Some(0.8), Some(0.7))
+            .await
+            .unwrap();
+
+        let (path, bbox) = get_face_with_image(&pool, fid).await.unwrap().unwrap();
+        assert_eq!(path, "/tmp/x.jpg");
+        assert!((bbox.0 - 0.1).abs() < 1e-9 && (bbox.3 - 0.4).abs() < 1e-9);
     }
 }

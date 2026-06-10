@@ -381,6 +381,36 @@ pub async fn run_pipeline(
         // Auto-recluster only when subject work was done this iteration
         if processed_subject_work {
             if let Ok(_result) = crate::clustering::cluster_unassigned_faces(&pool).await {
+                // Upgrade each subject's profile crop to its best-quality face, then
+                // generate the crop file eagerly so the People grid has it before the
+                // frontend asks (closes the lazy-generation first-paint delay).
+                if let Ok(changed) = crate::db::upgrade_subject_thumbnails(&pool).await {
+                    for subject_id in changed {
+                        let thumb_face: Option<i64> = sqlx::query_scalar(
+                            "SELECT thumbnail_face_id FROM subjects WHERE id = ?",
+                        )
+                        .bind(subject_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap_or(None);
+                        if let Some(face_id) = thumb_face {
+                            if let Ok(Some((path, bbox))) =
+                                crate::db::get_face_with_image(&pool, face_id).await
+                            {
+                                let dest = crate::thumbnail::face_crop_path_for(&data_dir, face_id);
+                                if let Err(e) = crate::thumbnail::generate_face_crop(
+                                    std::path::PathBuf::from(path),
+                                    dest,
+                                    bbox,
+                                )
+                                .await
+                                {
+                                    eprintln!("[pipeline] eager crop gen failed for face {face_id}: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
                 let _ = app.emit("subjects_updated", ());
             }
         }
