@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use image::DynamicImage;
+use log::{info, warn, error, debug};
 use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -245,7 +246,7 @@ impl PreviewService {
                             h.enqueue_low(id);
                         }
                     }
-                    Err(e) => eprintln!("[preview] backlog query failed: {e}"),
+                    Err(e) => error!("[preview] backlog query failed: {e}"),
                 }
             });
         }
@@ -312,7 +313,7 @@ async fn process_image(
         Ok(Some(i)) => i,
         Ok(None) => return,
         Err(e) => {
-            eprintln!("[preview] lookup failed for {image_id}: {e}");
+            error!("[preview] lookup failed for {image_id}: {e}");
             return;
         }
     };
@@ -342,8 +343,8 @@ async fn process_image(
                     );
                 }
             }
-            Ok(Err(e)) => eprintln!("[preview] tier1 failed for {image_id}: {e}"),
-            Err(e) => eprintln!("[preview] tier1 panicked for {image_id}: {e}"),
+            Ok(Err(e)) => error!("[preview] tier1 failed for {image_id}: {e}"),
+            Err(e) => error!("[preview] tier1 panicked for {image_id}: {e}"),
         }
     }
 
@@ -362,8 +363,8 @@ async fn process_image(
                     );
                 }
             }
-            Ok(Err(e)) => eprintln!("[preview] tier2 failed for {image_id}: {e}"),
-            Err(e) => eprintln!("[preview] tier2 panicked for {image_id}: {e}"),
+            Ok(Err(e)) => error!("[preview] tier2 failed for {image_id}: {e}"),
+            Err(e) => error!("[preview] tier2 panicked for {image_id}: {e}"),
         }
     }
 }

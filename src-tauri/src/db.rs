@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_h      REAL NOT NULL,
     embedding   BLOB,
     added_at    INTEGER NOT NULL,
-    is_manual   INTEGER NOT NULL DEFAULT 0
+    is_manual   INTEGER NOT NULL DEFAULT 0,
+    det_score      REAL,
+    quality_score  REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
@@ -672,11 +674,13 @@ pub async fn insert_face(
     image_id: i64,
     subject_id: Option<i64>,
     bbox: (f64, f64, f64, f64),
+    det_score: Option<f64>,
+    quality_score: Option<f64>,
 ) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
     let result = sqlx::query(
-        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(image_id)
     .bind(subject_id)
@@ -685,6 +689,8 @@ pub async fn insert_face(
     .bind(bbox.2)
     .bind(bbox.3)
     .bind(now)
+    .bind(det_score)
+    .bind(quality_score)
     .execute(pool)
     .await?;
     Ok(result.last_insert_rowid())
@@ -825,12 +831,14 @@ pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Resu
 
 pub async fn get_largest_face_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Option<i64>> {
     let row = sqlx::query(
-        "SELECT id FROM faces WHERE subject_id = ? ORDER BY (bbox_w * bbox_h) DESC LIMIT 1"
+        "SELECT id FROM faces WHERE subject_id = ?
+         ORDER BY (quality_score IS NULL), quality_score DESC, (bbox_w * bbox_h) DESC
+         LIMIT 1",
     )
     .bind(subject_id)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.map(|r| r.get("id")))
 }
 
@@ -856,6 +864,32 @@ pub async fn list_faces_for_image(pool: &SqlitePool, image_id: i64) -> Result<Ve
             added_at: r.get("added_at"),
         })
         .collect())
+}
+
+/// Returns (image_path, (bbox_x, bbox_y, bbox_w, bbox_h)) for a face, or None if missing.
+pub async fn get_face_with_image(
+    pool: &SqlitePool,
+    face_id: i64,
+) -> Result<Option<(String, (f64, f64, f64, f64))>> {
+    let row = sqlx::query(
+        "SELECT i.path AS path, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h
+         FROM faces f JOIN images i ON i.id = f.image_id
+         WHERE f.id = ?",
+    )
+    .bind(face_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| {
+        (
+            r.get::<String, _>("path"),
+            (
+                r.get::<f64, _>("bbox_x"),
+                r.get::<f64, _>("bbox_y"),
+                r.get::<f64, _>("bbox_w"),
+                r.get::<f64, _>("bbox_h"),
+            ),
+        )
+    }))
 }
 
 pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
@@ -947,6 +981,40 @@ pub async fn auto_assign_missing_thumbnails(pool: &SqlitePool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// For every subject, set `thumbnail_face_id` to its highest-quality face.
+/// `quality_score` NULLs sort last; ties fall back to largest bbox area.
+/// Never clears an existing thumbnail. Returns `(subject_id, face_id)` pairs for
+/// subjects whose thumbnail changed so callers can regenerate those crops directly.
+pub async fn upgrade_subject_thumbnails(pool: &SqlitePool) -> Result<Vec<(i64, i64)>> {
+    let rows = sqlx::query(
+        "SELECT s.id AS subject_id,
+                s.thumbnail_face_id AS current_face,
+                (SELECT f.id FROM faces f
+                  WHERE f.subject_id = s.id
+                  ORDER BY (f.quality_score IS NULL), f.quality_score DESC,
+                           (f.bbox_w * f.bbox_h) DESC
+                  LIMIT 1) AS best_face
+         FROM subjects s",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut changed = Vec::new();
+    for r in &rows {
+        let subject_id: i64 = r.get("subject_id");
+        let current: Option<i64> = r.get("current_face");
+        let best: Option<i64> = r.get("best_face");
+        if let Some(best_id) = best {
+            if current != Some(best_id) {
+                update_subject_thumbnail_face(pool, subject_id, best_id).await?;
+                changed.push((subject_id, best_id));
+            }
+        }
+        // best is None -> subject has no faces; leave thumbnail untouched (never NULL it).
+    }
+    Ok(changed)
 }
 
 pub async fn get_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type: &str) -> Result<Option<Vec<u8>>> {
@@ -1964,6 +2032,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn faces_table_has_quality_columns() {
+        let pool = init_test_pool().await;
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(cols.contains(&"det_score".to_string()), "faces must have det_score; got {cols:?}");
+        assert!(cols.contains(&"quality_score".to_string()), "faces must have quality_score; got {cols:?}");
+    }
+
+    #[tokio::test]
     async fn migration_5_drops_embedding_and_is_manual_columns() {
         let pool = init_test_pool().await;
 
@@ -2123,5 +2202,86 @@ mod tests {
         let expected_b = fa.max(fb);
         assert_eq!(stored_a, expected_a);
         assert_eq!(stored_b, expected_b);
+    }
+
+    #[tokio::test]
+    async fn insert_face_persists_quality_scores() {
+        let pool = init_test_pool().await;
+        let face_id = insert_face(&pool, 1, None, (0.1, 0.1, 0.2, 0.2), Some(0.9), Some(0.75))
+            .await
+            .unwrap();
+        let (det, qual): (Option<f64>, Option<f64>) =
+            sqlx::query_as("SELECT det_score, quality_score FROM faces WHERE id = ?")
+                .bind(face_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(det, Some(0.9));
+        assert_eq!(qual, Some(0.75));
+    }
+
+    #[tokio::test]
+    async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
+        let pool = init_test_pool().await;
+
+        // One subject with a low-quality face.
+        let sid: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let low = insert_face(&pool, 1, Some(sid), (0.0, 0.0, 0.2, 0.2), Some(0.5), Some(0.2))
+            .await
+            .unwrap();
+
+        // First pass: picks the only face, reports the subject as changed.
+        let changed = upgrade_subject_thumbnails(&pool).await.unwrap();
+        assert_eq!(changed, vec![(sid, low)]);
+        let thumb: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(thumb, Some(low));
+
+        // A better face arrives.
+        let high = insert_face(&pool, 2, Some(sid), (0.0, 0.0, 0.3, 0.3), Some(0.9), Some(0.9))
+            .await
+            .unwrap();
+        let changed2 = upgrade_subject_thumbnails(&pool).await.unwrap();
+        assert_eq!(changed2, vec![(sid, high)], "upgrade must report the change");
+        let thumb2: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(thumb2, Some(high), "must upgrade to higher quality face");
+
+        // Idempotent: no change when nothing better appears.
+        let changed3 = upgrade_subject_thumbnails(&pool).await.unwrap();
+        assert!(changed3.is_empty(), "stable state reports no changes");
+    }
+
+    #[tokio::test]
+    async fn get_face_with_image_returns_bbox_and_path() {
+        let pool = init_test_pool().await;
+        // images.folder_id is a NOT NULL FK to folders(id) and foreign_keys=ON,
+        // so insert a folder first, then the image, then a face referencing it.
+        let folder_id: i64 = sqlx::query_scalar(
+            "INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let img_id: i64 = sqlx::query_scalar(
+            "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at)
+             VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0) RETURNING id",
+        )
+        .bind(folder_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let fid = insert_face(&pool, img_id, None, (0.1, 0.2, 0.3, 0.4), Some(0.8), Some(0.7))
+            .await
+            .unwrap();
+
+        let (path, bbox) = get_face_with_image(&pool, fid).await.unwrap().unwrap();
+        assert_eq!(path, "/tmp/x.jpg");
+        assert!((bbox.0 - 0.1).abs() < 1e-9 && (bbox.3 - 0.4).abs() < 1e-9);
     }
 }

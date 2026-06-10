@@ -1,4 +1,5 @@
 use anyhow::Result;
+use log::{info, warn, error, debug};
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 
@@ -174,7 +175,7 @@ fn build_components_with_constraints(
     for &(fa, fb) in must_links {
         let ordered = if fa < fb { (fa, fb) } else { (fb, fa) };
         if cannot_links.contains(&ordered) {
-            eprintln!("[clustering] WARNING: must_link/cannot_link contradiction for faces {} and {}", fa, fb);
+            warn!("[clustering] must_link/cannot_link contradiction for faces {} and {}", fa, fb);
         }
         uf.union(fa, fb);
     }

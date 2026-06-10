@@ -1,8 +1,10 @@
 mod clustering;
+mod face_quality;
 mod face_store;
 mod commands;
 mod db;
 mod embedder;
+mod logger;
 pub mod models;
 pub mod pipeline;
 mod preprocess;
@@ -38,6 +40,8 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            logger::init(&data_dir);
+            log::info!("Nebula backend initializing. Data directory: {:?}", data_dir);
             std::fs::create_dir_all(thumbnail::thumbnail_cache_dir(&data_dir))?;
             std::fs::create_dir_all(thumbnail::face_crop_cache_dir(&data_dir))?;
 
