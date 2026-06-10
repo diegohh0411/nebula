@@ -24,6 +24,9 @@ pub fn frontality(landmarks: Option<&[(f32, f32)]>) -> f32 {
 
     // Yaw proxy: nose centered between the eyes.
     let eye_mid_x = (lex + rex) / 2.0;
+    // Normalize the nose's horizontal offset by half the eye distance: for a frontal
+    // face the nose sits at the eye midpoint (offset 0 -> score 1), and a deviation of
+    // half the eye distance is treated as fully turned (offset 1 -> score 0).
     let yaw_offset = (nx - eye_mid_x).abs() / (0.5 * eye_dist);
     let yaw_score = (1.0 - yaw_offset).clamp(0.0, 1.0);
 
