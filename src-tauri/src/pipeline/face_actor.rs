@@ -1,11 +1,16 @@
 use crate::pipeline::DecodedImage;
 use face_id::analyzer::FaceAnalyzer;
+use face_id::detector::DetectedFace;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
+/// Per detected face: full detection (bbox + landmarks + score), its embedding,
+/// and the sharpness (0..1) measured on the cropped face region.
+pub type FaceResult = (DetectedFace, Vec<f32>, f32);
+
 pub struct FaceRequest {
     pub decoded: DecodedImage,
-    pub reply: oneshot::Sender<anyhow::Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>>>,
+    pub reply: oneshot::Sender<anyhow::Result<Vec<FaceResult>>>,
 }
 
 pub fn spawn_face_actor(analyzer: Arc<FaceAnalyzer>, channel_depth: usize) -> mpsc::Sender<FaceRequest> {
@@ -18,8 +23,19 @@ pub fn spawn_face_actor(analyzer: Arc<FaceAnalyzer>, channel_depth: usize) -> mp
                 analyzer_c
                     .analyze(img.as_ref())
                     .map(|faces| {
-                        faces.into_iter()
-                            .map(|f| (f.detection.bbox, f.embedding))
+                        faces
+                            .into_iter()
+                            .map(|f| {
+                                // bbox coords are relative (0..1); crop the region to measure sharpness.
+                                let (iw, ih) = (img.width() as f32, img.height() as f32);
+                                let x = (f.detection.bbox.x1 * iw).max(0.0) as u32;
+                                let y = (f.detection.bbox.y1 * ih).max(0.0) as u32;
+                                let w = ((f.detection.bbox.x2 - f.detection.bbox.x1) * iw).max(1.0) as u32;
+                                let h = ((f.detection.bbox.y2 - f.detection.bbox.y1) * ih).max(1.0) as u32;
+                                let region = img.crop_imm(x, y, w, h);
+                                let sharp = crate::face_quality::sharpness(&region);
+                                (f.detection, f.embedding, sharp)
+                            })
                             .collect::<Vec<_>>()
                     })
                     .map_err(|e| anyhow::anyhow!("{}", e))
