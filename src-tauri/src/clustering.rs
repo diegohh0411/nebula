@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::db;
 
-pub const TAU_SIM: f32 = 0.55;
+pub const TAU_SIM: f32 = 0.45;
 pub const K_NEAREST: usize = 5;
 pub const MIN_COMPONENT_SIZE: usize = 2;
 
