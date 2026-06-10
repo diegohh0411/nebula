@@ -6,14 +6,14 @@ use image::DynamicImage;
 /// Detector landmark order (SCRFD/buffalo): left_eye, right_eye, nose, left_mouth, right_mouth.
 /// Coordinates are relative to the full image (0.0..1.0), matching `DetectedFace.landmarks`.
 /// Returns 0.0..1.0; higher = more level and front-facing. Missing/!=5 landmarks -> neutral 0.5.
-pub fn frontality(landmarks: Option<&Vec<(f32, f32)>>) -> f32 {
+pub fn frontality(landmarks: Option<&[(f32, f32)]>) -> f32 {
     let lms = match landmarks {
         Some(l) if l.len() == 5 => l,
         _ => return 0.5,
     };
     let (lex, ley) = lms[0];
     let (rex, rey) = lms[1];
-    let (nx, _ny) = lms[2];
+    let (nx, _) = lms[2];
 
     let dx = rex - lex;
     let dy = rey - ley;
