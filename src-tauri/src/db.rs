@@ -985,9 +985,9 @@ pub async fn auto_assign_missing_thumbnails(pool: &SqlitePool) -> Result<()> {
 
 /// For every subject, set `thumbnail_face_id` to its highest-quality face.
 /// `quality_score` NULLs sort last; ties fall back to largest bbox area.
-/// Never clears an existing thumbnail. Returns subject IDs whose thumbnail changed
-/// (newly set or upgraded) so callers can regenerate those crops.
-pub async fn upgrade_subject_thumbnails(pool: &SqlitePool) -> Result<Vec<i64>> {
+/// Never clears an existing thumbnail. Returns `(subject_id, face_id)` pairs for
+/// subjects whose thumbnail changed so callers can regenerate those crops directly.
+pub async fn upgrade_subject_thumbnails(pool: &SqlitePool) -> Result<Vec<(i64, i64)>> {
     let rows = sqlx::query(
         "SELECT s.id AS subject_id,
                 s.thumbnail_face_id AS current_face,
@@ -1009,7 +1009,7 @@ pub async fn upgrade_subject_thumbnails(pool: &SqlitePool) -> Result<Vec<i64>> {
         if let Some(best_id) = best {
             if current != Some(best_id) {
                 update_subject_thumbnail_face(pool, subject_id, best_id).await?;
-                changed.push(subject_id);
+                changed.push((subject_id, best_id));
             }
         }
         // best is None -> subject has no faces; leave thumbnail untouched (never NULL it).
@@ -2237,7 +2237,7 @@ mod tests {
 
         // First pass: picks the only face, reports the subject as changed.
         let changed = upgrade_subject_thumbnails(&pool).await.unwrap();
-        assert_eq!(changed, vec![sid]);
+        assert_eq!(changed, vec![(sid, low)]);
         let thumb: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
             .bind(sid).fetch_one(&pool).await.unwrap();
         assert_eq!(thumb, Some(low));
@@ -2247,7 +2247,7 @@ mod tests {
             .await
             .unwrap();
         let changed2 = upgrade_subject_thumbnails(&pool).await.unwrap();
-        assert_eq!(changed2, vec![sid], "upgrade must report the change");
+        assert_eq!(changed2, vec![(sid, high)], "upgrade must report the change");
         let thumb2: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
             .bind(sid).fetch_one(&pool).await.unwrap();
         assert_eq!(thumb2, Some(high), "must upgrade to higher quality face");

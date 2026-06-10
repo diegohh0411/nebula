@@ -385,28 +385,19 @@ pub async fn run_pipeline(
                 // generate the crop file eagerly so the People grid has it before the
                 // frontend asks (closes the lazy-generation first-paint delay).
                 if let Ok(changed) = crate::db::upgrade_subject_thumbnails(&pool).await {
-                    for subject_id in changed {
-                        let thumb_face: Option<i64> = sqlx::query_scalar(
-                            "SELECT thumbnail_face_id FROM subjects WHERE id = ?",
-                        )
-                        .bind(subject_id)
-                        .fetch_one(&pool)
-                        .await
-                        .unwrap_or(None);
-                        if let Some(face_id) = thumb_face {
-                            if let Ok(Some((path, bbox))) =
-                                crate::db::get_face_with_image(&pool, face_id).await
+                    for (_subject_id, face_id) in changed {
+                        if let Ok(Some((path, bbox))) =
+                            crate::db::get_face_with_image(&pool, face_id).await
+                        {
+                            let dest = crate::thumbnail::face_crop_path_for(&data_dir, face_id);
+                            if let Err(e) = crate::thumbnail::generate_face_crop(
+                                std::path::PathBuf::from(path),
+                                dest,
+                                bbox,
+                            )
+                            .await
                             {
-                                let dest = crate::thumbnail::face_crop_path_for(&data_dir, face_id);
-                                if let Err(e) = crate::thumbnail::generate_face_crop(
-                                    std::path::PathBuf::from(path),
-                                    dest,
-                                    bbox,
-                                )
-                                .await
-                                {
-                                    eprintln!("[pipeline] eager crop gen failed for face {face_id}: {e}");
-                                }
+                                eprintln!("[pipeline] eager crop gen failed for face {face_id}: {e}");
                             }
                         }
                     }
