@@ -1967,17 +1967,13 @@ mod tests {
 
     #[tokio::test]
     async fn faces_table_has_quality_columns() {
-        let dir = std::env::temp_dir().join(format!("nebula_q_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pool = init_db(&dir).await.unwrap();
-        // PRAGMA table_info returns one row per column; assert our columns exist.
+        let pool = init_test_pool().await;
         let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
             .fetch_all(&pool)
             .await
             .unwrap();
         assert!(cols.contains(&"det_score".to_string()), "faces must have det_score; got {cols:?}");
         assert!(cols.contains(&"quality_score".to_string()), "faces must have quality_score; got {cols:?}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
