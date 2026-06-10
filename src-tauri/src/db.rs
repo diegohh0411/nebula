@@ -831,12 +831,14 @@ pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Resu
 
 pub async fn get_largest_face_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Option<i64>> {
     let row = sqlx::query(
-        "SELECT id FROM faces WHERE subject_id = ? ORDER BY (bbox_w * bbox_h) DESC LIMIT 1"
+        "SELECT id FROM faces WHERE subject_id = ?
+         ORDER BY (quality_score IS NULL), quality_score DESC, (bbox_w * bbox_h) DESC
+         LIMIT 1",
     )
     .bind(subject_id)
     .fetch_optional(pool)
     .await?;
-    
+
     Ok(row.map(|r| r.get("id")))
 }
 
@@ -953,6 +955,40 @@ pub async fn auto_assign_missing_thumbnails(pool: &SqlitePool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// For every subject, set `thumbnail_face_id` to its highest-quality face.
+/// `quality_score` NULLs sort last; ties fall back to largest bbox area.
+/// Never clears an existing thumbnail. Returns subject IDs whose thumbnail changed
+/// (newly set or upgraded) so callers can regenerate those crops.
+pub async fn upgrade_subject_thumbnails(pool: &SqlitePool) -> Result<Vec<i64>> {
+    let rows = sqlx::query(
+        "SELECT s.id AS subject_id,
+                s.thumbnail_face_id AS current_face,
+                (SELECT f.id FROM faces f
+                  WHERE f.subject_id = s.id
+                  ORDER BY (f.quality_score IS NULL), f.quality_score DESC,
+                           (f.bbox_w * f.bbox_h) DESC
+                  LIMIT 1) AS best_face
+         FROM subjects s",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut changed = Vec::new();
+    for r in &rows {
+        let subject_id: i64 = r.get("subject_id");
+        let current: Option<i64> = r.get("current_face");
+        let best: Option<i64> = r.get("best_face");
+        if let Some(best_id) = best {
+            if current != Some(best_id) {
+                update_subject_thumbnail_face(pool, subject_id, best_id).await?;
+                changed.push(subject_id);
+            }
+        }
+        // best is None -> subject has no faces; leave thumbnail untouched (never NULL it).
+    }
+    Ok(changed)
 }
 
 pub async fn get_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type: &str) -> Result<Option<Vec<u8>>> {
@@ -2156,5 +2192,42 @@ mod tests {
                 .unwrap();
         assert_eq!(det, Some(0.9));
         assert_eq!(qual, Some(0.75));
+    }
+
+    #[tokio::test]
+    async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
+        let pool = init_test_pool().await;
+
+        // One subject with a low-quality face.
+        let sid: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let low = insert_face(&pool, 1, Some(sid), (0.0, 0.0, 0.2, 0.2), Some(0.5), Some(0.2))
+            .await
+            .unwrap();
+
+        // First pass: picks the only face, reports the subject as changed.
+        let changed = upgrade_subject_thumbnails(&pool).await.unwrap();
+        assert_eq!(changed, vec![sid]);
+        let thumb: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(thumb, Some(low));
+
+        // A better face arrives.
+        let high = insert_face(&pool, 2, Some(sid), (0.0, 0.0, 0.3, 0.3), Some(0.9), Some(0.9))
+            .await
+            .unwrap();
+        let changed2 = upgrade_subject_thumbnails(&pool).await.unwrap();
+        assert_eq!(changed2, vec![sid], "upgrade must report the change");
+        let thumb2: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(thumb2, Some(high), "must upgrade to higher quality face");
+
+        // Idempotent: no change when nothing better appears.
+        let changed3 = upgrade_subject_thumbnails(&pool).await.unwrap();
+        assert!(changed3.is_empty(), "stable state reports no changes");
     }
 }
