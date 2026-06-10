@@ -1,4 +1,5 @@
 use anyhow::Result;
+use log::{info, warn, error, debug};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -106,7 +107,7 @@ impl Indexer {
                 let path = PathBuf::from(&folder.path);
                 if path.exists() {
                     if let Err(e) = w.watch(path.clone(), folder.id) {
-                    eprintln!("Failed to watch folder {}: {}", folder.path, e);
+                    error!("Failed to watch folder {}: {}", folder.path, e);
                 }
                 }
                 folder_map.push((path, folder.id));
@@ -173,17 +174,18 @@ impl Indexer {
 
         match existing {
             None => {
+                debug!("process_file: found new file: {}", path_str);
                 let _permit = match self.hash_semaphore.acquire().await {
                     Ok(permit) => permit,
                     Err(e) => {
-                        eprintln!("Failed to acquire hash semaphore for {}: {}", path_str, e);
+                        error!("Failed to acquire hash semaphore for {}: {}", path_str, e);
                         return;
                     }
                 };
                 let hash = match compute_sha256(path).await {
                     Ok(h) => h,
                     Err(e) => {
-                        eprintln!("Failed to hash {}: {}", path_str, e);
+                        error!("Failed to hash {}: {}", path_str, e);
                         return;
                     }
                 };
@@ -200,13 +202,13 @@ impl Indexer {
                 {
                     Ok(id) => id,
                     Err(e) => {
-                        eprintln!("Failed to insert image {}: {}", path_str, e);
+                        error!("Failed to insert image {}: {}", path_str, e);
                         return;
                     }
                 };
 
                 if let Err(e) = db::enqueue_image(&self.pool, image_id).await {
-                    eprintln!("Failed to enqueue image {}: {}", image_id, e);
+                    error!("Failed to enqueue image {}: {}", image_id, e);
                 }
                 self.preview.enqueue_low(image_id);
 
@@ -236,14 +238,14 @@ impl Indexer {
                 let _permit = match self.hash_semaphore.acquire().await {
                     Ok(permit) => permit,
                     Err(e) => {
-                        eprintln!("Failed to acquire hash semaphore for {}: {}", path_str, e);
+                        error!("Failed to acquire hash semaphore for {}: {}", path_str, e);
                         return;
                     }
                 };
                 let hash = match compute_sha256(path).await {
                     Ok(h) => h,
                     Err(e) => {
-                        eprintln!("Failed to hash {}: {}", path_str, e);
+                        error!("Failed to hash {}: {}", path_str, e);
                         return;
                     }
                 };
@@ -270,7 +272,7 @@ impl Indexer {
                     )
                     .await;
                     if let Err(e) = db::enqueue_image(&self.pool, existing.id).await {
-                        eprintln!("Failed to enqueue image {}: {}", existing.id, e);
+                        error!("Failed to enqueue image {}: {}", existing.id, e);
                     }
                     self.preview.enqueue_low(existing.id);
                     let _ = self.app.emit(
@@ -307,7 +309,7 @@ impl Indexer {
         let db_images = match db::get_all_images_for_rescan(&self.pool).await {
             Ok(imgs) => imgs,
             Err(e) => {
-                eprintln!("Rescan: failed to load DB images: {}", e);
+                error!("Rescan: failed to load DB images: {}", e);
                 return;
             }
         };
@@ -355,7 +357,7 @@ impl Indexer {
         {
             let mut w = self.watcher.lock().await;
             if let Err(e) = w.watch(PathBuf::from(&path), folder_id) {
-                eprintln!("Failed to watch folder {}: {}", path, e);
+                error!("Failed to watch folder {}: {}", path, e);
             }
         }
 
@@ -375,7 +377,7 @@ impl Indexer {
 
         tokio::spawn(async move {
             if let Err(e) = handle.await {
-                eprintln!("Folder scan task failed for folder_id {}: {}", folder_id, e);
+                error!("Folder scan task failed for folder_id {}: {}", folder_id, e);
             }
         });
     }

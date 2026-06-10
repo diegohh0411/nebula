@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
+use log::{info, warn, error, debug};
 
 const MAGIC: &[u8; 8] = b"NEBULAVX";
 const VERSION: u8 = 1;
@@ -125,21 +126,21 @@ impl FlatIndex {
                     let tomb = index.tombstone_count();
                     let total = index.ids.len();
                     if total > 0 && tomb * 10 > total {
-                        eprintln!("[vector-index] Compacting {tomb} tombstones out of {total}");
+                        info!("[vector-index] Compacting {tomb} tombstones out of {total}");
                         let compacted = index.compact();
                         let snap = compacted.snapshot();
                         let path2 = idx_path.clone();
                         tokio::task::spawn_blocking(move || snap.save(&path2)).await??;
                         return Ok(compacted);
                     }
-                    eprintln!("[vector-index] Loaded {} entries from disk", index.len());
+                    info!("[vector-index] Loaded {} entries from disk", index.len());
                     return Ok(index);
                 }
-                Err(e) => eprintln!("[vector-index] Failed to load .idx (rebuilding): {e}"),
+                Err(e) => error!("[vector-index] Failed to load .idx (rebuilding): {e}"),
             }
         }
 
-        eprintln!("[vector-index] Rebuilding index from SQLite…");
+        info!("[vector-index] Rebuilding index from SQLite…");
         let all = crate::db::get_all_embeddings(pool).await?;
 
         let dim = all
@@ -157,10 +158,10 @@ impl FlatIndex {
         let snap = index.snapshot();
         let path = idx_path;
         if let Err(e) = tokio::task::spawn_blocking(move || snap.save(&path)).await? {
-            eprintln!("[vector-index] Failed to save .idx: {e}");
+            error!("[vector-index] Failed to save .idx: {e}");
         }
 
-        eprintln!("[vector-index] Built index with {} entries", index.len());
+        info!("[vector-index] Built index with {} entries", index.len());
         Ok(index)
     }
 

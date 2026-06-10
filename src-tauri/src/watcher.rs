@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use log::{info, warn, error, debug};
 
 use crate::indexer::Indexer;
 use crate::models::{DebouncedEvent, DebouncedEventKind};
@@ -20,7 +21,7 @@ impl FolderWatcher {
                 Ok(event) => {
                     let _ = event_tx.send(event);
                 }
-                Err(e) => eprintln!("file watcher backend error: {e}"),
+                Err(e) => error!("file watcher backend error: {e}"),
             }
         })?;
         Ok(Self { inner })
