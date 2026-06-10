@@ -22,31 +22,40 @@ pub fn face_crop_path_for(data_dir: &Path, face_id: i64) -> PathBuf {
     face_crop_cache_dir(data_dir).join(format!("{}.webp", face_id))
 }
 
-/// Generate a 200x200 square WebP face crop.
+/// Generate a 320x320 square WebP face crop: bbox expanded by a margin,
+/// squared and centered on the face, clamped to image bounds, no aspect distortion.
 pub async fn generate_face_crop(
     src_path: PathBuf,
     dest_path: PathBuf,
     bbox: (f64, f64, f64, f64),
 ) -> Result<()> {
-    // Ensure the parent directory exists
+    const OUT: u32 = 320;
+    const MARGIN: f64 = 0.4; // 40% padding around the face
+
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut img = image::open(&src_path)?;
-        let (img_w, img_h) = (img.width() as f64, img.height() as f64);
+        let img = image::open(&src_path)?;
+        let (iw, ih) = (img.width() as f64, img.height() as f64);
 
-        let x = (bbox.0 * img_w).max(0.0).min(img_w - 1.0) as u32;
-        let y = (bbox.1 * img_h).max(0.0).min(img_h - 1.0) as u32;
-        let max_w = img_w - x as f64;
-        let max_h = img_h - y as f64;
-        let w = (bbox.2 * img_w).min(max_w).max(1.0) as u32;
-        let h = (bbox.3 * img_h).min(max_h).max(1.0) as u32;
+        // bbox is relative (x, y, w, h). Compute absolute center + a padded square side.
+        let cx = (bbox.0 + bbox.2 / 2.0) * iw;
+        let cy = (bbox.1 + bbox.3 / 2.0) * ih;
+        let face_px = (bbox.2 * iw).max(bbox.3 * ih);
+        let mut side = face_px * (1.0 + 2.0 * MARGIN);
+        // Side cannot exceed the image's smaller dimension.
+        side = side.min(iw).min(ih).max(1.0);
 
-        let face = img.crop(x, y, w, h);
-        let face_resized = face.thumbnail_exact(200, 200);
-        face_resized.save_with_format(&dest_path, image::ImageFormat::WebP)?;
+        // Top-left, clamped so the square stays inside the image.
+        let x = (cx - side / 2.0).clamp(0.0, iw - side);
+        let y = (cy - side / 2.0).clamp(0.0, ih - side);
+
+        let square = img.crop_imm(x as u32, y as u32, side as u32, side as u32);
+        // Square -> square keeps aspect ratio (no squish).
+        let resized = square.resize_exact(OUT, OUT, image::imageops::FilterType::CatmullRom);
+        resized.save_with_format(&dest_path, image::ImageFormat::WebP)?;
         Ok(())
     })
     .await??;
@@ -118,6 +127,24 @@ mod tests {
         assert_eq!(path, thumbnail_path_for(&data_dir, image_id));
         // Different ids must not collide
         assert_ne!(path, thumbnail_path_for(&data_dir, 99));
+    }
+
+    #[tokio::test]
+    async fn face_crop_is_square_320_and_within_bounds() {
+        // 400x300 image, a non-square bbox in the middle.
+        let img = red(400, 300);
+        let src = std::env::temp_dir().join(format!("nebula_src_{}.png", std::process::id()));
+        img.save(&src).unwrap();
+        let dest = std::env::temp_dir().join(format!("nebula_crop_{}.webp", std::process::id()));
+
+        // bbox: x=0.4,y=0.4,w=0.2,h=0.3 (taller than wide) — must NOT be squished.
+        generate_face_crop(src.clone(), dest.clone(), (0.4, 0.4, 0.2, 0.3)).await.unwrap();
+
+        let out = image::open(&dest).unwrap();
+        assert_eq!(out.width(), 320, "crop width must be 320");
+        assert_eq!(out.height(), 320, "crop must be square 320");
+        std::fs::remove_file(&src).ok();
+        std::fs::remove_file(&dest).ok();
     }
 
     /// write_thumbnail_from_image must actually create the file on disk
