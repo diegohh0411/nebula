@@ -674,11 +674,13 @@ pub async fn insert_face(
     image_id: i64,
     subject_id: Option<i64>,
     bbox: (f64, f64, f64, f64),
+    det_score: Option<f64>,
+    quality_score: Option<f64>,
 ) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
     let result = sqlx::query(
-        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(image_id)
     .bind(subject_id)
@@ -687,6 +689,8 @@ pub async fn insert_face(
     .bind(bbox.2)
     .bind(bbox.3)
     .bind(now)
+    .bind(det_score)
+    .bind(quality_score)
     .execute(pool)
     .await?;
     Ok(result.last_insert_rowid())
@@ -2136,5 +2140,21 @@ mod tests {
         let expected_b = fa.max(fb);
         assert_eq!(stored_a, expected_a);
         assert_eq!(stored_b, expected_b);
+    }
+
+    #[tokio::test]
+    async fn insert_face_persists_quality_scores() {
+        let pool = init_test_pool().await;
+        let face_id = insert_face(&pool, 1, None, (0.1, 0.1, 0.2, 0.2), Some(0.9), Some(0.75))
+            .await
+            .unwrap();
+        let (det, qual): (Option<f64>, Option<f64>) =
+            sqlx::query_as("SELECT det_score, quality_score FROM faces WHERE id = ?")
+                .bind(face_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(det, Some(0.9));
+        assert_eq!(qual, Some(0.75));
     }
 }

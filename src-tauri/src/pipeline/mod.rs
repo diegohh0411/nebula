@@ -40,15 +40,29 @@ async fn save_faces(
     image_id: i64,
     sub_qid: i64,
     sub_attempts: i32,
-    faces: Vec<(face_id::detector::BoundingBox, Vec<f32>)>,
+    faces: Vec<face_actor::FaceResult>,
 ) {
     let mut all_ok = true;
-    for (bbox, face_emb) in faces {
+    for (detection, face_emb, sharp) in faces {
+        let bbox = detection.bbox;
         let rel_x = bbox.x1 as f64;
         let rel_y = bbox.y1 as f64;
         let rel_w = (bbox.x2 - bbox.x1) as f64;
         let rel_h = (bbox.y2 - bbox.y1) as f64;
-        match crate::db::insert_face(pool, image_id, None, (rel_x, rel_y, rel_w, rel_h)).await {
+
+        let frontality = crate::face_quality::frontality(detection.landmarks.as_deref());
+        let quality = crate::face_quality::composite(detection.score, frontality, sharp);
+
+        match crate::db::insert_face(
+            pool,
+            image_id,
+            None,
+            (rel_x, rel_y, rel_w, rel_h),
+            Some(detection.score as f64),
+            Some(quality as f64),
+        )
+        .await
+        {
             Ok(face_id) => {
                 if let Err(e) = crate::face_store::upsert_vector(pool, face_id, &face_emb).await {
                     eprintln!("[pipeline] upsert_vector failed for face {face_id}: {e}");
