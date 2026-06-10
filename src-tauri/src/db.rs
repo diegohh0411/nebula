@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_h      REAL NOT NULL,
     embedding   BLOB,
     added_at    INTEGER NOT NULL,
-    is_manual   INTEGER NOT NULL DEFAULT 0
+    is_manual   INTEGER NOT NULL DEFAULT 0,
+    det_score      REAL,
+    quality_score  REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
@@ -1961,6 +1963,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 2, "must_link and cannot_link on the same pair are distinct rows");
+    }
+
+    #[tokio::test]
+    async fn faces_table_has_quality_columns() {
+        let dir = std::env::temp_dir().join(format!("nebula_q_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+        // PRAGMA table_info returns one row per column; assert our columns exist.
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(cols.contains(&"det_score".to_string()), "faces must have det_score; got {cols:?}");
+        assert!(cols.contains(&"quality_score".to_string()), "faces must have quality_score; got {cols:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
