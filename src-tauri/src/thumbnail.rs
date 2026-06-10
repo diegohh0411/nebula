@@ -44,15 +44,14 @@ pub async fn generate_face_crop(
         let cx = (bbox.0 + bbox.2 / 2.0) * iw;
         let cy = (bbox.1 + bbox.3 / 2.0) * ih;
         let face_px = (bbox.2 * iw).max(bbox.3 * ih);
-        let mut side = face_px * (1.0 + 2.0 * MARGIN);
         // Side cannot exceed the image's smaller dimension.
-        side = side.min(iw).min(ih).max(1.0);
+        let side = (face_px * (1.0 + 2.0 * MARGIN)).min(iw).min(ih).max(1.0);
 
         // Top-left, clamped so the square stays inside the image.
         let x = (cx - side / 2.0).clamp(0.0, iw - side);
         let y = (cy - side / 2.0).clamp(0.0, ih - side);
 
-        let square = img.crop_imm(x as u32, y as u32, side as u32, side as u32);
+        let square = img.crop_imm(x.round() as u32, y.round() as u32, side.round() as u32, side.round() as u32);
         // Square -> square keeps aspect ratio (no squish).
         let resized = square.resize_exact(OUT, OUT, image::imageops::FilterType::CatmullRom);
         resized.save_with_format(&dest_path, image::ImageFormat::WebP)?;
