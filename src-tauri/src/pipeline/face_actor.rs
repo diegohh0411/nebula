@@ -33,7 +33,7 @@ pub fn spawn_face_actor(analyzer: Arc<FaceAnalyzer>, channel_depth: usize) -> mp
                                 let w = ((f.detection.bbox.x2 - f.detection.bbox.x1) * iw).max(1.0) as u32;
                                 let h = ((f.detection.bbox.y2 - f.detection.bbox.y1) * ih).max(1.0) as u32;
                                 let region = img.crop_imm(x, y, w, h);
-                                let sharp = crate::face_quality::sharpness(&region);
+                                let sharp = crate::people::face_quality::sharpness(&region);
                                 (f.detection, f.embedding, sharp)
                             })
                             .collect::<Vec<_>>()

@@ -127,7 +127,7 @@ async fn build_subject_aware_knn(
             Some(sid) => k + subject_sizes.get(&sid).copied().unwrap_or(0),
             None => k,
         };
-        let neighbors: Vec<(i64, f32)> = crate::face_store::knn_cosine_sim(pool, fid, candidate_k)
+        let neighbors: Vec<(i64, f32)> = crate::people::face_store::knn_cosine_sim(pool, fid, candidate_k)
             .await?
             .into_iter()
             .filter(|(nid, _)| match own_subject {

@@ -11,9 +11,6 @@ mod settings;
 pub mod models;
 pub mod pipeline;
 // legacy flat modules still present, removed as their slices absorb them:
-mod clustering;
-mod face_quality;
-mod face_store;
 mod commands;
 mod embedder;
 mod preprocess;

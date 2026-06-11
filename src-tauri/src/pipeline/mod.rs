@@ -52,8 +52,8 @@ async fn save_faces(
         let rel_w = (bbox.x2 - bbox.x1) as f64;
         let rel_h = (bbox.y2 - bbox.y1) as f64;
 
-        let frontality = crate::face_quality::frontality(detection.landmarks.as_deref());
-        let quality = crate::face_quality::composite(detection.score, frontality, sharp);
+        let frontality = crate::people::face_quality::frontality(detection.landmarks.as_deref());
+        let quality = crate::people::face_quality::composite(detection.score, frontality, sharp);
 
         match crate::db::insert_face(
             pool,
@@ -66,7 +66,7 @@ async fn save_faces(
         .await
         {
             Ok(face_id) => {
-                if let Err(e) = crate::face_store::upsert_vector(pool, face_id, &face_emb).await {
+                if let Err(e) = crate::people::face_store::upsert_vector(pool, face_id, &face_emb).await {
                     error!("[pipeline] upsert_vector failed for face {face_id}: {e}");
                     all_ok = false;
                 }
@@ -412,7 +412,7 @@ pub async fn run_pipeline(
         // Auto-recluster only when subject work was done this iteration
         if processed_subject_work {
             info!("[pipeline] Auto-clustering unassigned faces...");
-            if let Ok(_result) = crate::clustering::cluster_unassigned_faces(&pool).await {
+            if let Ok(_result) = crate::people::clustering::cluster_unassigned_faces(&pool).await {
                 info!("[pipeline] Clustering complete. Upgrading subject thumbnails...");
                 // Upgrade each subject's profile crop to its best-quality face, then
                 // generate the crop file eagerly so the People grid has it before the
