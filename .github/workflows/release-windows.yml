@@ -48,4 +48,4 @@ jobs:
           prerelease: false
           # NSIS only: it runs vc_redist via an installer hook (see
           # src-tauri/nsis/hooks.nsh). MSI would not, so we don't ship it.
-          args: --bundles nsis --config tauri.ci.conf.json
+          args: --bundles nsis --config src-tauri/tauri.ci.conf.json
