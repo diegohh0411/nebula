@@ -87,7 +87,7 @@ pub async fn get_all_face_vectors(pool: &SqlitePool) -> Result<Vec<(i64, Vec<f32
         .map(|r| {
             let id: i64 = r.get("rowid");
             let bytes: Vec<u8> = r.get("embedding");
-            let embedding = crate::embedder::bytes_to_f32_vec(&bytes)?;
+            let embedding = crate::search::math::bytes_to_f32_vec(&bytes)?;
             Ok((id, embedding))
         })
         .collect()

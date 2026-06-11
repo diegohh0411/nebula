@@ -2,13 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use image::DynamicImage;
 
-pub fn thumbnail_cache_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("thumbnails")
-}
-
-pub fn face_crop_cache_dir(data_dir: &Path) -> PathBuf {
-    thumbnail_cache_dir(data_dir).join("face-crops")
-}
+pub use crate::platform::paths::{thumbnail_cache_dir, face_crop_cache_dir};
 
 pub fn thumbnail_path_for(data_dir: &Path, image_id: i64) -> PathBuf {
     thumbnail_cache_dir(data_dir).join(format!("{}.webp", image_id))

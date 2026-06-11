@@ -1,6 +1,6 @@
 use crate::pipeline::DecodedImage;
 use crate::models::{ModelManager, registry::ModelSpec};
-use crate::vision_engine::VisionEngine;
+use crate::vision::engine::VisionEngine;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 

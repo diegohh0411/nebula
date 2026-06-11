@@ -3,82 +3,12 @@ use sha2::{Sha256, Digest};
 use std::collections::HashSet;
 
 use crate::{
-    db,
-    models::{FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult, Tag, TagWithCount, SubjectMatch},
-    search, thumbnail, AppState,
+    models::{SearchResult, SearchQuery, SubjectMatch},
+    search, AppState,
 };
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
-}
-
-#[tauri::command]
-pub async fn add_folder(
-    path: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<FolderWithCount, String> {
-    let folder = state
-        .indexer
-        .add_folder(path.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    let indexer = state.indexer.clone();
-    let pool = state.pool.clone();
-    let scan_path = std::path::PathBuf::from(&path);
-    let folder_id = folder.id;
-
-    tauri::async_runtime::spawn(async move {
-        let folder_still_exists = db::list_folders_with_counts(&pool)
-            .await
-            .map(|folders| folders.iter().any(|f| f.id == folder_id))
-            .unwrap_or(false);
-
-        if folder_still_exists {
-            indexer.spawn_folder_scan(scan_path, folder_id);
-        }
-    });
-
-    Ok(folder)
-}
-
-#[tauri::command]
-pub async fn remove_folder(
-    id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    state
-        .indexer
-        .remove_folder(id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn list_folders(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<FolderWithCount>, String> {
-    db::list_folders_with_counts(&state.pool)
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn list_images(
-    folder_id: Option<i64>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<Image>, String> {
-    db::list_images(&state.pool, folder_id)
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn prioritize_previews(
-    image_ids: Vec<i64>,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    state.preview.prioritize(image_ids);
-    Ok(())
 }
 
 #[tauri::command]
@@ -92,12 +22,12 @@ pub async fn search(
     match query {
         SearchQuery::Text { ref query } => {
             // 1. Tag-derived images, already ordered by tagged-subject count desc.
-            let tag_image_ids = db::get_tag_image_ids_ordered(pool, query).await.unwrap_or_default();
+            let tag_image_ids = crate::tags::repo::get_tag_image_ids_ordered(pool, query).await.unwrap_or_default();
 
             // 2. Name-derived images (accent-insensitive), appended after tag matches.
-            let matched = db::search_subjects_matching(pool, query).await.unwrap_or_default();
+            let matched = crate::tags::repo::search_subjects_matching(pool, query).await.unwrap_or_default();
             let subject_ids: Vec<i64> = matched.iter().map(|m| m.subject.id).collect();
-            let name_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+            let name_image_ids = crate::tags::repo::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
 
             let mut pinned_ids: Vec<i64> = Vec::new();
             let mut pinned_set: HashSet<i64> = HashSet::new();
@@ -109,7 +39,7 @@ pub async fn search(
 
             let mut results = vec![];
             for image_id in &pinned_ids {
-                if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
+                if let Ok(Some(img)) = crate::library::repo::get_image_by_id(pool, *image_id).await {
                     if img.deleted_at.is_some() {
                         continue;
                     }
@@ -133,10 +63,10 @@ pub async fn search(
                 format!("{:x}", hasher.finalize())
             };
 
-            let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
-                crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
+            let query_embedding = if let Some(cached) = crate::search::repo::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
+                crate::search::math::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let model_id = db::get_setting(pool, "embedding_model")
+                let model_id = crate::settings::repo::get_setting(pool, "embedding_model")
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
@@ -145,8 +75,8 @@ pub async fn search(
 
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_text(&state.model_manager, query, spec).map_err(map_err)?;
-                let blob = crate::embedder::f32_slice_to_bytes(&emb);
-                let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
+                let blob = crate::search::math::f32_slice_to_bytes(&emb);
+                let _ = crate::search::repo::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
             };
 
@@ -160,16 +90,16 @@ pub async fn search(
                 }
             }
 
-            let _ = db::delete_stale_cache_entries(pool).await;
+            let _ = crate::search::repo::delete_stale_cache_entries(pool).await;
             Ok(results)
         }
 
         SearchQuery::ImageId { image_id } => {
-            let embedding_blob = db::get_image_embedding(pool, image_id)
+            let embedding_blob = crate::search::repo::get_image_embedding(pool, image_id)
                 .await
                 .map_err(map_err)?
                 .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
-            let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding_blob)
+            let embedding_f32 = crate::search::math::bytes_to_f32_vec(&embedding_blob)
                 .map_err(map_err)?;
 
             let mut scored = search::search_images(&state.index, embedding_f32, 50)
@@ -191,10 +121,10 @@ pub async fn search(
                 format!("{:x}", hasher.finalize())
             };
 
-            let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
-                crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
+            let query_embedding = if let Some(cached) = crate::search::repo::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
+                crate::search::math::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let model_id = db::get_setting(pool, "embedding_model")
+                let model_id = crate::settings::repo::get_setting(pool, "embedding_model")
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
@@ -204,8 +134,8 @@ pub async fn search(
                 let img = image::load_from_memory(&raw_bytes).map_err(map_err)?;
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_image(&state.model_manager, &img, spec).map_err(map_err)?;
-                let blob = crate::embedder::f32_slice_to_bytes(&emb);
-                let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
+                let blob = crate::search::math::f32_slice_to_bytes(&emb);
+                let _ = crate::search::repo::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb
             };
 
@@ -213,7 +143,7 @@ pub async fn search(
                 .await
                 .map_err(map_err)?;
 
-            let _ = db::delete_stale_cache_entries(pool).await;
+            let _ = crate::search::repo::delete_stale_cache_entries(pool).await;
             search::build_search_results(pool, scored).await.map_err(map_err)
         }
     }
@@ -226,7 +156,7 @@ pub async fn get_processing_status(
     let ema_bits = state.throughput_ema.load(std::sync::atomic::Ordering::Relaxed);
     let images_per_sec = f32::from_bits(ema_bits);
 
-    db::get_processing_counts(&state.pool).await
+    crate::pipeline::queue::get_processing_counts(&state.pool).await
         .map(|s| crate::models::PipelineStatsPayload {
             total_pending: s.total_pending as u32,
             images_per_sec,
@@ -234,273 +164,3 @@ pub async fn get_processing_status(
         .map_err(map_err)
 }
 
-#[tauri::command]
-pub async fn list_subjects(state: tauri::State<'_, AppState>) -> Result<Vec<Subject>, String> {
-    db::list_all_subjects(&state.pool).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn name_subject(
-    id: i64,
-    name: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<NameSubjectResult, String> {
-    let pool = &state.pool;
-
-    let duplicate_subject_id = if let Some(ref n) = name {
-        let trimmed = n.trim();
-        if !trimmed.is_empty() {
-            db::find_subject_by_name(pool, trimmed, id)
-                .await
-                .map_err(map_err)?
-                .map(|s| s.id)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    db::update_subject_name(pool, id, name.as_deref())
-        .await
-        .map_err(map_err)?;
-
-    Ok(NameSubjectResult {
-        duplicate_subject_id,
-    })
-}
-
-#[tauri::command]
-pub async fn list_faces(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
-    db::list_faces_for_subject(&state.pool, subject_id).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn list_faces_for_image(image_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
-    db::list_faces_for_image(&state.pool, image_id).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn get_face_crop(face_id: i64, state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let pool = &state.pool;
-    let data_dir = &state.data_dir;
-
-    let face = db::get_face_by_id(pool, face_id).await.map_err(map_err)?
-        .ok_or_else(|| "Face not found".to_string())?;
-
-    let image = db::get_image_by_id(pool, face.image_id).await.map_err(map_err)?
-        .ok_or_else(|| "Image not found".to_string())?;
-
-    let crop_path = thumbnail::face_crop_path_for(data_dir, face_id);
-    if !crop_path.exists() {
-        thumbnail::generate_face_crop(
-            std::path::PathBuf::from(&image.path),
-            crop_path.clone(),
-            (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h)
-        ).await.map_err(map_err)?;
-    }
-
-    Ok(crop_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub async fn set_subject_thumbnail(subject_id: i64, face_id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    db::update_subject_thumbnail_face(&state.pool, subject_id, face_id).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn get_subject_photos(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<SearchResult>, String> {
-    let images = db::list_images_for_subject(&state.pool, subject_id).await.map_err(map_err)?;
-    Ok(images.into_iter().map(|img| SearchResult {
-        image_id: img.id,
-        path: img.path,
-        thumbnail_path: img.thumbnail_path,
-        preview_path: img.preview_path,
-        score: 1.0,
-        date_taken: img.date_taken,
-        mtime: img.mtime,
-        semantic_analysis_done: img.semantic_analysis_done,
-        subject_analysis_done: img.subject_analysis_done,
-    }).collect())
-}
-
-#[tauri::command]
-pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<crate::models::SubjectDetail, String> {
-    let mut detail = db::get_subject_detail_with_counts(&state.pool, subject_id).await.map_err(map_err)?
-        .ok_or_else(|| "Subject not found".to_string())?;
-
-    // Auto-select thumbnail if not set
-    if detail.subject.thumbnail_face_id.is_none() {
-        if let Ok(Some(face_id)) = db::get_largest_face_for_subject(&state.pool, subject_id).await {
-            let _ = db::update_subject_thumbnail_face(&state.pool, subject_id, face_id).await;
-            detail.subject.thumbnail_face_id = Some(face_id);
-        }
-    }
-
-    Ok(detail)
-}
-
-#[tauri::command]
-pub async fn get_merge_suggestions(
-    state: tauri::State<'_, AppState>,
-    limit: Option<i64>,
-) -> Result<Vec<MergeSuggestion>, String> {
-    db::get_merge_suggestions(&state.pool, limit)
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn merge_subjects(
-    target_id: i64,
-    source_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    db::merge_subjects(&state.pool, target_id, source_id)
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn dismiss_merge_suggestion(
-    id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    db::dismiss_merge_suggestion(&state.pool, id)
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn assign_face_to_subject(
-    face_id: i64,
-    subject_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    let pool = &state.pool;
-    // must_link between face_id and existing faces in target subject
-    if let Ok(existing) = db::get_face_ids_for_subject(pool, subject_id).await {
-        for existing_face in existing {
-            let _ = db::add_must_link(pool, face_id, existing_face, "manual_assign").await;
-        }
-    }
-    db::assign_face_to_subject(pool, face_id, subject_id)
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn create_subject_for_face(
-    face_id: i64,
-    name: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<crate::models::Subject, String> {
-    db::create_subject_for_face(&state.pool, face_id, name.as_deref())
-        .await
-        .map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn unassign_face(
-    face_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    let pool = &state.pool;
-    // Record cannot_link between face_id and all current sibling faces in the subject
-    if let Ok(Some(face)) = db::get_face_by_id(pool, face_id).await {
-        if let Some(subject_id) = face.subject_id {
-            if let Ok(siblings) = db::get_face_ids_for_subject(pool, subject_id).await {
-                for sibling_id in siblings {
-                    if sibling_id != face_id {
-                        let _ = db::add_cannot_link(pool, face_id, sibling_id, "removal").await;
-                    }
-                }
-            }
-        }
-    }
-    db::unassign_face(pool, face_id).await.map_err(map_err)?;
-    let _ = db::auto_assign_missing_thumbnails(pool).await;
-    let _ = db::delete_subjects_with_no_faces(pool).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn search_subjects(
-    query: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<SubjectMatch>, String> {
-    db::search_subjects_matching(&state.pool, &query).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn add_subject_tag(
-    subject_id: i64,
-    name: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<Tag, String> {
-    db::add_subject_tag(&state.pool, subject_id, &name).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn create_tag(
-    name: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<Tag, String> {
-    db::create_tag(&state.pool, &name).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn remove_subject_tag(
-    subject_id: i64,
-    tag_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    db::remove_subject_tag(&state.pool, subject_id, tag_id).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn get_subject_tags(
-    subject_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<Tag>, String> {
-    db::get_subject_tags(&state.pool, subject_id).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn list_tags(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<TagWithCount>, String> {
-    db::list_tags_with_counts(&state.pool).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn rename_tag(
-    tag_id: i64,
-    name: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    db::rename_tag(&state.pool, tag_id, &name).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn delete_tag(
-    tag_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    db::delete_tag(&state.pool, tag_id).await.map_err(map_err)
-}
-
-#[tauri::command]
-pub async fn get_tag_subjects(
-    tag_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<SubjectMatch>, String> {
-    let pool = &state.pool;
-    let rows = db::get_subjects_for_tag(pool, tag_id).await.map_err(map_err)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for s in rows {
-        let tags = db::get_subject_tags(pool, s.id).await.map_err(map_err)?;
-        out.push(SubjectMatch { subject: s, tags });
-    }
-    Ok(out)
-}

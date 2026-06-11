@@ -10,9 +10,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::{
-    db,
+    library::{repo, models::DbImage},
     models::{DebouncedEvent, DebouncedEventKind, SyncProgressPayload, SyncCompletePayload},
-    watcher::FolderWatcher,
+    library::watcher::FolderWatcher,
 };
 
 pub struct Indexer {
@@ -24,7 +24,7 @@ pub struct Indexer {
     watcher: Arc<Mutex<FolderWatcher>>,
     hash_semaphore: Arc<Semaphore>,
     scan_mutex: Arc<tokio::sync::Mutex<()>>,
-    preview: crate::preview::PreviewHandle,
+    preview: crate::media::preview::PreviewHandle,
 }
 
 fn is_image(path: &Path) -> bool {
@@ -95,13 +95,13 @@ fn walk_dir_for_scan(dir: &Path, results: &mut Vec<PathBuf>) {
 }
 
 impl Indexer {
-    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle, preview: crate::preview::PreviewHandle) -> Result<Arc<Self>> {
+    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle, preview: crate::media::preview::PreviewHandle) -> Result<Arc<Self>> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let watcher = Arc::new(Mutex::new(FolderWatcher::new(event_tx)?));
 
         let mut folder_map = Vec::new();
         {
-            let folders = db::list_all_folders(&pool).await?;
+            let folders = repo::list_all_folders(&pool).await?;
             let mut w = watcher.lock().await;
             for folder in &folders {
                 let path = PathBuf::from(&folder.path);
@@ -128,14 +128,14 @@ impl Indexer {
 
         let debounce_indexer = indexer.clone();
         tokio::spawn(async move {
-            crate::watcher::run_debounce_loop(event_rx, debounce_indexer).await;
+            crate::library::watcher::run_debounce_loop(event_rx, debounce_indexer).await;
         });
 
         Ok(indexer)
     }
 
     async fn sync_folder_map(&self) {
-        if let Ok(folders) = db::list_all_folders(&self.pool).await {
+        if let Ok(folders) = repo::list_all_folders(&self.pool).await {
             let mut map: Vec<(PathBuf, i64)> = folders
                 .into_iter()
                 .map(|f| (PathBuf::from(f.path), f.id))
@@ -149,7 +149,7 @@ impl Indexer {
         &self,
         path: &Path,
         folder_id: i64,
-        known: Option<db::DbImage>,
+        known: Option<DbImage>,
     ) {
         if !is_image(path) {
             return;
@@ -166,7 +166,7 @@ impl Indexer {
 
         let existing = match known {
             Some(img) => Some(img),
-            None => db::get_image_metadata_by_path(&self.pool, &path_str)
+            None => repo::get_image_metadata_by_path(&self.pool, &path_str)
                 .await
                 .ok()
                 .flatten(),
@@ -190,7 +190,7 @@ impl Indexer {
                     }
                 };
 
-                let image_id = match db::insert_image(
+                let image_id = match repo::insert_image(
                     &self.pool,
                     folder_id,
                     &path_str,
@@ -207,7 +207,7 @@ impl Indexer {
                     }
                 };
 
-                if let Err(e) = db::enqueue_image(&self.pool, image_id).await {
+                if let Err(e) = crate::pipeline::queue::enqueue_image(&self.pool, image_id).await {
                     error!("Failed to enqueue image {}: {}", image_id, e);
                 }
                 self.preview.enqueue_low(image_id);
@@ -223,7 +223,7 @@ impl Indexer {
             Some(existing) => {
                 if mtime == existing.mtime && file_size == existing.file_size {
                     if existing.deleted_at.is_some() {
-                        let _ = db::clear_image_deleted(&self.pool, existing.id).await;
+                        let _ = repo::clear_image_deleted(&self.pool, existing.id).await;
                         let _ = self.app.emit(
                             "image_added",
                             crate::models::ImageAddedPayload {
@@ -252,7 +252,7 @@ impl Indexer {
 
                 if hash == existing.file_hash {
                     let _ =
-                        db::update_image_metadata(&self.pool, existing.id, file_size, mtime).await;
+                        repo::update_image_metadata(&self.pool, existing.id, file_size, mtime).await;
                     if existing.deleted_at.is_some() {
                         let _ = self.app.emit(
                             "image_added",
@@ -263,7 +263,7 @@ impl Indexer {
                         );
                     }
                 } else {
-                    let _ = db::update_image_hash_changed(
+                    let _ = repo::update_image_hash_changed(
                         &self.pool,
                         existing.id,
                         &hash,
@@ -271,7 +271,7 @@ impl Indexer {
                         mtime,
                     )
                     .await;
-                    if let Err(e) = db::enqueue_image(&self.pool, existing.id).await {
+                    if let Err(e) = crate::pipeline::queue::enqueue_image(&self.pool, existing.id).await {
                         error!("Failed to enqueue image {}: {}", existing.id, e);
                     }
                     self.preview.enqueue_low(existing.id);
@@ -306,7 +306,7 @@ impl Indexer {
             })
             .collect();
 
-        let db_images = match db::get_all_images_for_rescan(&self.pool).await {
+        let db_images = match repo::get_all_images_for_rescan(&self.pool).await {
             Ok(imgs) => imgs,
             Err(e) => {
                 error!("Rescan: failed to load DB images: {}", e);
@@ -314,7 +314,7 @@ impl Indexer {
             }
         };
 
-        let mut db_map: HashMap<String, db::DbImage> = HashMap::with_capacity(db_images.len());
+        let mut db_map: HashMap<String, DbImage> = HashMap::with_capacity(db_images.len());
         for img in db_images {
             db_map.insert(img.path.clone(), img);
         }
@@ -326,7 +326,7 @@ impl Indexer {
 
         for (path, img) in &db_map {
             if img.deleted_at.is_none() && !disk_set.contains(path.as_str()) {
-                let _ = db::soft_delete_image_by_id(&self.pool, img.id).await;
+                let _ = repo::soft_delete_image_by_id(&self.pool, img.id).await;
             }
         }
 
@@ -352,7 +352,7 @@ impl Indexer {
     }
 
     pub async fn add_folder(&self, path: String) -> Result<crate::models::FolderWithCount> {
-        let folder_id = db::insert_folder(&self.pool, &path).await?;
+        let folder_id = repo::insert_folder(&self.pool, &path).await?;
 
         {
             let mut w = self.watcher.lock().await;
@@ -363,7 +363,7 @@ impl Indexer {
 
         self.sync_folder_map().await;
 
-        let folders = db::list_folders_with_counts(&self.pool).await?;
+        let folders = repo::list_folders_with_counts(&self.pool).await?;
         folders
             .into_iter()
             .find(|f| f.id == folder_id)
@@ -383,14 +383,14 @@ impl Indexer {
     }
 
     pub async fn remove_folder(&self, id: i64) -> Result<()> {
-        let folders = db::list_folders_with_counts(&self.pool).await?;
+        let folders = repo::list_folders_with_counts(&self.pool).await?;
         if let Some(folder) = folders.iter().find(|f| f.id == id) {
             let path = PathBuf::from(&folder.path);
             let mut w = self.watcher.lock().await;
             let _ = w.unwatch(&path);
         }
 
-        db::delete_folder(&self.pool, id).await?;
+        repo::delete_folder(&self.pool, id).await?;
         self.sync_folder_map().await;
         Ok(())
     }
@@ -406,7 +406,7 @@ impl Indexer {
                 }
                 DebouncedEventKind::Remove => {
                     let path_str = event.path.to_string_lossy().to_string();
-                    if db::soft_delete_image(&self.pool, &path_str).await.is_ok() {
+                    if repo::soft_delete_image(&self.pool, &path_str).await.is_ok() {
                         let _ = self.app.emit(
                             "image_removed",
                             crate::models::ImageRemovedPayload { path: path_str },
@@ -432,13 +432,13 @@ impl Indexer {
             _ => return,
         };
 
-        let db_map = db::get_all_images_for_rescan(&self.pool)
+        let db_map = repo::get_all_images_for_rescan(&self.pool)
             .await
             .ok()
             .map(|imgs| {
                 imgs.into_iter()
                     .map(|i| (i.path.clone(), i))
-                    .collect::<HashMap<String, db::DbImage>>()
+                    .collect::<HashMap<String, DbImage>>()
             })
             .unwrap_or_default();
 
@@ -447,9 +447,9 @@ impl Indexer {
             let known = db_map.get(&path_str).cloned();
             self.process_file(path, folder_id, known).await;
             if (i + 1) % 10 == 0 {
-                crate::embedder::emit_progress(&self.pool, &self.app, 0.0).await;
+                crate::search::math::emit_progress(&self.pool, &self.app, 0.0).await;
             }
         }
-        crate::embedder::emit_progress(&self.pool, &self.app, 0.0).await;
+        crate::search::math::emit_progress(&self.pool, &self.app, 0.0).await;
     }
 }

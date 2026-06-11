@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use log::{info, warn, error, debug};
 
-use crate::indexer::Indexer;
+use crate::library::indexer::Indexer;
 use crate::models::{DebouncedEvent, DebouncedEventKind};
 
 pub struct FolderWatcher {
