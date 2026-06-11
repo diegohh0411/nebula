@@ -3,6 +3,7 @@
 //! modules (TT-63). `legacy` shrinks to empty and is deleted in the final task.
 mod legacy;
 pub use legacy::*;
+pub(crate) use legacy::matches_tokens;
 
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};

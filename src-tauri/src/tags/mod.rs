@@ -1,1 +1,2 @@
-//! Tags slice: subject tagging.
+pub mod commands;
+pub mod repo;
