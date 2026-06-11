@@ -57,8 +57,8 @@
           [routerLink]="['/subject', subject.id]"
           data-testid="subject-link"
         >
-          @if (faceCropUrls()[subject.id]) {
-            <img [src]="faceCropUrls()[subject.id]" alt="Face Crop" loading="lazy" decoding="async" class="w-full h-full object-cover" />
+          @if (faceCropUrls().get(subject.id); as crop) {
+            <img [src]="crop" alt="Face Crop" loading="lazy" decoding="async" class="w-full h-full object-cover" />
           } @else {
             <span class="text-4xl text-muted-foreground">👤</span>
           }

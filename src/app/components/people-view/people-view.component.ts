@@ -17,7 +17,8 @@ const FACE_CROP_CACHE_CAP = 200;
 })
 export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
   protected photoService = inject(PhotoService);
-  protected faceCropUrls = signal<Record<number, string>>({});
+  // Map preserves insertion order, enabling O(1) recency-based (LRU) eviction.
+  protected faceCropUrls = signal<Map<number, string>>(new Map());
   protected mergeSuggestions = signal<MergeSuggestion[]>([]);
   protected suggestionCropUrls = signal<Record<number, string>>({});
   protected reviewingSuggestion = signal<MergeSuggestion | null>(null);
@@ -70,12 +71,12 @@ export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
     const cards = this.host.nativeElement.querySelectorAll('[data-subject-id]') as NodeListOf<HTMLElement>;
     cards.forEach((el: HTMLElement) => {
       const subjectId = Number(el.dataset['subjectId']);
-      if (!loaded[subjectId]) this.observer!.observe(el);
+      if (!loaded.has(subjectId)) this.observer!.observe(el);
     });
   }
 
   private async loadFaceCropForSubject(subjectId: number): Promise<void> {
-    if (this.faceCropUrls()[subjectId]) return;
+    if (this.faceCropUrls().has(subjectId)) return;
     const subject = this.photoService.subjects().find(s => s.id === subjectId);
     if (!subject?.thumbnail_face_id) return;
     try {
@@ -83,7 +84,9 @@ export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
       const url = this.photoService.thumbnailUrl(path);
       if (url) {
         this.faceCropUrls.update(urls => {
-          const next = { ...urls, [subjectId]: url };
+          const next = new Map(urls);
+          next.delete(subjectId);   // re-insert so it becomes most-recently-used
+          next.set(subjectId, url);
           return this.withCap(next);
         });
       }
@@ -92,14 +95,14 @@ export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  private withCap(urls: Record<number, string>): Record<number, string> {
-    const keys = Object.keys(urls);
-    if (keys.length <= FACE_CROP_CACHE_CAP) return urls;
-    const trimmed: Record<number, string> = {};
-    for (const k of keys.slice(keys.length - FACE_CROP_CACHE_CAP)) {
-      trimmed[Number(k)] = urls[Number(k)];
+  private withCap(urls: Map<number, string>): Map<number, string> {
+    // Evict oldest entries (front of insertion order) until within cap.
+    while (urls.size > FACE_CROP_CACHE_CAP) {
+      const oldest = urls.keys().next().value;
+      if (oldest === undefined) break;
+      urls.delete(oldest);
     }
-    return trimmed;
+    return urls;
   }
 
   private async loadMergeSuggestions() {
@@ -137,7 +140,7 @@ export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
 
   async onConfirmed() {
     this.reviewingSuggestion.set(null);
-    this.faceCropUrls.set({});
+    this.faceCropUrls.set(new Map());
     await Promise.all([this.photoService.loadSubjects(), this.loadMergeSuggestions()]);
   }
 
@@ -155,7 +158,7 @@ export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
 
   protected getThumbUrl(subject: Subject): string | null {
     if (!subject.thumbnail_face_id) return null;
-    return this.suggestionCropUrls()[subject.thumbnail_face_id] ?? this.faceCropUrls()[subject.id] ?? null;
+    return this.suggestionCropUrls()[subject.thumbnail_face_id] ?? this.faceCropUrls().get(subject.id) ?? null;
   }
 
   protected async onNameCommit(subject: Subject, value: string): Promise<void> {
@@ -207,7 +210,7 @@ export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
 
   protected onConflictConfirmed(): void {
     this.namingConflict.set(null);
-    this.faceCropUrls.set({});
+    this.faceCropUrls.set(new Map());
     void Promise.all([this.photoService.loadSubjects(), this.loadMergeSuggestions()]);
   }
 
