@@ -1,6 +1,7 @@
 # Processing Label: Reliable Speed + ETA
 
 **Date:** 2026-06-11
+**Task:** TT-64
 **Status:** Approved design
 **Area:** Pipeline throughput stats (Rust/Tauri backend + Angular frontend)
 
