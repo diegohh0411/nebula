@@ -949,6 +949,92 @@ pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<V
         .collect())
 }
 
+/// Standalone find-or-create (used by the /tags view's inline create).
+pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {
+    let display = name.trim();
+    let norm = normalize(name);
+    if norm.is_empty() {
+        anyhow::bail!("Tag name cannot be empty");
+    }
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO tags (name, name_normalized, added_at) VALUES (?, ?, ?) ON CONFLICT(name_normalized) DO NOTHING")
+        .bind(display).bind(&norm).bind(now)
+        .execute(pool).await?;
+    let row = sqlx::query("SELECT id, name, added_at FROM tags WHERE name_normalized = ?")
+        .bind(&norm).fetch_one(pool).await?;
+    Ok(Tag { id: row.get("id"), name: row.get("name"), added_at: row.get("added_at") })
+}
+
+pub async fn add_subject_tag(pool: &SqlitePool, subject_id: i64, name: &str) -> Result<Tag> {
+    let tag = create_tag(pool, name).await?;
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT OR IGNORE INTO subject_tags (subject_id, tag_id, added_at) VALUES (?, ?, ?)")
+        .bind(subject_id).bind(tag.id).bind(now)
+        .execute(pool).await?;
+    Ok(tag)
+}
+
+pub async fn remove_subject_tag(pool: &SqlitePool, subject_id: i64, tag_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM subject_tags WHERE subject_id = ? AND tag_id = ?")
+        .bind(subject_id).bind(tag_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_subject_tags(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Tag>> {
+    let rows = sqlx::query(
+        "SELECT t.id, t.name, t.added_at FROM tags t
+         JOIN subject_tags st ON st.tag_id = t.id
+         WHERE st.subject_id = ? ORDER BY t.name COLLATE NOCASE")
+        .bind(subject_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| Tag { id: r.get("id"), name: r.get("name"), added_at: r.get("added_at") }).collect())
+}
+
+pub async fn list_tags_with_counts(pool: &SqlitePool) -> Result<Vec<TagWithCount>> {
+    let rows = sqlx::query(
+        "SELECT t.id, t.name, t.added_at, COUNT(st.subject_id) AS subject_count
+         FROM tags t LEFT JOIN subject_tags st ON st.tag_id = t.id
+         GROUP BY t.id ORDER BY t.name COLLATE NOCASE")
+        .fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| TagWithCount {
+        id: r.get("id"), name: r.get("name"), added_at: r.get("added_at"),
+        subject_count: r.get("subject_count"),
+    }).collect())
+}
+
+pub async fn rename_tag(pool: &SqlitePool, tag_id: i64, name: &str) -> Result<()> {
+    let display = name.trim();
+    let norm = normalize(name);
+    if norm.is_empty() {
+        anyhow::bail!("Tag name cannot be empty");
+    }
+    let collision = sqlx::query("SELECT id FROM tags WHERE name_normalized = ? AND id != ?")
+        .bind(&norm).bind(tag_id).fetch_optional(pool).await?;
+    if collision.is_some() {
+        anyhow::bail!("A tag with that name already exists");
+    }
+    sqlx::query("UPDATE tags SET name = ?, name_normalized = ? WHERE id = ?")
+        .bind(display).bind(&norm).bind(tag_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete_tag(pool: &SqlitePool, tag_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM tags WHERE id = ?").bind(tag_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_subjects_for_tag(pool: &SqlitePool, tag_id: i64) -> Result<Vec<Subject>> {
+    let rows = sqlx::query(
+        "SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at
+         FROM subjects s JOIN subject_tags st ON st.subject_id = s.id
+         WHERE st.tag_id = ? ORDER BY s.name COLLATE NOCASE")
+        .bind(tag_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| Subject {
+        id: r.get("id"), name: r.get("name"),
+        thumbnail_face_id: r.get("thumbnail_face_id"),
+        subject_type: r.get("type"), added_at: r.get("added_at"),
+    }).collect())
+}
+
 pub async fn get_image_ids_for_subjects(pool: &SqlitePool, subject_ids: &[i64]) -> Result<Vec<i64>> {
     if subject_ids.is_empty() {
         return Ok(vec![]);
@@ -2325,5 +2411,48 @@ mod tests {
         assert_eq!(normalize("  Über  "), "uber");
         assert_eq!(normalize("plain"), "plain");
         assert_eq!(normalize(""), "");
+    }
+
+    #[tokio::test]
+    async fn test_tag_crud() {
+        let dir = std::env::temp_dir().join(format!("nebula_tagcrud_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        // insert two subjects for FK references
+        let s1: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        let s2: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // find-or-create dedups on normalized name, keeps first display name
+        let t1 = add_subject_tag(&pool, s1, "Cabaña-21").await.unwrap();
+        let t2 = add_subject_tag(&pool, s2, "cabana-21").await.unwrap();
+        assert_eq!(t1.id, t2.id);
+        assert_eq!(t2.name, "Cabaña-21");
+
+        // adding same tag to same subject twice is idempotent
+        add_subject_tag(&pool, s1, "cabaña-21").await.unwrap();
+        let tags = get_subject_tags(&pool, s1).await.unwrap();
+        assert_eq!(tags.len(), 1);
+
+        // list with counts
+        let all = list_tags_with_counts(&pool).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].subject_count, 2);
+
+        // empty name rejected
+        assert!(add_subject_tag(&pool, s1, "   ").await.is_err());
+
+        // rename + collision
+        let other = add_subject_tag(&pool, s1, "cabin-3").await.unwrap();
+        assert!(rename_tag(&pool, other.id, "CABAÑA-21").await.is_err());
+        rename_tag(&pool, other.id, "cabin-4").await.unwrap();
+
+        // remove junction, then delete tag entirely
+        remove_subject_tag(&pool, s2, t1.id).await.unwrap();
+        assert_eq!(list_tags_with_counts(&pool).await.unwrap().iter().find(|t| t.id == t1.id).unwrap().subject_count, 1);
+        delete_tag(&pool, t1.id).await.unwrap();
+        assert!(get_subject_tags(&pool, s1).await.unwrap().iter().all(|t| t.id != t1.id));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
