@@ -1022,6 +1022,56 @@ pub async fn delete_tag(pool: &SqlitePool, tag_id: i64) -> Result<()> {
     Ok(())
 }
 
+pub async fn search_subjects_matching(pool: &SqlitePool, query: &str) -> Result<Vec<SubjectMatch>> {
+    let q = normalize(query);
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut matched: Vec<Subject> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // name matches — fetch all named subjects, filter in Rust
+    let rows = sqlx::query("SELECT id, name, thumbnail_face_id, type, added_at FROM subjects WHERE name IS NOT NULL")
+        .fetch_all(pool).await?;
+    for r in rows {
+        let name: String = r.get("name");
+        if normalize(&name).contains(&q) {
+            let s = Subject {
+                id: r.get("id"), name: Some(name),
+                thumbnail_face_id: r.get("thumbnail_face_id"),
+                subject_type: r.get("type"), added_at: r.get("added_at"),
+            };
+            if seen.insert(s.id) { matched.push(s); }
+        }
+    }
+
+    // tag matches — tags.name_normalized is already normalized
+    let like = format!("%{}%", q);
+    let rows = sqlx::query(
+        "SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at
+         FROM subjects s
+         JOIN subject_tags st ON st.subject_id = s.id
+         JOIN tags t ON t.id = st.tag_id
+         WHERE t.name_normalized LIKE ?")
+        .bind(&like).fetch_all(pool).await?;
+    for r in rows {
+        let s = Subject {
+            id: r.get("id"), name: r.get("name"),
+            thumbnail_face_id: r.get("thumbnail_face_id"),
+            subject_type: r.get("type"), added_at: r.get("added_at"),
+        };
+        if seen.insert(s.id) { matched.push(s); }
+    }
+
+    matched.truncate(20);
+    let mut out = Vec::with_capacity(matched.len());
+    for s in matched {
+        let tags = get_subject_tags(pool, s.id).await?;
+        out.push(SubjectMatch { subject: s, tags });
+    }
+    Ok(out)
+}
+
 pub async fn get_subjects_for_tag(pool: &SqlitePool, tag_id: i64) -> Result<Vec<Subject>> {
     let rows = sqlx::query(
         "SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at
@@ -2411,6 +2461,39 @@ mod tests {
         assert_eq!(normalize("  Über  "), "uber");
         assert_eq!(normalize("plain"), "plain");
         assert_eq!(normalize(""), "");
+    }
+
+    #[tokio::test]
+    async fn test_search_subjects_matching() {
+        let dir = std::env::temp_dir().join(format!("nebula_subjtag_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        let jose: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('José', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        let maria: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Maria', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        add_subject_tag(&pool, maria, "Cabaña-21").await.unwrap();
+
+        // accent-insensitive name match
+        let hits = search_subjects_matching(&pool, "jose").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject.name.as_deref(), Some("José"));
+
+        // tag match returns the tagged subject, with tags populated
+        let hits = search_subjects_matching(&pool, "cabana").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject.name.as_deref(), Some("Maria"));
+        assert_eq!(hits[0].tags[0].name, "Cabaña-21");
+
+        // a query matching BOTH name and tag dedups by subject id
+        let hits = search_subjects_matching(&pool, "maria").await.unwrap();
+        assert_eq!(hits.len(), 1);
+
+        // no match -> empty
+        assert!(search_subjects_matching(&pool, "zzz").await.unwrap().is_empty());
+
+        // suppress unused variable warning
+        let _ = jose;
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
