@@ -1,0 +1,29 @@
+@if (isEditing()) {
+  <input
+    #inputEl
+    type="text"
+    [class]="displayClass + ' border-b border-primary outline-none bg-transparent py-0.5'"
+    [value]="draft()"
+    (input)="draft.set($any($event.target).value)"
+    (keydown)="onKeydown($event)"
+    (blur)="onBlur()"
+  />
+} @else if (value) {
+  <span
+    [class]="displayClass + ' cursor-text'"
+    role="button"
+    tabindex="0"
+    (click)="startEdit()"
+    (keydown.enter)="startEdit()"
+    (keydown.space)="startEdit()"
+  >{{ value }}</span>
+} @else {
+  <span
+    [class]="placeholderClass + ' cursor-text select-none'"
+    role="button"
+    tabindex="0"
+    (click)="startEdit()"
+    (keydown.enter)="startEdit()"
+    (keydown.space)="startEdit()"
+  >{{ placeholder }}</span>
+}

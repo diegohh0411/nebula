@@ -51,47 +51,31 @@
 
   <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
     @for (subject of photoService.subjects(); track subject.id) {
-      <a
-        class="group cursor-pointer flex flex-col items-center gap-3 transition-transform hover:scale-105"
-        [routerLink]="['/subject', subject.id]"
-        data-testid="subject-link"
-      >
-        <div class="w-32 h-32 rounded-full overflow-hidden border-2 border-border group-hover:border-accent bg-muted flex items-center justify-center transition-colors">
+      <div class="group flex flex-col items-center gap-3 transition-transform hover:scale-105">
+        <a
+          class="w-32 h-32 rounded-full overflow-hidden border-2 border-border group-hover:border-accent bg-muted flex items-center justify-center transition-colors"
+          [routerLink]="['/subject', subject.id]"
+          data-testid="subject-link"
+        >
           @if (faceCropUrls()[subject.id]) {
             <img [src]="faceCropUrls()[subject.id]" alt="Face Crop" loading="lazy" decoding="async" class="w-full h-full object-cover" />
           } @else {
             <span class="text-4xl text-muted-foreground">👤</span>
           }
-        </div>
+        </a>
 
-        <div class="text-center h-6 flex items-center justify-center">
-          @if (subject.name) {
-            <span class="font-medium block">{{ subject.name }}</span>
-          } @else if (editingSubjectId() === subject.id) {
-            <input
-              #nameInput
-              data-testid="name-input"
-              class="w-28 text-center text-sm border border-border rounded px-2 py-0.5 focus:outline-none focus:border-accent bg-background"
-              [value]="editingName()"
-              (input)="editingName.set($any($event.target).value)"
-              (keydown)="onKeydown($event, subject)"
-              (blur)="commitName(subject)"
-              (click)="$event.stopPropagation()"
-              autofocus
-            />
-          } @else {
-            <span
-              data-testid="add-name-hint"
-              class="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 cursor-pointer transition-opacity select-none"
-              role="button"
-              tabindex="0"
-              (click)="startEditing(subject, $event)"
-              (keydown.enter)="startEditing(subject, $event)"
-              (keydown.space)="startEditing(subject, $event)"
-            >+ Add a name</span>
-          }
+        <div class="h-6 flex items-center justify-center">
+          <app-editable-text
+            [value]="subject.name"
+            placeholder="+ Add a name"
+            placeholderClass="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+            displayClass="text-sm font-medium text-center w-28 block truncate"
+            [startEditing]="editingSubjectId() === subject.id"
+            (commit)="onNameCommit(subject, $event)"
+            (tabbed)="onNameTab(subject)"
+          />
         </div>
-      </a>
+      </div>
     } @empty {
       <div class="col-span-full py-20 text-center text-muted-foreground">
         <p class="text-lg mb-2">No subjects discovered yet.</p>
