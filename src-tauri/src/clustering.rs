@@ -789,20 +789,20 @@ mod tests {
         // Regression for TT-57. A named subject that owns more than K_NEAREST
         // near-duplicate faces must not crowd a genuine cross-subject neighbor
         // out of the mutual-kNN graph. Before the subject-aware neighbor filter,
-        // every top-K_NEAREST list for a "Diego" face was saturated with other
-        // Diego faces, so the bridge edge to the unnamed duplicate subject never
+        // every top-K_NEAREST list for an "Alex" face was saturated with other
+        // Alex faces, so the bridge edge to the unnamed duplicate subject never
         // formed and no merge suggestion was produced — exactly the bug the user
         // hit after processing 200 photos.
         let pool = make_integration_pool().await;
 
-        let diego: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('Diego', 'person', 0) RETURNING id"
+        let alex: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alex', 'person', 0) RETURNING id"
         ).fetch_one(&pool).await.unwrap();
 
-        // Six tightly-clustered Diego faces (> K_NEAREST = 5). Every pair is more
+        // Six tightly-clustered Alex faces (> K_NEAREST = 5). Every pair is more
         // similar to each other (cos ~0.999) than any is to the duplicate below
         // (cos ~0.99), so the duplicate lands just outside each face's top-5.
-        let diego_vectors = [
+        let alex_vectors = [
             unit(&[1.0, 0.00, 0.00]),
             unit(&[1.0, 0.02, 0.00]),
             unit(&[1.0, 0.04, 0.00]),
@@ -810,17 +810,17 @@ mod tests {
             unit(&[1.0, 0.00, 0.04]),
             unit(&[1.0, 0.02, 0.02]),
         ];
-        for v in &diego_vectors {
+        for v in &alex_vectors {
             let fid: i64 = sqlx::query_scalar(
                 "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
-            ).bind(diego).fetch_one(&pool).await.unwrap();
+            ).bind(alex).fetch_one(&pool).await.unwrap();
             sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
                 .bind(fid).bind(emb_bytes(v)).execute(&pool).await.unwrap();
         }
 
         // A second, *unnamed* subject that is clearly the same person (cos ~0.99
-        // to every Diego face, well above TAU_SIM) but sits outside each Diego
-        // face's top-5 because the six Diego faces are nearer to one another.
+        // to every Alex face, well above TAU_SIM) but sits outside each Alex
+        // face's top-5 because the six Alex faces are nearer to one another.
         let dup: i64 = sqlx::query_scalar(
             "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
         ).fetch_one(&pool).await.unwrap();
@@ -835,7 +835,7 @@ mod tests {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1,
-            "named Diego subject must be suggested for merge with its unnamed duplicate despite top-k crowding");
+            "named Alex subject must be suggested for merge with its unnamed duplicate despite top-k crowding");
     }
 
     #[tokio::test]
@@ -847,12 +847,12 @@ mod tests {
         // AssignAll would silently stop firing and faces would pile up as noise.
         let pool = make_integration_pool().await;
 
-        let diego: i64 = sqlx::query_scalar(
-            "INSERT INTO subjects (name, type, added_at) VALUES ('Diego', 'person', 0) RETURNING id"
+        let alex: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alex', 'person', 0) RETURNING id"
         ).fetch_one(&pool).await.unwrap();
 
-        // Six tightly-clustered assigned Diego faces (> K_NEAREST = 5).
-        let diego_vectors = [
+        // Six tightly-clustered assigned Alex faces (> K_NEAREST = 5).
+        let alex_vectors = [
             unit(&[1.0, 0.00, 0.00]),
             unit(&[1.0, 0.02, 0.00]),
             unit(&[1.0, 0.04, 0.00]),
@@ -860,15 +860,15 @@ mod tests {
             unit(&[1.0, 0.00, 0.04]),
             unit(&[1.0, 0.02, 0.02]),
         ];
-        for v in &diego_vectors {
+        for v in &alex_vectors {
             let fid: i64 = sqlx::query_scalar(
                 "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
-            ).bind(diego).fetch_one(&pool).await.unwrap();
+            ).bind(alex).fetch_one(&pool).await.unwrap();
             sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
                 .bind(fid).bind(emb_bytes(v)).execute(&pool).await.unwrap();
         }
 
-        // A brand-new *unassigned* face sitting inside the Diego cluster.
+        // A brand-new *unassigned* face sitting inside the Alex cluster.
         let orphan: i64 = sqlx::query_scalar(
             "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, NULL, 0) RETURNING id"
         ).fetch_one(&pool).await.unwrap();
@@ -879,7 +879,7 @@ mod tests {
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(orphan).fetch_one(&pool).await.unwrap();
-        assert_eq!(assigned, Some(diego),
+        assert_eq!(assigned, Some(alex),
             "unassigned face inside a crowded subject's cluster must be assigned to that subject");
     }
 }
