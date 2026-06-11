@@ -97,6 +97,21 @@ CREATE TABLE IF NOT EXISTS faces (
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
 CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);
 
+CREATE TABLE IF NOT EXISTS tags (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    name_normalized TEXT NOT NULL UNIQUE,
+    added_at        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS subject_tags (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    added_at   INTEGER NOT NULL,
+    PRIMARY KEY (subject_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subject_tags_tag ON subject_tags(tag_id);
+
 CREATE TABLE IF NOT EXISTS face_corrections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
