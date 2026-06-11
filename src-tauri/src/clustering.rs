@@ -837,4 +837,49 @@ mod tests {
         assert_eq!(count, 1,
             "named Diego subject must be suggested for merge with its unnamed duplicate despite top-k crowding");
     }
+
+    #[tokio::test]
+    async fn unassigned_face_still_assigned_to_crowded_subject() {
+        // Guards the `None => true` pass-through in build_subject_aware_knn: the
+        // subject filter must NOT apply to unassigned faces. An unlabeled face
+        // sitting inside a dominant subject's tight cluster must still be
+        // assigned to that subject — if the filter wrongly dropped these edges,
+        // AssignAll would silently stop firing and faces would pile up as noise.
+        let pool = make_integration_pool().await;
+
+        let diego: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Diego', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        // Six tightly-clustered assigned Diego faces (> K_NEAREST = 5).
+        let diego_vectors = [
+            unit(&[1.0, 0.00, 0.00]),
+            unit(&[1.0, 0.02, 0.00]),
+            unit(&[1.0, 0.04, 0.00]),
+            unit(&[1.0, 0.00, 0.02]),
+            unit(&[1.0, 0.00, 0.04]),
+            unit(&[1.0, 0.02, 0.02]),
+        ];
+        for v in &diego_vectors {
+            let fid: i64 = sqlx::query_scalar(
+                "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
+            ).bind(diego).fetch_one(&pool).await.unwrap();
+            sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+                .bind(fid).bind(emb_bytes(v)).execute(&pool).await.unwrap();
+        }
+
+        // A brand-new *unassigned* face sitting inside the Diego cluster.
+        let orphan: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, NULL, 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(orphan).bind(emb_bytes(&unit(&[1.0, 0.03, 0.01]))).execute(&pool).await.unwrap();
+
+        cluster_unassigned_faces(&pool).await.unwrap();
+
+        let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+            .bind(orphan).fetch_one(&pool).await.unwrap();
+        assert_eq!(assigned, Some(diego),
+            "unassigned face inside a crowded subject's cluster must be assigned to that subject");
+    }
 }
