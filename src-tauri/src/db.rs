@@ -1022,6 +1022,28 @@ pub async fn delete_tag(pool: &SqlitePool, tag_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// Images containing faces of subjects whose tag matches `query`,
+/// ordered by how many distinct tagged subjects appear in each image (desc),
+/// then date_taken desc. Soft-deleted images excluded.
+pub async fn get_tag_image_ids_ordered(pool: &SqlitePool, query: &str) -> Result<Vec<i64>> {
+    let q = normalize(query).replace(' ', "%");
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    let like = format!("%{}%", q);
+    let rows = sqlx::query(
+        "SELECT f.image_id
+         FROM faces f
+         JOIN subject_tags st ON st.subject_id = f.subject_id
+         JOIN tags t ON t.id = st.tag_id
+         JOIN images i ON i.id = f.image_id
+         WHERE t.name_normalized LIKE ? AND i.deleted_at IS NULL
+         GROUP BY f.image_id
+         ORDER BY COUNT(DISTINCT f.subject_id) DESC, MAX(i.date_taken) DESC")
+        .bind(&like).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| r.get("image_id")).collect())
+}
+
 pub async fn search_subjects_matching(pool: &SqlitePool, query: &str) -> Result<Vec<SubjectMatch>> {
     let q = normalize(query);
     if q.is_empty() {
@@ -2452,6 +2474,43 @@ mod tests {
         let (path, bbox) = get_face_with_image(&pool, fid).await.unwrap().unwrap();
         assert_eq!(path, "/tmp/x.jpg");
         assert!((bbox.0 - 0.1).abs() < 1e-9 && (bbox.3 - 0.4).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn test_tag_image_ids_ordered_by_subject_count() {
+        let dir = std::env::temp_dir().join(format!("nebula_tagimgs_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        let folder_id = insert_folder(&pool, "/tmp/tag_test").await.unwrap();
+        // images: A (2 tagged subjects), B (1 tagged subject), C (no tagged), D (deleted)
+        let img_a = insert_image(&pool, folder_id, "/tmp/tag_test/a.jpg", "ha", 1, 1).await.unwrap();
+        let img_b = insert_image(&pool, folder_id, "/tmp/tag_test/b.jpg", "hb", 1, 1).await.unwrap();
+        let img_c = insert_image(&pool, folder_id, "/tmp/tag_test/c.jpg", "hc", 1, 1).await.unwrap();
+        let img_d = insert_image(&pool, folder_id, "/tmp/tag_test/d.jpg", "hd", 1, 1).await.unwrap();
+        // soft-delete D
+        sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?").bind(img_d).execute(&pool).await.unwrap();
+
+        let s1: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Sub1', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        let s2: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Sub2', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // insert faces: A has s1 and s2, B has s1, C has no face, D has s1 and s2 (but deleted)
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_a).bind(s1).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_a).bind(s2).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_b).bind(s1).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_d).bind(s1).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_d).bind(s2).execute(&pool).await.unwrap();
+
+        // tag both subjects "cabin-9"
+        add_subject_tag(&pool, s1, "cabin-9").await.unwrap();
+        add_subject_tag(&pool, s2, "cabin-9").await.unwrap();
+
+        let ids = get_tag_image_ids_ordered(&pool, "cabin 9").await.unwrap();
+        // A first (2 tagged subjects), B second (1), C absent, D (deleted) absent
+        assert_eq!(ids, vec![img_a, img_b]);
+
+        let _ = img_c;
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
