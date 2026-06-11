@@ -75,6 +75,21 @@ export interface Subject {
   added_at: number;
 }
 
+export interface Tag {
+  id: number;
+  name: string;
+  added_at: number;
+}
+
+export interface TagWithCount extends Tag {
+  subject_count: number;
+}
+
+export interface SubjectMatch {
+  subject: Subject;
+  tags: Tag[];
+}
+
 export interface Face {
   id: number;
   image_id: number;
