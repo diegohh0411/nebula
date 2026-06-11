@@ -140,13 +140,7 @@ pub use crate::tags::repo::{
     get_subjects_for_tag, get_image_ids_for_subjects,
 };
 
-pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT value FROM settings WHERE key = ?")
-        .bind(key)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.map(|r| r.get("value")))
-}
+pub use crate::settings::repo::get_setting;
 
 #[cfg(test)]
 mod tests {

@@ -1,3 +1,3 @@
-//! Settings slice: app + model configuration.
 pub mod commands;
+pub mod repo;
 pub use commands::*;
