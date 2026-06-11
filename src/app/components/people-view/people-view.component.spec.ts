@@ -48,57 +48,53 @@ describe('PeopleViewComponent — inline naming', () => {
     vi.spyOn(photoService, 'getFaceCrop').mockResolvedValue('');
   });
 
-  it('calls nameSubject with id and trimmed name when Enter is pressed', async () => {
-    photoService.subjects.set([makeSubject(1, null)]);
+  it('calls nameSubject with id and name when onNameCommit is invoked', async () => {
+    const subject = makeSubject(1, null);
+    photoService.subjects.set([subject]);
     vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
     fixture.detectChanges();
 
-    const hint = fixture.debugElement.query(By.css('[data-testid="add-name-hint"]'));
-    hint.triggerEventHandler('click', new MouseEvent('click'));
-    fixture.detectChanges();
-
-    component.editingName.set('  Alice  ');
-    fixture.detectChanges();
-
-    const input = fixture.debugElement.query(By.css('[data-testid="name-input"]'));
-    input.triggerEventHandler('keydown', new KeyboardEvent('keydown', { key: 'Enter' }));
-    await fixture.whenStable();
+    await component['onNameCommit'](subject, 'Alice');
 
     expect(photoService.nameSubject).toHaveBeenCalledWith(1, 'Alice');
   });
 
+  it('calls nameSubject with null when empty string is committed (name removal)', async () => {
+    const subject = makeSubject(1, 'Alice');
+    photoService.subjects.set([subject]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
+    fixture.detectChanges();
+
+    await component['onNameCommit'](subject, '');
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, null);
+  });
+
   it('shows name on card immediately before nameSubject resolves (optimistic update)', async () => {
-    photoService.subjects.set([makeSubject(1, null)]);
+    const subject = makeSubject(1, null);
+    photoService.subjects.set([subject]);
     let resolve!: (v: { duplicate_subject_id: null }) => void;
     vi.spyOn(photoService, 'nameSubject').mockReturnValue(
       new Promise(r => { resolve = r; })
     );
     fixture.detectChanges();
 
-    const hint = fixture.debugElement.query(By.css('[data-testid="add-name-hint"]'));
-    hint.triggerEventHandler('click', new MouseEvent('click'));
-    fixture.detectChanges();
+    void component['onNameCommit'](subject, 'Alice');
 
-    component.editingName.set('Alice');
-    const input = fixture.debugElement.query(By.css('[data-testid="name-input"]'));
-    input.triggerEventHandler('keydown', new KeyboardEvent('keydown', { key: 'Enter' }));
-    fixture.detectChanges();
-
-    // Name is visible before service resolves
     expect(photoService.subjects()[0].name).toBe('Alice');
     resolve({ duplicate_subject_id: null });
   });
 
-  it('clicking the card link does not enter editing mode', () => {
+  it('avatar link exists as a standalone anchor separate from the name edit area', () => {
     photoService.subjects.set([makeSubject(1, null)]);
     vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
     fixture.detectChanges();
 
-    const cardLink = fixture.debugElement.query(By.css('a[data-testid="subject-link"]'));
-    cardLink.triggerEventHandler('click', new MouseEvent('click', { bubbles: true }));
-    fixture.detectChanges();
-
-    expect(component.editingSubjectId()).toBeNull();
+    const link = fixture.debugElement.query(By.css('a[data-testid="subject-link"]'));
+    expect(link).not.toBeNull();
+    // EditableText is not a child of the anchor — name edits don't trigger navigation
+    const editableInsideLink = link.query(By.css('app-editable-text'));
+    expect(editableInsideLink).toBeNull();
   });
 });
 
@@ -133,9 +129,7 @@ describe('PeopleViewComponent — name conflict', () => {
     vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 2 });
 
     fixture.detectChanges();
-    component.editingSubjectId.set(1);
-    component.editingName.set('Emma');
-    await component['commitName'](current);
+    await component['onNameCommit'](current, 'Emma');
 
     const conflict = component['namingConflict']();
     expect(conflict).not.toBeNull();
@@ -151,9 +145,7 @@ describe('PeopleViewComponent — name conflict', () => {
     vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 99 });
 
     fixture.detectChanges();
-    component.editingSubjectId.set(1);
-    component.editingName.set('Emma');
-    await component['commitName'](current);
+    await component['onNameCommit'](current, 'Emma');
 
     expect(component['namingConflict']()).toBeNull();
     expect(component['_originalSubjects'].has(1)).toBe(false);
@@ -184,28 +176,26 @@ describe('PeopleViewComponent — Tab key navigation', () => {
     vi.spyOn(photoService, 'getFaceCrop').mockResolvedValue('');
   });
 
-  it('moves editing focus to next unnamed card immediately on Tab without waiting for backend', () => {
+  it('onNameTab sets editingSubjectId to next unnamed subject', () => {
     const subject1 = makeSubject(1, null);
     const subject2 = makeSubject(2, null);
     photoService.subjects.set([subject1, subject2]);
-
-    let resolveNameSubject!: (v: { duplicate_subject_id: null }) => void;
-    vi.spyOn(photoService, 'nameSubject').mockReturnValue(
-      new Promise(r => { resolveNameSubject = r; })
-    );
-
-    fixture.detectChanges();
-    component.editingSubjectId.set(1);
-    component.editingName.set('Alice');
     fixture.detectChanges();
 
-    const input = fixture.debugElement.query(By.css('[data-testid="name-input"]'));
-    input.triggerEventHandler('keydown', new KeyboardEvent('keydown', { key: 'Tab' }));
+    component['onNameTab'](subject1);
 
-    // Focus moves to subject2 before the backend resolves
     expect(component.editingSubjectId()).toBe(2);
+  });
 
-    resolveNameSubject({ duplicate_subject_id: null });
+  it('onNameTab does nothing when there is no next unnamed subject', () => {
+    const subject1 = makeSubject(1, null);
+    const subject2 = makeSubject(2, 'Bob');
+    photoService.subjects.set([subject1, subject2]);
+    fixture.detectChanges();
+
+    component['onNameTab'](subject1);
+
+    expect(component.editingSubjectId()).toBeNull();
   });
 });
 
@@ -239,66 +229,8 @@ describe('PeopleViewComponent — error handling', () => {
     vi.spyOn(photoService, 'nameSubject').mockRejectedValue(new Error('network error'));
 
     fixture.detectChanges();
-    component.editingSubjectId.set(1);
-    component.editingName.set('NewName');
-    await component['commitName'](original);
+    await component['onNameCommit'](original, 'NewName');
 
     expect(photoService.subjects()[0].name).toBe('OriginalName');
-  });
-});
-
-describe('PeopleViewComponent — keyboard accessibility', () => {
-  let component: PeopleViewComponent;
-  let fixture: ComponentFixture<PeopleViewComponent>;
-  let photoService: PhotoService;
-
-  beforeEach(async () => {
-    await TestBed.configureTestingModule({
-      imports: [PeopleViewComponent],
-      providers: [
-        PhotoService,
-        provideRouter([]),
-        { provide: TauriEventsService, useValue: mockTauriEvents },
-      ],
-    }).compileComponents();
-
-    fixture = TestBed.createComponent(PeopleViewComponent);
-    component = fixture.componentInstance;
-    photoService = TestBed.inject(PhotoService);
-
-    vi.spyOn(photoService, 'loadSubjects').mockResolvedValue(undefined);
-    vi.spyOn(photoService, 'getMergeSuggestions').mockResolvedValue([]);
-    vi.spyOn(photoService, 'getFaceCrop').mockResolvedValue('');
-  });
-
-  it('starts editing when Enter is pressed on the hint span', () => {
-    photoService.subjects.set([makeSubject(1, null)]);
-    fixture.detectChanges();
-
-    const hint = fixture.debugElement.query(By.css('[data-testid="add-name-hint"]'));
-    hint.triggerEventHandler('keydown.enter', new KeyboardEvent('keydown', { key: 'Enter' }));
-    fixture.detectChanges();
-
-    expect(component.editingSubjectId()).toBe(1);
-  });
-
-  it('starts editing when Space is pressed on the hint span', () => {
-    photoService.subjects.set([makeSubject(1, null)]);
-    fixture.detectChanges();
-
-    const hint = fixture.debugElement.query(By.css('[data-testid="add-name-hint"]'));
-    hint.triggerEventHandler('keydown.space', new KeyboardEvent('keydown', { key: ' ' }));
-    fixture.detectChanges();
-
-    expect(component.editingSubjectId()).toBe(1);
-  });
-
-  it('hint span has role="button" and tabindex="0" for keyboard reachability', () => {
-    photoService.subjects.set([makeSubject(1, null)]);
-    fixture.detectChanges();
-
-    const hint = fixture.debugElement.query(By.css('[data-testid="add-name-hint"]'));
-    expect(hint.nativeElement.getAttribute('role')).toBe('button');
-    expect(hint.nativeElement.getAttribute('tabindex')).toBe('0');
   });
 });

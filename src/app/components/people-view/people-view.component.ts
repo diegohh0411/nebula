@@ -1,14 +1,15 @@
-import { Component, inject, OnInit, signal, ViewChildren, QueryList, ElementRef, afterNextRender } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, Subject } from '../../models/models';
 import { RouterLink } from '@angular/router';
 import { MergeReviewComponent } from '../merge-review/merge-review.component';
+import { EditableTextComponent } from '../editable-text/editable-text.component';
 
 @Component({
   selector: 'app-people-view',
   standalone: true,
-  imports: [CommonModule, RouterLink, MergeReviewComponent],
+  imports: [CommonModule, RouterLink, MergeReviewComponent, EditableTextComponent],
   templateUrl: './people-view.component.html',
   styleUrl: './people-view.component.css'
 })
@@ -19,25 +20,11 @@ export class PeopleViewComponent implements OnInit {
   protected suggestionCropUrls = signal<Record<number, string>>({});
   protected reviewingSuggestion = signal<MergeSuggestion | null>(null);
 
+  /** Tracks which subject should enter edit mode next (used for Tab chaining). */
   editingSubjectId = signal<number | null>(null);
-  editingName = signal<string>('');
   protected namingConflict = signal<MergeSuggestion | null>(null);
 
   private _originalSubjects = new Map<number, Subject>();
-  private _focusPending = signal(false);
-
-  @ViewChildren('nameInput') private nameInputRefs!: QueryList<ElementRef<HTMLInputElement>>;
-
-  constructor() {
-    afterNextRender({
-      read: () => {
-        if (this._focusPending()) {
-          this._focusPending.set(false);
-          this.nameInputRefs.first?.nativeElement.focus();
-        }
-      }
-    });
-  }
 
   async ngOnInit() {
     await this.photoService.loadSubjects();
@@ -119,23 +106,14 @@ export class PeopleViewComponent implements OnInit {
     return this.suggestionCropUrls()[subject.thumbnail_face_id] ?? this.faceCropUrls()[subject.id] ?? null;
   }
 
-  protected startEditing(subject: Subject, event: Event): void {
-    event.stopPropagation();
-    this.editingSubjectId.set(subject.id);
-    this.editingName.set('');
-  }
+  protected async onNameCommit(subject: Subject, value: string): Promise<void> {
+    const name = value || null;
 
-  protected async commitName(subject: Subject): Promise<void> {
-    if (this.editingSubjectId() !== subject.id) return;
-    const name = this.editingName().trim();
-    if (!name) { this.cancelEditing(); return; }
-
+    this.editingSubjectId.set(null);
     this._originalSubjects.set(subject.id, { ...subject });
     this.photoService.subjects.update(subjects =>
       subjects.map(s => s.id === subject.id ? { ...s, name } : s)
     );
-    this.editingSubjectId.set(null);
-    this.editingName.set('');
 
     let result: { duplicate_subject_id: number | null };
     try {
@@ -166,27 +144,12 @@ export class PeopleViewComponent implements OnInit {
     }
   }
 
-  protected cancelEditing(): void {
-    this.editingSubjectId.set(null);
-    this.editingName.set('');
-  }
-
-  protected async onKeydown(event: KeyboardEvent, subject: Subject): Promise<void> {
-    if (event.key === 'Enter') {
-      void this.commitName(subject);
-    } else if (event.key === 'Escape') {
-      this.cancelEditing();
-    } else if (event.key === 'Tab') {
-      event.preventDefault();
-      const subjects = this.photoService.subjects();
-      const idx = subjects.findIndex(s => s.id === subject.id);
-      const nextUnnamed = subjects.slice(idx + 1).find(s => !s.name) ?? null;
-      void this.commitName(subject);
-      if (nextUnnamed) {
-        this.editingSubjectId.set(nextUnnamed.id);
-        this.editingName.set('');
-        this._focusPending.set(true);
-      }
+  protected onNameTab(subject: Subject): void {
+    const subjects = this.photoService.subjects();
+    const idx = subjects.findIndex(s => s.id === subject.id);
+    const nextUnnamed = subjects.slice(idx + 1).find(s => !s.name) ?? null;
+    if (nextUnnamed) {
+      this.editingSubjectId.set(nextUnnamed.id);
     }
   }
 

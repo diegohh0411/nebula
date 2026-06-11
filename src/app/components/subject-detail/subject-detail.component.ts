@@ -12,9 +12,9 @@ import { PhotoService } from '../../services/photo.service';
 import { SearchResult, VirtualRow, SubjectDetail, MergeSuggestion } from '../../models/models';
 import { LucideAngularModule } from 'lucide-angular';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
-import { FormsModule } from '@angular/forms';
 import { buildJustifiedRows } from '../../utils/justified-layout';
 import { LightboxComponent } from '../lightbox/lightbox.component';
+import { EditableTextComponent } from '../editable-text/editable-text.component';
 
 @Component({
   selector: 'app-subject-detail',
@@ -25,8 +25,8 @@ import { LightboxComponent } from '../lightbox/lightbox.component';
     RouterLink,
     LucideAngularModule,
     PhotoGridComponent,
-    FormsModule,
     LightboxComponent,
+    EditableTextComponent,
   ],
   templateUrl: './subject-detail.component.html',
   styleUrl: './subject-detail.component.css',
@@ -42,10 +42,7 @@ export class SubjectDetailComponent implements OnInit {
   protected subjectPhotos = signal<SearchResult[]>([]);
   protected faceCropUrl = signal<string | null>(null);
 
-  protected isEditingName = signal(false);
-  protected editedName = signal('');
   protected isMenuOpen = signal(false);
-  protected isSavingName = signal(false);
 
   protected similarSubjects = signal<MergeSuggestion[]>([]);
   protected similarCropUrls = signal<Record<number, string>>({});
@@ -79,7 +76,6 @@ export class SubjectDetailComponent implements OnInit {
     try {
       const detail = await this.photos.getSubjectDetail(id);
       this.detail.set(detail);
-      this.editedName.set(detail.subject.name || '');
 
       if (detail.subject.thumbnail_face_id) {
         const path = await this.photos.getFaceCrop(detail.subject.thumbnail_face_id);
@@ -132,36 +128,22 @@ export class SubjectDetailComponent implements OnInit {
     this.location.back();
   }
 
-  protected startEdit() {
-    this.isEditingName.set(true);
-  }
-
-  protected cancelEdit() {
-    this.isEditingName.set(false);
-    this.editedName.set(this.detail()?.subject.name || '');
-  }
-
-  protected async saveName() {
-    if (this.isSavingName() || !this.isEditingName()) return;
+  protected async saveName(value: string): Promise<void> {
     const id = this.subjectId();
-    const name = this.editedName().trim();
-    if (id !== null) {
-      this.isSavingName.set(true);
-      try {
-        const result = await this.photos.nameSubject(id, name || null);
-        this.detail.update((d) => {
-          if (d) d.subject.name = name || null;
-          return d;
-        });
-        this.isEditingName.set(false);
-
-        if (result.duplicate_subject_id) {
-          this.conflictingSubjectId.set(result.duplicate_subject_id);
-          this.showNameConflict.set(true);
-        }
-      } finally {
-        this.isSavingName.set(false);
+    if (id === null) return;
+    const name = value || null;
+    try {
+      const result = await this.photos.nameSubject(id, name);
+      this.detail.update((d) => {
+        if (d) d.subject.name = name;
+        return d;
+      });
+      if (result.duplicate_subject_id) {
+        this.conflictingSubjectId.set(result.duplicate_subject_id);
+        this.showNameConflict.set(true);
       }
+    } catch (e) {
+      console.error('Failed to save name', e);
     }
   }
 
