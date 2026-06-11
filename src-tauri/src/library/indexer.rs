@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use crate::{
     db,
     models::{DebouncedEvent, DebouncedEventKind, SyncProgressPayload, SyncCompletePayload},
-    watcher::FolderWatcher,
+    library::watcher::FolderWatcher,
 };
 
 pub struct Indexer {
@@ -128,7 +128,7 @@ impl Indexer {
 
         let debounce_indexer = indexer.clone();
         tokio::spawn(async move {
-            crate::watcher::run_debounce_loop(event_rx, debounce_indexer).await;
+            crate::library::watcher::run_debounce_loop(event_rx, debounce_indexer).await;
         });
 
         Ok(indexer)

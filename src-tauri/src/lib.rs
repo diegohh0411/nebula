@@ -18,9 +18,7 @@ mod commands;
 mod embedder;
 mod preprocess;
 mod preview;
-mod indexer;
 mod vector_index;
-mod watcher;
 mod thumbnail;
 pub mod vision_engine;
 

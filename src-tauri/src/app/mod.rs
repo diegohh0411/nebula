@@ -39,7 +39,7 @@ pub fn run() {
             );
 
             let indexer = tauri::async_runtime::block_on(
-                crate::indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone(), preview_handle.clone())
+                crate::library::indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone(), preview_handle.clone())
             )?;
 
             app.manage(AppState {
@@ -87,10 +87,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            crate::commands::add_folder,
-            crate::commands::remove_folder,
-            crate::commands::list_folders,
-            crate::commands::list_images,
+            crate::library::commands::add_folder,
+            crate::library::commands::remove_folder,
+            crate::library::commands::list_folders,
+            crate::library::commands::list_images,
             crate::commands::prioritize_previews,
             crate::commands::search,
             crate::commands::get_processing_status,
