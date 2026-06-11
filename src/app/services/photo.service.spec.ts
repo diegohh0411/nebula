@@ -2,7 +2,7 @@ import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { Subject } from 'rxjs';
 import { PhotoService } from './photo.service';
 import { TauriEventsService } from './tauri-events.service';
-import { ImageUpdatedEvent } from '../models/models';
+import { ImageUpdatedEvent, PipelineStats } from '../models/models';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue([]),
@@ -134,5 +134,56 @@ describe('PhotoService — subjectMatches signal', () => {
 
     service.clearSearch();
     expect(service.subjectMatches()).toEqual([]);
+  });
+});
+
+describe('PhotoService — processing speed resilience & ETA', () => {
+  let service: PhotoService;
+  let pipelineStats$: Subject<PipelineStats>;
+
+  beforeEach(() => {
+    pipelineStats$ = new Subject<PipelineStats>();
+    TestBed.configureTestingModule({
+      providers: [
+        PhotoService,
+        {
+          provide: TauriEventsService,
+          useValue: {
+            pipelineStats$,
+            imageAdded$: new Subject(),
+            imageUpdated$: new Subject(),
+            imageRemoved$: new Subject(),
+            modelDownloadProgress$: new Subject(),
+          },
+        },
+      ],
+    });
+    service = TestBed.inject(PhotoService);
+  });
+
+  it('holds the last non-zero speed when a zero-speed stat arrives mid-processing', () => {
+    pipelineStats$.next({ total_pending: 100, images_per_sec: 8 });
+    expect(service.pipelineStats().images_per_sec).toBe(8);
+
+    // Scanner heartbeat: refreshes the count but carries a 0 speed.
+    pipelineStats$.next({ total_pending: 120, images_per_sec: 0 });
+    expect(service.pipelineStats().images_per_sec).toBe(8); // held
+    expect(service.pipelineStats().total_pending).toBe(120); // count still updates
+  });
+
+  it('clears the speed once processing finishes (pending 0)', () => {
+    pipelineStats$.next({ total_pending: 100, images_per_sec: 8 });
+    pipelineStats$.next({ total_pending: 0, images_per_sec: 0 });
+    expect(service.pipelineStats().images_per_sec).toBe(0);
+  });
+
+  it('computes etaSeconds as remaining / speed', () => {
+    pipelineStats$.next({ total_pending: 120, images_per_sec: 8 });
+    expect(service.etaSeconds()).toBe(15);
+  });
+
+  it('returns 0 etaSeconds when speed is zero', () => {
+    pipelineStats$.next({ total_pending: 0, images_per_sec: 0 });
+    expect(service.etaSeconds()).toBe(0);
   });
 });

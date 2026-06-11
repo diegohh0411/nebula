@@ -117,9 +117,22 @@ export class PhotoService {
     this.folders().reduce((sum, f) => sum + f.photo_count, 0)
   );
 
+  /** Estimated seconds to drain the pending queue at the current speed. 0 when unknown. */
+  readonly etaSeconds = computed<number>(() => {
+    const s = this.pipelineStats();
+    return s.images_per_sec > 0 ? s.total_pending / s.images_per_sec : 0;
+  });
+
   constructor() {
     this.events.pipelineStats$.subscribe((e) => {
-      this.pipelineStats.set(e);
+      // Hold-last-known speed: a 0 while work remains is a heartbeat without a
+      // fresh sample, not a real stop — keep the prior speed (TT-64).
+      const prev = this.pipelineStats();
+      const images_per_sec =
+        e.images_per_sec > 0 || e.total_pending === 0
+          ? e.images_per_sec
+          : prev.images_per_sec;
+      this.pipelineStats.set({ ...e, images_per_sec });
     });
 
     // TT-7/TT-14: Freshness & Granularity Poll
