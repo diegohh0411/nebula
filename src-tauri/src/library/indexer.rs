@@ -447,9 +447,9 @@ impl Indexer {
             let known = db_map.get(&path_str).cloned();
             self.process_file(path, folder_id, known).await;
             if (i + 1) % 10 == 0 {
-                crate::search::math::emit_progress(&self.pool, &self.app, 0.0).await;
+                crate::search::math::emit_progress(&self.pool, &self.app).await;
             }
         }
-        crate::search::math::emit_progress(&self.pool, &self.app, 0.0).await;
+        crate::search::math::emit_progress(&self.pool, &self.app).await;
     }
 }

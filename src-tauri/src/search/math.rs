@@ -44,7 +44,16 @@ pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
     dot_product / (norm1 * norm2)
 }
 
-pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle, images_per_sec: f32) {
+pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle) {
+    use tauri::Manager;
+    let images_per_sec = {
+        let state = app.state::<crate::AppState>();
+        f32::from_bits(
+            state
+                .throughput_ema
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    };
     if let Ok(status) = crate::pipeline::queue::get_processing_counts(pool).await {
         let _ = app.emit(
             "pipeline_stats",

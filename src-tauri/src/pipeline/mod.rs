@@ -157,6 +157,12 @@ pub async fn run_pipeline(
         };
 
         if sem_batch.is_empty() && sub_batch.is_empty() {
+            // Nothing pending: clear the held speed so a finished run does not
+            // leak a stale rate into the next import (TT-64).
+            let app_state: tauri::State<crate::AppState> = app.state();
+            app_state
+                .throughput_ema
+                .store(0.0f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
@@ -390,13 +396,17 @@ pub async fn run_pipeline(
 
         let now_secs = pipeline_start.elapsed().as_secs_f32();
         throughput_window.record(images_processed_this_iter, now_secs);
-        let rate = throughput_window.rate(now_secs);
+        let raw_rate = throughput_window.rate(now_secs);
 
-        // Update shared AppState for the pull path (TT-7)
+        // Single source of truth for speed (TT-7/TT-64): hold the last-known rate
+        // when the window momentarily lacks samples, so the speed never blanks
+        // mid-processing.
         let app_state: tauri::State<crate::AppState> = app.state();
-        app_state.throughput_ema.store(rate.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        let prev = f32::from_bits(app_state.throughput_ema.load(std::sync::atomic::Ordering::Relaxed));
+        let effective = crate::pipeline::throughput::effective_rate(raw_rate, prev);
+        app_state.throughput_ema.store(effective.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
-        crate::search::math::emit_progress(&pool, &app, rate).await;
+        crate::search::math::emit_progress(&pool, &app).await;
 
         // Persist index snapshot
         let snap_path = data_dir.join("nebula.idx");
