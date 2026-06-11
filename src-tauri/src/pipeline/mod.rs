@@ -444,38 +444,3 @@ pub async fn run_pipeline(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    fn ema_step(prev: Option<f32>, inst: f32) -> f32 {
-        match prev {
-            None => inst,
-            Some(p) => 0.3 * inst + 0.7 * p,
-        }
-    }
-
-    #[test]
-    fn ema_seeds_on_first_batch() {
-        let ema = ema_step(None, 4.0);
-        assert_eq!(ema, 4.0, "first batch must seed ema = inst_rate");
-    }
-
-    #[test]
-    fn ema_smooths_on_subsequent_batches() {
-        let ema = ema_step(Some(4.0), 8.0);
-        let expected = 0.3_f32 * 8.0 + 0.7_f32 * 4.0;
-        assert!(
-            (ema - expected).abs() < 1e-5,
-            "ema={ema} expected={expected}"
-        );
-    }
-
-    #[test]
-    fn ema_is_positive_for_nonzero_input() {
-        let mut ema: Option<f32> = None;
-        for _ in 0..5 {
-            ema = Some(ema_step(ema, 3.0));
-        }
-        assert!(ema.unwrap() > 0.0, "ema must be positive after several batches with nonzero rate");
-    }
-}
