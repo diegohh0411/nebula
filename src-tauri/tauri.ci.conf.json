@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "resources": ["redist/vc_redist.x64.exe"]
+  }
+}

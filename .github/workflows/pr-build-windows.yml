@@ -52,7 +52,7 @@ jobs:
         with:
           # NSIS only: it runs vc_redist via an installer hook (see
           # src-tauri/nsis/hooks.nsh). MSI would not, so we don't ship it.
-          args: --debug --bundles nsis
+          args: --debug --bundles nsis --config tauri.ci.conf.json
         # no tagName → build only, no release created
       - uses: actions/upload-artifact@v4
         with:
