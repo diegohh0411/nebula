@@ -95,6 +95,27 @@ pub struct Subject {
     pub added_at: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+    pub added_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TagWithCount {
+    pub id: i64,
+    pub name: String,
+    pub added_at: i64,
+    pub subject_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubjectMatch {
+    pub subject: Subject,
+    pub tags: Vec<Tag>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Face {
     pub id: i64,

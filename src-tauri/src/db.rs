@@ -3,9 +3,27 @@ use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
 use std::path::Path;
 use std::sync::Once;
 
-use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
+use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject, Tag, TagWithCount, SubjectMatch};
 
 static SQLITE_VEC_INIT: Once = Once::new();
+
+/// Lowercase + strip diacritics so "Cabaña" matches "cabana".
+pub fn normalize(s: &str) -> String {
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
+            'é' | 'è' | 'ë' | 'ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
 
 /// Register the sqlite-vec extension with every new SQLite connection.
 /// Idempotent: safe to call multiple times; registers exactly once per process.
@@ -2298,5 +2316,14 @@ mod tests {
         let (path, bbox) = get_face_with_image(&pool, fid).await.unwrap().unwrap();
         assert_eq!(path, "/tmp/x.jpg");
         assert!((bbox.0 - 0.1).abs() < 1e-9 && (bbox.3 - 0.4).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_normalize_strips_accents_and_case() {
+        assert_eq!(normalize("Cabaña-21"), "cabana-21");
+        assert_eq!(normalize("JOSÉ"), "jose");
+        assert_eq!(normalize("  Über  "), "uber");
+        assert_eq!(normalize("plain"), "plain");
+        assert_eq!(normalize(""), "");
     }
 }
