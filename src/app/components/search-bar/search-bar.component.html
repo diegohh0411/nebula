@@ -56,8 +56,8 @@
       @if (badgeState() === 'active') {
         <span class="embed-badge-dot"></span>
         Processing {{ photos.pipelineStats().total_pending }} images
-        @if (photos.pipelineStats().images_per_sec >= 0.5) {
-          · {{ photos.pipelineStats().images_per_sec | number:'1.0-0' }} img/s
+        @if (photos.pipelineStats().images_per_sec >= 0.1) {
+          · {{ photos.pipelineStats().images_per_sec | number:'1.0-1' }} img/s
         }
       } @else {
         Library up to date

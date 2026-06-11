@@ -1,6 +1,7 @@
 pub mod decoded_image;
 pub mod embed_actor;
 pub mod face_actor;
+pub mod throughput;
 
 pub use decoded_image::DecodedImage;
 
@@ -138,12 +139,12 @@ pub async fn run_pipeline(
     );
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
-    let mut throughput_ema: Option<f32> = None;
+    let mut throughput_window = throughput::ThroughputWindow::new(15.0);
+    let pipeline_start = Instant::now();
 
     info!("[pipeline] Pipeline background loop started, awaiting tasks...");
 
     loop {
-        let batch_start = Instant::now();
         // Pull both queues
         let sem_batch = match crate::db::get_queue_batch(&pool, "semantic", config.batch_size as i64).await {
             Ok(b) => b,
@@ -386,19 +387,15 @@ pub async fn run_pipeline(
             );
         }
 
-        let dt = batch_start.elapsed().as_secs_f32().max(1e-3);
-        let inst_rate = images_processed_this_iter as f32 / dt;
-        let ema = match throughput_ema {
-            None => inst_rate,
-            Some(prev) => 0.3 * inst_rate + 0.7 * prev,
-        };
-        throughput_ema = Some(ema);
+        let now_secs = pipeline_start.elapsed().as_secs_f32();
+        throughput_window.record(images_processed_this_iter, now_secs);
+        let rate = throughput_window.rate(now_secs);
 
         // Update shared AppState for the pull path (TT-7)
         let app_state: tauri::State<crate::AppState> = app.state();
-        app_state.throughput_ema.store(ema.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        app_state.throughput_ema.store(rate.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
-        crate::embedder::emit_progress(&pool, &app, ema).await;
+        crate::embedder::emit_progress(&pool, &app, rate).await;
 
         // Persist index snapshot
         let snap_path = data_dir.join("nebula.idx");
