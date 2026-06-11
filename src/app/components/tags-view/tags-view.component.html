@@ -1,0 +1,82 @@
+<div class="tags-container p-8">
+  <h1 class="text-3xl font-bold mb-8">Tags</h1>
+
+  <div class="tags-layout">
+    <!-- Tag list panel -->
+    <div class="tag-list-panel">
+      <!-- Create tag -->
+      <div class="flex flex-col gap-1 mb-4">
+        <div class="flex gap-2">
+          <input
+            class="flex-1 text-sm border border-border rounded px-3 py-1.5 bg-background"
+            placeholder="New tag name…"
+            [value]="newTagName()"
+            (input)="newTagName.set($any($event.target).value)"
+            (keydown.enter)="createTag()"
+          />
+          <button
+            class="text-sm px-3 py-1.5 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+            (click)="createTag()"
+          >Add</button>
+        </div>
+        @if (createError()) {
+          <span class="text-xs text-destructive">{{ createError() }}</span>
+        }
+      </div>
+
+      <!-- Tag entries -->
+      @for (tag of tags(); track tag.id) {
+        <div
+          class="tag-entry"
+          [class.tag-entry--selected]="selectedTag()?.id === tag.id"
+          (click)="selectTag(tag)"
+        >
+          <div class="flex items-center justify-between gap-2 flex-1 min-w-0">
+            <app-editable-text
+              [value]="tag.name"
+              displayClass="text-sm font-medium"
+              (commit)="renameTag(tag, $event)"
+            />
+            <span class="text-xs text-muted-foreground shrink-0">{{ tag.subject_count }}</span>
+          </div>
+          <button
+            class="delete-btn opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive text-xs px-1"
+            (click)="$event.stopPropagation(); deleteTag(tag)"
+            title="Delete tag"
+          >✕</button>
+        </div>
+      }
+
+      @if (renameError()) {
+        <p class="text-xs text-destructive mt-2">{{ renameError() }}</p>
+      }
+    </div>
+
+    <!-- Subject cards panel -->
+    <div class="tag-subjects-panel">
+      @if (selectedTag()) {
+        <h2 class="text-lg font-semibold mb-4">{{ selectedTag()!.name }}</h2>
+        @if (tagSubjects().length === 0) {
+          <p class="text-sm text-muted-foreground">No subjects with this tag.</p>
+        } @else {
+          <div class="subject-cards-grid">
+            @for (match of tagSubjects(); track match.subject.id) {
+              <div class="subject-card">
+                <a [routerLink]="['/subject', match.subject.id]" class="subject-avatar">
+                  <span class="text-2xl">&#x1F464;</span>
+                </a>
+                <span class="subject-name">{{ match.subject.name || 'Unnamed' }}</span>
+                <button
+                  class="text-xs text-muted-foreground hover:text-destructive mt-1"
+                  (click)="removeSubjectFromTag(match.subject.id)"
+                >Remove</button>
+              </div>
+            }
+          </div>
+        }
+      } @else {
+        <p class="text-sm text-muted-foreground">Select a tag to see its subjects.</p>
+      }
+    </div>
+  </div>
+</div>

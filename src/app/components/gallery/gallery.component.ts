@@ -10,12 +10,13 @@ import {
   signal,
   OnInit,
 } from '@angular/core';
+import { Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { SearchBarComponent } from '../search-bar/search-bar.component';
 import { TimelineScrubberComponent } from '../timeline-scrubber/timeline-scrubber.component';
-import { VirtualRow } from '../../models/models';
+import { VirtualRow, SubjectMatch } from '../../models/models';
 import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
 import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
 
@@ -36,6 +37,7 @@ import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
 })
 export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
   protected photos = inject(PhotoService);
+  private router = inject(Router);
   private elementRef = inject(ElementRef);
   private resizeObserver?: ResizeObserver;
 
@@ -143,6 +145,10 @@ export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnDestroy() {
     this.resizeObserver?.disconnect();
+  }
+
+  protected navigateToSubject(match: SubjectMatch): void {
+    void this.router.navigate(['/subject', match.subject.id]);
   }
 
   protected trackRow(_idx: number, row: VirtualRow): string {

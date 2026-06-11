@@ -34,9 +34,27 @@
         placeholder="Search photos…"
         autocomplete="off"
         [value]="query()"
-        (input)="query.set($any($event.target).value)"
+        (input)="onQueryInput($event)"
         (keyup.enter)="onSearch()"
+        (keydown.escape)="closeTypeahead()"
+        (blur)="closeTypeahead()"
       />
+      @if (typeaheadOpen()) {
+        <ul class="typeahead-dropdown">
+          @for (match of typeaheadMatches(); track match.subject.id) {
+            <li class="typeahead-item" (mousedown)="onTypeaheadSelect(match)">
+              <span class="typeahead-name">{{ match.subject.name }}</span>
+              @if (match.tags.length > 0) {
+                <span class="typeahead-tags">
+                  @for (tag of match.tags; track tag.id) {
+                    <span class="typeahead-tag">{{ tag.name }}</span>
+                  }
+                </span>
+              }
+            </li>
+          }
+        </ul>
+      }
       @if ((photos.searchResults() !== null || query()) && !photos.isSearching()) {
         <button class="search-clear" (click)="onClear()" title="Clear search">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

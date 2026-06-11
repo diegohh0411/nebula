@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::{
     db,
-    models::{FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult},
+    models::{FolderWithCount, Image, SearchResult, SearchQuery, Subject, Face, MergeSuggestion, NameSubjectResult, Tag, TagWithCount, SubjectMatch},
     search, thumbnail, AppState,
 };
 
@@ -91,13 +91,28 @@ pub async fn search(
 
     match query {
         SearchQuery::Text { ref query } => {
-            let matched_subjects = db::search_subjects_by_name(pool, query).await.unwrap_or_default();
-            let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
-            let subject_image_ids: HashSet<i64> = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default().into_iter().collect();
+            // 1. Tag-derived images, already ordered by tagged-subject count desc.
+            let tag_image_ids = db::get_tag_image_ids_ordered(pool, query).await.unwrap_or_default();
+
+            // 2. Name-derived images (accent-insensitive), appended after tag matches.
+            let matched = db::search_subjects_matching(pool, query).await.unwrap_or_default();
+            let subject_ids: Vec<i64> = matched.iter().map(|m| m.subject.id).collect();
+            let name_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+
+            let mut pinned_ids: Vec<i64> = Vec::new();
+            let mut pinned_set: HashSet<i64> = HashSet::new();
+            for id in tag_image_ids.into_iter().chain(name_image_ids.into_iter()) {
+                if pinned_set.insert(id) {
+                    pinned_ids.push(id);
+                }
+            }
 
             let mut results = vec![];
-            for image_id in &subject_image_ids {
+            for image_id in &pinned_ids {
                 if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
+                    if img.deleted_at.is_some() {
+                        continue;
+                    }
                     results.push(SearchResult {
                         image_id: *image_id,
                         path: img.path,
@@ -138,7 +153,7 @@ pub async fn search(
             if let Ok(scored) = search::search_images(&state.index, query_embedding, 50).await {
                 if let Ok(rag_results) = search::build_search_results(pool, scored).await {
                     for res in rag_results {
-                        if !subject_image_ids.contains(&res.image_id) {
+                        if !pinned_set.contains(&res.image_id) {
                             results.push(res);
                         }
                     }
@@ -407,4 +422,85 @@ pub async fn unassign_face(
     let _ = db::auto_assign_missing_thumbnails(pool).await;
     let _ = db::delete_subjects_with_no_faces(pool).await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn search_subjects(
+    query: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SubjectMatch>, String> {
+    db::search_subjects_matching(&state.pool, &query).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn add_subject_tag(
+    subject_id: i64,
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Tag, String> {
+    db::add_subject_tag(&state.pool, subject_id, &name).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn create_tag(
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Tag, String> {
+    db::create_tag(&state.pool, &name).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn remove_subject_tag(
+    subject_id: i64,
+    tag_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    db::remove_subject_tag(&state.pool, subject_id, tag_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn get_subject_tags(
+    subject_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<Tag>, String> {
+    db::get_subject_tags(&state.pool, subject_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn list_tags(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<TagWithCount>, String> {
+    db::list_tags_with_counts(&state.pool).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn rename_tag(
+    tag_id: i64,
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    db::rename_tag(&state.pool, tag_id, &name).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn delete_tag(
+    tag_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    db::delete_tag(&state.pool, tag_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn get_tag_subjects(
+    tag_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SubjectMatch>, String> {
+    let pool = &state.pool;
+    let rows = db::get_subjects_for_tag(pool, tag_id).await.map_err(map_err)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for s in rows {
+        let tags = db::get_subject_tags(pool, s.id).await.map_err(map_err)?;
+        out.push(SubjectMatch { subject: s, tags });
+    }
+    Ok(out)
 }

@@ -3,9 +3,64 @@ use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
 use std::path::Path;
 use std::sync::Once;
 
-use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject};
+use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject, Tag, TagWithCount, SubjectMatch};
 
 static SQLITE_VEC_INIT: Once = Once::new();
+
+/// Lowercase + strip diacritics so "Cabaña" matches "cabana".
+pub fn normalize(s: &str) -> String {
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
+            'é' | 'è' | 'ë' | 'ê' => 'e',
+            'í' | 'ì' | 'ï' | 'î' => 'i',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+            'ú' | 'ù' | 'ü' | 'û' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            other => other,
+        })
+        .collect()
+}
+
+/// Build a SQL `LIKE` pattern from a user query: normalized, with `%`/`_`/`\`
+/// escaped to literals and whitespace runs treated as wildcards (so "cabin 9"
+/// matches "cabin-9"). Returns `None` for an empty query. Pair with `ESCAPE '\'`.
+pub fn like_pattern(query: &str) -> Option<String> {
+    let norm = normalize(query);
+    if norm.is_empty() {
+        return None;
+    }
+    let mut pat = String::from("%");
+    for c in norm.chars() {
+        match c {
+            '\\' | '%' | '_' => {
+                pat.push('\\');
+                pat.push(c);
+            }
+            ' ' => pat.push('%'),
+            other => pat.push(other),
+        }
+    }
+    pat.push('%');
+    Some(pat)
+}
+
+/// True if every whitespace-separated token of the normalized `query` appears,
+/// in order, within the normalized `haystack`. Rust-side mirror of
+/// [`like_pattern`] for matching subject names (which aren't stored normalized).
+fn matches_tokens(haystack: &str, query_norm: &str) -> bool {
+    let mut pos = 0;
+    for tok in query_norm.split_whitespace() {
+        match haystack[pos..].find(tok) {
+            Some(i) => pos += i + tok.len(),
+            None => return false,
+        }
+    }
+    true
+}
 
 /// Register the sqlite-vec extension with every new SQLite connection.
 /// Idempotent: safe to call multiple times; registers exactly once per process.
@@ -96,6 +151,21 @@ CREATE TABLE IF NOT EXISTS faces (
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
 CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    name_normalized TEXT NOT NULL UNIQUE,
+    added_at        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS subject_tags (
+    subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    tag_id     INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    added_at   INTEGER NOT NULL,
+    PRIMARY KEY (subject_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subject_tags_tag ON subject_tags(tag_id);
 
 CREATE TABLE IF NOT EXISTS face_corrections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -892,28 +962,162 @@ pub async fn get_face_with_image(
     }))
 }
 
-pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
-    let like_query = format!("%{}%", query);
-    let rows = sqlx::query(
-        "SELECT id, name, thumbnail_face_id, type, added_at 
-         FROM subjects 
-         WHERE name LIKE ? COLLATE NOCASE 
-         ORDER BY added_at DESC"
-    )
-    .bind(like_query)
-    .fetch_all(pool)
-    .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| Subject {
-            id: r.get("id"),
-            name: r.get("name"),
+/// Standalone find-or-create (used by the /tags view's inline create).
+pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {
+    let display = name.trim();
+    let norm = normalize(name);
+    if norm.is_empty() {
+        anyhow::bail!("Tag name cannot be empty");
+    }
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT INTO tags (name, name_normalized, added_at) VALUES (?, ?, ?) ON CONFLICT(name_normalized) DO NOTHING")
+        .bind(display).bind(&norm).bind(now)
+        .execute(pool).await?;
+    let row = sqlx::query("SELECT id, name, added_at FROM tags WHERE name_normalized = ?")
+        .bind(&norm).fetch_one(pool).await?;
+    Ok(Tag { id: row.get("id"), name: row.get("name"), added_at: row.get("added_at") })
+}
+
+pub async fn add_subject_tag(pool: &SqlitePool, subject_id: i64, name: &str) -> Result<Tag> {
+    let tag = create_tag(pool, name).await?;
+    let now = chrono::Utc::now().timestamp();
+    sqlx::query("INSERT OR IGNORE INTO subject_tags (subject_id, tag_id, added_at) VALUES (?, ?, ?)")
+        .bind(subject_id).bind(tag.id).bind(now)
+        .execute(pool).await?;
+    Ok(tag)
+}
+
+pub async fn remove_subject_tag(pool: &SqlitePool, subject_id: i64, tag_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM subject_tags WHERE subject_id = ? AND tag_id = ?")
+        .bind(subject_id).bind(tag_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_subject_tags(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Tag>> {
+    let rows = sqlx::query(
+        "SELECT t.id, t.name, t.added_at FROM tags t
+         JOIN subject_tags st ON st.tag_id = t.id
+         WHERE st.subject_id = ? ORDER BY t.name COLLATE NOCASE")
+        .bind(subject_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| Tag { id: r.get("id"), name: r.get("name"), added_at: r.get("added_at") }).collect())
+}
+
+pub async fn list_tags_with_counts(pool: &SqlitePool) -> Result<Vec<TagWithCount>> {
+    let rows = sqlx::query(
+        "SELECT t.id, t.name, t.added_at, COUNT(st.subject_id) AS subject_count
+         FROM tags t LEFT JOIN subject_tags st ON st.tag_id = t.id
+         GROUP BY t.id ORDER BY t.name COLLATE NOCASE")
+        .fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| TagWithCount {
+        id: r.get("id"), name: r.get("name"), added_at: r.get("added_at"),
+        subject_count: r.get("subject_count"),
+    }).collect())
+}
+
+pub async fn rename_tag(pool: &SqlitePool, tag_id: i64, name: &str) -> Result<()> {
+    let display = name.trim();
+    let norm = normalize(name);
+    if norm.is_empty() {
+        anyhow::bail!("Tag name cannot be empty");
+    }
+    let collision = sqlx::query("SELECT id FROM tags WHERE name_normalized = ? AND id != ?")
+        .bind(&norm).bind(tag_id).fetch_optional(pool).await?;
+    if collision.is_some() {
+        anyhow::bail!("A tag with that name already exists");
+    }
+    sqlx::query("UPDATE tags SET name = ?, name_normalized = ? WHERE id = ?")
+        .bind(display).bind(&norm).bind(tag_id).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn delete_tag(pool: &SqlitePool, tag_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM tags WHERE id = ?").bind(tag_id).execute(pool).await?;
+    Ok(())
+}
+
+/// Images containing faces of subjects whose tag matches `query`,
+/// ordered by how many distinct tagged subjects appear in each image (desc),
+/// then date_taken desc. Soft-deleted images excluded.
+pub async fn get_tag_image_ids_ordered(pool: &SqlitePool, query: &str) -> Result<Vec<i64>> {
+    let like = match like_pattern(query) {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
+    let rows = sqlx::query(
+        "SELECT f.image_id
+         FROM faces f
+         JOIN subject_tags st ON st.subject_id = f.subject_id
+         JOIN tags t ON t.id = st.tag_id
+         JOIN images i ON i.id = f.image_id
+         WHERE t.name_normalized LIKE ? ESCAPE '\\' AND i.deleted_at IS NULL
+         GROUP BY f.image_id
+         ORDER BY COUNT(DISTINCT f.subject_id) DESC, MAX(i.date_taken) DESC")
+        .bind(&like).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| r.get("image_id")).collect())
+}
+
+pub async fn search_subjects_matching(pool: &SqlitePool, query: &str) -> Result<Vec<SubjectMatch>> {
+    let q = normalize(query);
+    let like = match like_pattern(query) {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
+    let mut matched: Vec<Subject> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // name matches — fetch all named subjects, filter in Rust
+    let rows = sqlx::query("SELECT id, name, thumbnail_face_id, type, added_at FROM subjects WHERE name IS NOT NULL")
+        .fetch_all(pool).await?;
+    for r in rows {
+        let name: String = r.get("name");
+        if matches_tokens(&normalize(&name), &q) {
+            let s = Subject {
+                id: r.get("id"), name: Some(name),
+                thumbnail_face_id: r.get("thumbnail_face_id"),
+                subject_type: r.get("type"), added_at: r.get("added_at"),
+            };
+            if seen.insert(s.id) { matched.push(s); }
+        }
+    }
+
+    // tag matches — tags.name_normalized is already normalized
+    let rows = sqlx::query(
+        "SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at
+         FROM subjects s
+         JOIN subject_tags st ON st.subject_id = s.id
+         JOIN tags t ON t.id = st.tag_id
+         WHERE t.name_normalized LIKE ? ESCAPE '\\'")
+        .bind(&like).fetch_all(pool).await?;
+    for r in rows {
+        let s = Subject {
+            id: r.get("id"), name: r.get("name"),
             thumbnail_face_id: r.get("thumbnail_face_id"),
-            subject_type: r.get("type"),
-            added_at: r.get("added_at"),
-        })
-        .collect())
+            subject_type: r.get("type"), added_at: r.get("added_at"),
+        };
+        if seen.insert(s.id) { matched.push(s); }
+    }
+
+    matched.truncate(20);
+    let mut out = Vec::with_capacity(matched.len());
+    for s in matched {
+        let tags = get_subject_tags(pool, s.id).await?;
+        out.push(SubjectMatch { subject: s, tags });
+    }
+    Ok(out)
+}
+
+pub async fn get_subjects_for_tag(pool: &SqlitePool, tag_id: i64) -> Result<Vec<Subject>> {
+    let rows = sqlx::query(
+        "SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at
+         FROM subjects s JOIN subject_tags st ON st.subject_id = s.id
+         WHERE st.tag_id = ? ORDER BY s.name COLLATE NOCASE")
+        .bind(tag_id).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(|r| Subject {
+        id: r.get("id"), name: r.get("name"),
+        thumbnail_face_id: r.get("thumbnail_face_id"),
+        subject_type: r.get("type"), added_at: r.get("added_at"),
+    }).collect())
 }
 
 pub async fn get_image_ids_for_subjects(pool: &SqlitePool, subject_ids: &[i64]) -> Result<Vec<i64>> {
@@ -2283,5 +2487,158 @@ mod tests {
         let (path, bbox) = get_face_with_image(&pool, fid).await.unwrap().unwrap();
         assert_eq!(path, "/tmp/x.jpg");
         assert!((bbox.0 - 0.1).abs() < 1e-9 && (bbox.3 - 0.4).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn test_tag_image_ids_ordered_by_subject_count() {
+        let dir = std::env::temp_dir().join(format!("nebula_tagimgs_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        let folder_id = insert_folder(&pool, "/tmp/tag_test").await.unwrap();
+        // images: A (2 tagged subjects), B (1 tagged subject), C (no tagged), D (deleted)
+        let img_a = insert_image(&pool, folder_id, "/tmp/tag_test/a.jpg", "ha", 1, 1).await.unwrap();
+        let img_b = insert_image(&pool, folder_id, "/tmp/tag_test/b.jpg", "hb", 1, 1).await.unwrap();
+        let img_c = insert_image(&pool, folder_id, "/tmp/tag_test/c.jpg", "hc", 1, 1).await.unwrap();
+        let img_d = insert_image(&pool, folder_id, "/tmp/tag_test/d.jpg", "hd", 1, 1).await.unwrap();
+        // soft-delete D
+        sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?").bind(img_d).execute(&pool).await.unwrap();
+
+        let s1: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Sub1', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        let s2: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Sub2', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // insert faces: A has s1 and s2, B has s1, C has no face, D has s1 and s2 (but deleted)
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_a).bind(s1).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_a).bind(s2).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_b).bind(s1).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_d).bind(s1).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_d).bind(s2).execute(&pool).await.unwrap();
+
+        // tag both subjects "cabin-9"
+        add_subject_tag(&pool, s1, "cabin-9").await.unwrap();
+        add_subject_tag(&pool, s2, "cabin-9").await.unwrap();
+
+        let ids = get_tag_image_ids_ordered(&pool, "cabin 9").await.unwrap();
+        // A first (2 tagged subjects), B second (1), C absent, D (deleted) absent
+        assert_eq!(ids, vec![img_a, img_b]);
+
+        let _ = img_c;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_normalize_strips_accents_and_case() {
+        assert_eq!(normalize("Cabaña-21"), "cabana-21");
+        assert_eq!(normalize("JOSÉ"), "jose");
+        assert_eq!(normalize("  Über  "), "uber");
+        assert_eq!(normalize("plain"), "plain");
+        assert_eq!(normalize(""), "");
+    }
+
+    #[test]
+    fn test_like_pattern_wildcards_and_escaping() {
+        // whitespace becomes a wildcard so "cabin 9" matches "cabin-9"
+        assert_eq!(like_pattern("cabin 9").as_deref(), Some("%cabin%9%"));
+        // literal LIKE metacharacters are escaped
+        assert_eq!(like_pattern("50%_off").as_deref(), Some("%50\\%\\_off%"));
+        // empty / whitespace-only query yields no pattern
+        assert_eq!(like_pattern("   "), None);
+    }
+
+    #[tokio::test]
+    async fn test_search_subjects_matching_multiword_and_wildcards() {
+        let dir = std::env::temp_dir().join(format!("nebula_subjmw_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        let s: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Ana', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        add_subject_tag(&pool, s, "Cabin-9").await.unwrap();
+
+        // multi-word query matches the hyphenated tag in both typeahead and search
+        let hits = search_subjects_matching(&pool, "cabin 9").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        let imgs_query = like_pattern("cabin 9");
+        assert_eq!(imgs_query.as_deref(), Some("%cabin%9%"));
+
+        // a stray '%' is treated literally, not as a wildcard -> no match
+        assert!(search_subjects_matching(&pool, "ca%n").await.unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_search_subjects_matching() {
+        let dir = std::env::temp_dir().join(format!("nebula_subjtag_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        let jose: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('José', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        let maria: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Maria', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        add_subject_tag(&pool, maria, "Cabaña-21").await.unwrap();
+
+        // accent-insensitive name match
+        let hits = search_subjects_matching(&pool, "jose").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject.name.as_deref(), Some("José"));
+
+        // tag match returns the tagged subject, with tags populated
+        let hits = search_subjects_matching(&pool, "cabana").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].subject.name.as_deref(), Some("Maria"));
+        assert_eq!(hits[0].tags[0].name, "Cabaña-21");
+
+        // a query matching BOTH name and tag dedups by subject id
+        let hits = search_subjects_matching(&pool, "maria").await.unwrap();
+        assert_eq!(hits.len(), 1);
+
+        // no match -> empty
+        assert!(search_subjects_matching(&pool, "zzz").await.unwrap().is_empty());
+
+        // suppress unused variable warning
+        let _ = jose;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_tag_crud() {
+        let dir = std::env::temp_dir().join(format!("nebula_tagcrud_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        // insert two subjects for FK references
+        let s1: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        let s2: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+
+        // find-or-create dedups on normalized name, keeps first display name
+        let t1 = add_subject_tag(&pool, s1, "Cabaña-21").await.unwrap();
+        let t2 = add_subject_tag(&pool, s2, "cabana-21").await.unwrap();
+        assert_eq!(t1.id, t2.id);
+        assert_eq!(t2.name, "Cabaña-21");
+
+        // adding same tag to same subject twice is idempotent
+        add_subject_tag(&pool, s1, "cabaña-21").await.unwrap();
+        let tags = get_subject_tags(&pool, s1).await.unwrap();
+        assert_eq!(tags.len(), 1);
+
+        // list with counts
+        let all = list_tags_with_counts(&pool).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].subject_count, 2);
+
+        // empty name rejected
+        assert!(add_subject_tag(&pool, s1, "   ").await.is_err());
+
+        // rename + collision
+        let other = add_subject_tag(&pool, s1, "cabin-3").await.unwrap();
+        assert!(rename_tag(&pool, other.id, "CABAÑA-21").await.is_err());
+        rename_tag(&pool, other.id, "cabin-4").await.unwrap();
+
+        // remove junction, then delete tag entirely
+        remove_subject_tag(&pool, s2, t1.id).await.unwrap();
+        assert_eq!(list_tags_with_counts(&pool).await.unwrap().iter().find(|t| t.id == t1.id).unwrap().subject_count, 1);
+        delete_tag(&pool, t1.id).await.unwrap();
+        assert!(get_subject_tags(&pool, s1).await.unwrap().iter().all(|t| t.id != t1.id));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

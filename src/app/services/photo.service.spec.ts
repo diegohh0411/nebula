@@ -75,3 +75,64 @@ describe('PhotoService — imageUpdated$ order-agnostic contract', () => {
     // Both calls are unconditional: the second one will find thumbnail_path set.
   }));
 });
+
+describe('PhotoService — subjectMatches signal', () => {
+  let service: PhotoService;
+  let invoke: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    const { invoke: mockInvoke } = await import('@tauri-apps/api/core');
+    invoke = mockInvoke as ReturnType<typeof vi.fn>;
+    invoke.mockResolvedValue([]);
+
+    TestBed.configureTestingModule({
+      providers: [
+        PhotoService,
+        {
+          provide: TauriEventsService,
+          useValue: {
+            pipelineStats$: new Subject(),
+            imageAdded$: new Subject(),
+            imageUpdated$: new Subject(),
+            imageRemoved$: new Subject(),
+            modelDownloadProgress$: new Subject(),
+          },
+        },
+      ],
+    });
+
+    service = TestBed.inject(PhotoService);
+    vi.spyOn(service as any, 'refreshImages').mockResolvedValue(undefined);
+  });
+
+  it('searchByText sets subjectMatches from search_subjects response', async () => {
+    const fakeMatch = { subject: { id: 1, name: 'Maria', thumbnail_face_id: null, type: 'person', added_at: 0 }, tags: [{ id: 1, name: 'Cabaña-21', added_at: 0 }] };
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'search_subjects') return Promise.resolve([fakeMatch]);
+      return Promise.resolve([]);
+    });
+
+    await service.searchByText('cabana');
+    // flush microtasks for the fire-and-forget subjectMatches promise chain
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(service.subjectMatches()).toEqual([fakeMatch]);
+  });
+
+  it('clearSearch empties subjectMatches', async () => {
+    const fakeMatch = { subject: { id: 1, name: 'Jose', thumbnail_face_id: null, type: 'person', added_at: 0 }, tags: [] };
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'search_subjects') return Promise.resolve([fakeMatch]);
+      return Promise.resolve([]);
+    });
+    await service.searchByText('jose');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(service.subjectMatches().length).toBe(1);
+
+    service.clearSearch();
+    expect(service.subjectMatches()).toEqual([]);
+  });
+});

@@ -8,7 +8,9 @@ import {
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
+import { SubjectMatch } from '../../models/models';
 
 type BadgeState = 'active' | 'completing' | 'idle';
 
@@ -22,11 +24,16 @@ type BadgeState = 'active' | 'completing' | 'idle';
 })
 export class SearchBarComponent implements OnDestroy {
   protected photos = inject(PhotoService);
+  private router = inject(Router);
   protected query = signal('');
   protected isDragOver = signal(false);
   protected badgeState = signal<BadgeState>('idle');
+  protected typeaheadMatches = signal<SubjectMatch[]>([]);
+  protected typeaheadOpen = signal(false);
 
   private completingTimer: ReturnType<typeof setTimeout> | null = null;
+  private typeaheadTimer: ReturnType<typeof setTimeout> | null = null;
+  private typeaheadSeq = 0;
 
   constructor() {
     effect(() => {
@@ -51,14 +58,48 @@ export class SearchBarComponent implements OnDestroy {
     if (this.completingTimer !== null) {
       clearTimeout(this.completingTimer);
     }
+    if (this.typeaheadTimer !== null) {
+      clearTimeout(this.typeaheadTimer);
+    }
+  }
+
+  protected onQueryInput(event: Event): void {
+    const q = (event.target as HTMLInputElement).value.trim();
+    this.query.set((event.target as HTMLInputElement).value);
+    if (this.typeaheadTimer !== null) clearTimeout(this.typeaheadTimer);
+    if (q.length < 2) {
+      this.typeaheadOpen.set(false);
+      this.typeaheadMatches.set([]);
+      return;
+    }
+    this.typeaheadTimer = setTimeout(() => {
+      const seq = ++this.typeaheadSeq;
+      this.photos.searchSubjects(q).then((m) => {
+        if (seq !== this.typeaheadSeq) return;
+        this.typeaheadMatches.set(m);
+        this.typeaheadOpen.set(m.length > 0);
+      }).catch(() => { /* typeahead failures are silent */ });
+    }, 200);
+  }
+
+  protected onTypeaheadSelect(match: SubjectMatch): void {
+    this.typeaheadOpen.set(false);
+    void this.router.navigate(['/subject', match.subject.id]);
+  }
+
+  protected closeTypeahead(): void {
+    this.typeaheadOpen.set(false);
   }
 
   protected onSearch(): void {
+    this.typeaheadOpen.set(false);
     void this.photos.searchByText(this.query());
   }
 
   protected onClear(): void {
     this.query.set('');
+    this.typeaheadOpen.set(false);
+    this.typeaheadMatches.set([]);
     this.photos.clearSearch();
   }
 

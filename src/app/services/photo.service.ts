@@ -14,6 +14,9 @@ import {
   MergeSuggestion,
   NameSubjectResult,
   SubjectDetail,
+  Tag,
+  TagWithCount,
+  SubjectMatch,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -36,6 +39,7 @@ export class PhotoService {
   readonly searchError = signal<string | null>(null);
   readonly searchImage = signal<{ thumbnailUrl: string; type: 'library' | 'external' } | null>(null);
   readonly searchText = signal<string>('');
+  readonly subjectMatches = signal<SubjectMatch[]>([]);
 
   // ---- Lightbox state ----
   readonly selectedImage = signal<Image | SearchResult | null>(null);
@@ -252,6 +256,9 @@ export class PhotoService {
     try {
       const results = await invoke<SearchResult[]>('search', { query: { type: 'text', query } });
       this.searchResults.set(results);
+      this.searchSubjects(query)
+        .then((m) => this.subjectMatches.set(m))
+        .catch(() => this.subjectMatches.set([]));
     } catch (e: unknown) {
       const msg =
         typeof e === 'string' && e.includes('connection')
@@ -306,6 +313,7 @@ export class PhotoService {
     this.searchError.set(null);
     this.searchImage.set(null);
     this.searchText.set('');
+    this.subjectMatches.set([]);
   }
 
   selectFolder(id: number | null): void {
@@ -370,6 +378,42 @@ export class PhotoService {
   /** Convert an absolute path to the original full-res image to a Tauri asset URL. */
   originalUrl(imagePath: string): string {
     return convertFileSrc(imagePath);
+  }
+
+  async searchSubjects(query: string): Promise<SubjectMatch[]> {
+    return await invoke<SubjectMatch[]>('search_subjects', { query });
+  }
+
+  async createTag(name: string): Promise<Tag> {
+    return await invoke<Tag>('create_tag', { name });
+  }
+
+  async addSubjectTag(subjectId: number, name: string): Promise<Tag> {
+    return await invoke<Tag>('add_subject_tag', { subjectId, name });
+  }
+
+  async removeSubjectTag(subjectId: number, tagId: number): Promise<void> {
+    await invoke('remove_subject_tag', { subjectId, tagId });
+  }
+
+  async getSubjectTags(subjectId: number): Promise<Tag[]> {
+    return await invoke<Tag[]>('get_subject_tags', { subjectId });
+  }
+
+  async listTags(): Promise<TagWithCount[]> {
+    return await invoke<TagWithCount[]>('list_tags', {});
+  }
+
+  async renameTag(tagId: number, name: string): Promise<void> {
+    await invoke('rename_tag', { tagId, name });
+  }
+
+  async deleteTag(tagId: number): Promise<void> {
+    await invoke('delete_tag', { tagId });
+  }
+
+  async getTagSubjects(tagId: number): Promise<SubjectMatch[]> {
+    return await invoke<SubjectMatch[]>('get_tag_subjects', { tagId });
   }
 }
 

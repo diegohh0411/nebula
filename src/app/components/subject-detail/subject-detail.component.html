@@ -30,6 +30,37 @@
             <span class="w-1 h-1 rounded-full bg-border"></span>
             <span>{{ detail()?.face_count || 0 }} faces</span>
           </div>
+          <!-- Tag chips -->
+          <div class="flex flex-wrap gap-1.5 mt-2">
+            @for (tag of tags(); track tag.id) {
+              <span class="inline-flex items-center gap-1 text-xs bg-secondary text-secondary-foreground rounded-full px-2 py-0.5">
+                {{ tag.name }}
+                <button class="hover:text-destructive" (click)="removeTag(tag.id)" title="Remove tag">×</button>
+              </span>
+            }
+            <div class="flex flex-col gap-1">
+              <div class="flex items-center gap-1">
+                <input
+                  class="text-xs border border-border rounded px-2 py-0.5 bg-background w-32"
+                  placeholder="Add tag…"
+                  list="subject-tags-list"
+                  [value]="newTagName()"
+                  (input)="newTagName.set($any($event.target).value)"
+                  (focus)="onTagFocus()"
+                  (keydown.enter)="addTag()"
+                />
+                <datalist id="subject-tags-list">
+                  @for (t of allTags(); track t.id) {
+                    <option [value]="t.name"></option>
+                  }
+                </datalist>
+                <button class="text-xs text-primary hover:underline" (click)="addTag()">Add</button>
+              </div>
+              @if (tagError()) {
+                <span class="text-xs text-destructive">{{ tagError() }}</span>
+              }
+            </div>
+          </div>
         </div>
       </div>
     </div>
