@@ -27,7 +27,7 @@
       <!-- Tag entries -->
       @for (tag of tags(); track tag.id) {
         <div
-          class="tag-entry"
+          class="tag-entry group"
           [class.tag-entry--selected]="selectedTag()?.id === tag.id"
           (click)="selectTag(tag)"
         >

@@ -7,7 +7,7 @@
 }
 
 .tag-entry {
-  @apply group flex items-center gap-2 p-2 rounded-md cursor-pointer hover:bg-accent mb-1;
+  @apply flex items-center gap-2 p-2 rounded-md cursor-pointer hover:bg-accent mb-1;
 }
 
 .tag-entry--selected {
