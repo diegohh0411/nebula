@@ -85,6 +85,52 @@ fn compute_mutual_sim_edges(
     edges
 }
 
+/// Build the per-face neighbor map that feeds the similarity-edge graph.
+///
+/// A neighbor sharing the same (non-null) subject as the query face is dropped
+/// *before* the top-k cut, so a dominant subject's own near-duplicate faces
+/// cannot crowd a genuine cross-subject neighbor out of the list. Without this,
+/// a person who appears in many photos saturates every top-k with their own
+/// faces and the cross-subject "bridge" edge a merge suggestion depends on never
+/// forms (TT-57). Unassigned faces (no subject) are never filtered, so
+/// new-subject formation and assign-to-subject behavior are unchanged.
+async fn build_subject_aware_knn(
+    pool: &SqlitePool,
+    all_face_ids: &[i64],
+    face_subjects: &HashMap<i64, i64>,
+    k: usize,
+) -> Result<HashMap<i64, Vec<(i64, f32)>>> {
+    // How many faces each subject owns — bounds how many same-subject neighbors
+    // could sit ahead of the first cross-subject one in the candidate list.
+    let mut subject_sizes: HashMap<i64, usize> = HashMap::new();
+    for &sid in face_subjects.values() {
+        *subject_sizes.entry(sid).or_insert(0) += 1;
+    }
+
+    let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
+    for &fid in all_face_ids {
+        let own_subject = face_subjects.get(&fid).copied();
+        // Over-fetch so that after dropping up to (subject_size - 1) same-subject
+        // neighbors, at least k cross-subject candidates remain. Bounded by the
+        // subject's real face count — no magic constant.
+        let candidate_k = match own_subject {
+            Some(sid) => k + subject_sizes.get(&sid).copied().unwrap_or(0),
+            None => k,
+        };
+        let neighbors: Vec<(i64, f32)> = crate::face_store::knn_cosine_sim(pool, fid, candidate_k)
+            .await?
+            .into_iter()
+            .filter(|(nid, _)| match own_subject {
+                Some(sid) => face_subjects.get(nid).copied() != Some(sid),
+                None => true,
+            })
+            .take(k)
+            .collect();
+        all_knn.insert(fid, neighbors);
+    }
+    Ok(all_knn)
+}
+
 #[derive(Debug)]
 enum LabelAction {
     AssignAll { faces: Vec<i64>, subject_id: i64 },
@@ -187,13 +233,12 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     // 1. Rebuild similarity edge graph
     db::clear_all_face_edges(pool).await?;
     let all_face_ids = db::get_all_face_ids_with_vectors(pool).await?;
+    let face_subjects = db::get_assigned_face_subject_map(pool).await?;
 
-    // Build knn map: face_id → Vec<(neighbor_id, cosine_sim)>
-    let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
-    for &fid in &all_face_ids {
-        let neighbors = crate::face_store::knn_cosine_sim(pool, fid, K_NEAREST).await?;
-        all_knn.insert(fid, neighbors);
-    }
+    // Build subject-aware knn map: face_id → Vec<(neighbor_id, cosine_sim)>.
+    // Same-subject neighbors are excluded so a dominant subject can't crowd
+    // cross-subject bridge edges out of the top-k (TT-57).
+    let all_knn = build_subject_aware_knn(pool, &all_face_ids, &face_subjects, K_NEAREST).await?;
 
     // Compute mutual sim edges and persist
     let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
@@ -208,9 +253,8 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     // 3. Build Union-Find with constraint enforcement
     let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &all_face_ids);
 
-    // 4. Compute components and load current assignments
+    // 4. Compute components and load subject names (assignments loaded in step 1)
     let components = uf.components(&all_face_ids);
-    let face_subjects = db::get_assigned_face_subject_map(pool).await?;
     let subject_rows = sqlx::query("SELECT id, name FROM subjects")
         .fetch_all(pool).await?;
     let subject_names: HashMap<i64, Option<String>> = subject_rows.into_iter()
@@ -723,5 +767,64 @@ mod tests {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(count, 0, "dismissed pair (cannot_link) must not be suggested");
+    }
+
+    fn unit(v: &[f32]) -> Vec<f32> {
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.iter().map(|x| x / n).collect()
+    }
+
+    #[tokio::test]
+    async fn crowded_subject_still_yields_cross_subject_merge_suggestion() {
+        // Regression for TT-57. A named subject that owns more than K_NEAREST
+        // near-duplicate faces must not crowd a genuine cross-subject neighbor
+        // out of the mutual-kNN graph. Before the subject-aware neighbor filter,
+        // every top-K_NEAREST list for a "Diego" face was saturated with other
+        // Diego faces, so the bridge edge to the unnamed duplicate subject never
+        // formed and no merge suggestion was produced — exactly the bug the user
+        // hit after processing 200 photos.
+        let pool = make_integration_pool().await;
+
+        let diego: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Diego', 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+
+        // Six tightly-clustered Diego faces (> K_NEAREST = 5). Every pair is more
+        // similar to each other (cos ~0.999) than any is to the duplicate below
+        // (cos ~0.99), so the duplicate lands just outside each face's top-5.
+        let diego_vectors = [
+            unit(&[1.0, 0.00, 0.00]),
+            unit(&[1.0, 0.02, 0.00]),
+            unit(&[1.0, 0.04, 0.00]),
+            unit(&[1.0, 0.00, 0.02]),
+            unit(&[1.0, 0.00, 0.04]),
+            unit(&[1.0, 0.02, 0.02]),
+        ];
+        for v in &diego_vectors {
+            let fid: i64 = sqlx::query_scalar(
+                "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id"
+            ).bind(diego).fetch_one(&pool).await.unwrap();
+            sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+                .bind(fid).bind(emb_bytes(v)).execute(&pool).await.unwrap();
+        }
+
+        // A second, *unnamed* subject that is clearly the same person (cos ~0.99
+        // to every Diego face, well above TAU_SIM) but sits outside each Diego
+        // face's top-5 because the six Diego faces are nearer to one another.
+        let dup: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        let dup_face: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id"
+        ).bind(dup).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(dup_face).bind(emb_bytes(&unit(&[1.0, 0.1, 0.1]))).execute(&pool).await.unwrap();
+
+        cluster_unassigned_faces(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1,
+            "named Diego subject must be suggested for merge with its unnamed duplicate despite top-k crowding");
     }
 }
