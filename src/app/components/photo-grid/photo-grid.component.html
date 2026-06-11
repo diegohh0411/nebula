@@ -1,9 +1,14 @@
-<div class="photo-grid" [style.height.px]="rowHeight">
+<div
+  class="photo-grid"
+  [class.photo-grid--grid]="layout === 'grid'"
+  [style.height.px]="layout === 'row' ? rowHeight : null"
+  [style.--cell-size.px]="cellSize"
+>
   @for (img of images; track imageId(img)) {
     <div
       class="photo-cell group"
       [title]="filename(img)"
-      [style.flex-grow]="0.8 + ((imageId(img) * 54321) % 1000) / 1000"
+      [style.flex-grow]="layout === 'row' ? 0.8 + ((imageId(img) * 54321) % 1000) / 1000 : null"
       (click)="onPhotoClick(img)"
       [attr.data-id]="imageId(img)"
       [class.selected]="photos.selectedImageIds().has(imageId(img))"

@@ -9,12 +9,12 @@
 }
 
 .modal-panel {
-  background: var(--background);
-  border: 1px solid var(--border);
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
   border-radius: 0.75rem;
   padding: 1.5rem;
   width: min(90vw, 900px);
-  max-height: 85vh;
+  height: 85vh;
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
@@ -31,14 +31,23 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
-  overflow-y: auto;
   flex: 1;
+  min-height: 0;
 }
 
 .subject-col {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+}
+
+/* Photo area scrolls on its own so the subject name + count stay pinned. */
+.subject-photos {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .subject-name {
@@ -65,5 +74,5 @@
   justify-content: flex-end;
   gap: 0.75rem;
   padding-top: 0.5rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid hsl(var(--border));
 }
