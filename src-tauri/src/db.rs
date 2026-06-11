@@ -925,29 +925,6 @@ pub async fn get_face_with_image(
     }))
 }
 
-pub async fn search_subjects_by_name(pool: &SqlitePool, query: &str) -> Result<Vec<Subject>> {
-    let like_query = format!("%{}%", query);
-    let rows = sqlx::query(
-        "SELECT id, name, thumbnail_face_id, type, added_at 
-         FROM subjects 
-         WHERE name LIKE ? COLLATE NOCASE 
-         ORDER BY added_at DESC"
-    )
-    .bind(like_query)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| Subject {
-            id: r.get("id"),
-            name: r.get("name"),
-            thumbnail_face_id: r.get("thumbnail_face_id"),
-            subject_type: r.get("type"),
-            added_at: r.get("added_at"),
-        })
-        .collect())
-}
 
 /// Standalone find-or-create (used by the /tags view's inline create).
 pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {

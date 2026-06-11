@@ -91,13 +91,28 @@ pub async fn search(
 
     match query {
         SearchQuery::Text { ref query } => {
-            let matched_subjects = db::search_subjects_by_name(pool, query).await.unwrap_or_default();
-            let subject_ids: Vec<i64> = matched_subjects.iter().map(|s| s.id).collect();
-            let subject_image_ids: HashSet<i64> = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default().into_iter().collect();
+            // 1. Tag-derived images, already ordered by tagged-subject count desc.
+            let tag_image_ids = db::get_tag_image_ids_ordered(pool, query).await.unwrap_or_default();
+
+            // 2. Name-derived images (accent-insensitive), appended after tag matches.
+            let matched = db::search_subjects_matching(pool, query).await.unwrap_or_default();
+            let subject_ids: Vec<i64> = matched.iter().map(|m| m.subject.id).collect();
+            let name_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+
+            let mut pinned_ids: Vec<i64> = Vec::new();
+            let mut pinned_set: HashSet<i64> = HashSet::new();
+            for id in tag_image_ids.into_iter().chain(name_image_ids.into_iter()) {
+                if pinned_set.insert(id) {
+                    pinned_ids.push(id);
+                }
+            }
 
             let mut results = vec![];
-            for image_id in &subject_image_ids {
+            for image_id in &pinned_ids {
                 if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
+                    if img.deleted_at.is_some() {
+                        continue;
+                    }
                     results.push(SearchResult {
                         image_id: *image_id,
                         path: img.path,
@@ -138,7 +153,7 @@ pub async fn search(
             if let Ok(scored) = search::search_images(&state.index, query_embedding, 50).await {
                 if let Ok(rag_results) = search::build_search_results(pool, scored).await {
                     for res in rag_results {
-                        if !subject_image_ids.contains(&res.image_id) {
+                        if !pinned_set.contains(&res.image_id) {
                             results.push(res);
                         }
                     }
