@@ -34,7 +34,12 @@ A standalone Angular component that owns the display↔edit toggle, focus manage
 @Input() placeholderClass?: string     // extra Tailwind classes for placeholder styling
 @Input() displayClass?: string         // Tailwind classes shared by display text and input
                                        // (controls font size/weight per callsite)
-@Output() commit: EventEmitter<string> // emits trimmed value on blur/Enter, including ""
+@Input() set startEditing(trigger: boolean) // setting true from outside enters edit mode
+                                            // (e.g. Tab chaining from parent); no-op if
+                                            // already editing
+@Output() commit: EventEmitter<string> // emits trimmed value on blur/Enter/Tab, including ""
+@Output() tabbed: EventEmitter<void>   // emits after Tab commits, so parent can chain focus
+                                       // to the next editable field
 ```
 
 ### Internal state
@@ -47,7 +52,7 @@ A standalone Angular component that owns the display↔edit toggle, focus manage
 - Clicking display text or placeholder sets `isEditing(true)`, sets `draft` to current `value ?? ""`, schedules `afterNextRender` focus.
 - Blur or Enter: trim draft, emit via `(commit)`, set `isEditing(false)`.
 - Escape: set `isEditing(false)`, no emit.
-- Tab: `EditableText` does **not** intercept Tab — it lets the event propagate so the parent can handle focus chaining. The People view currently tabs from one unnamed subject to the next; this logic stays in `PeopleViewComponent` by listening to `(keydown.tab)` on the host or by handling it in `onNameCommit`.
+- Tab: `EditableText` **does** intercept Tab — it calls `preventDefault()` to suppress browser focus movement, commits the draft (same as blur/Enter), and then emits `(tabbed)`. The parent listens to `(tabbed)` and advances focus to the next editable field (e.g. in `PeopleViewComponent`, `onNameTab` sets `editingSubjectId` to the next unnamed subject, and passes `[startEditing]="true"` to that card's `app-editable-text` to open it programmatically).
 - The input uses `border-b border-primary outline-none bg-transparent` internally so it looks consistent everywhere; `displayClass` is layered on top for per-context font styling.
 - `cursor-text` is applied to the display element.
 - When `value` is null/empty after a commit, the parent converts `""` → `null` in the API call as needed; `EditableText` re-renders the placeholder once `[value]` comes back null.
