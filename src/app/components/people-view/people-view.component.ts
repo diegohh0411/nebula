@@ -1,10 +1,12 @@
-import { Component, inject, OnInit, signal } from '@angular/core';
+import { Component, inject, OnInit, AfterViewInit, OnDestroy, effect, ElementRef, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, Subject } from '../../models/models';
 import { RouterLink } from '@angular/router';
 import { MergeReviewComponent } from '../merge-review/merge-review.component';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+
+const FACE_CROP_CACHE_CAP = 200;
 
 @Component({
   selector: 'app-people-view',
@@ -13,7 +15,7 @@ import { EditableTextComponent } from '../editable-text/editable-text.component'
   templateUrl: './people-view.component.html',
   styleUrl: './people-view.component.css'
 })
-export class PeopleViewComponent implements OnInit {
+export class PeopleViewComponent implements OnInit, AfterViewInit, OnDestroy {
   protected photoService = inject(PhotoService);
   protected faceCropUrls = signal<Record<number, string>>({});
   protected mergeSuggestions = signal<MergeSuggestion[]>([]);
@@ -25,11 +27,79 @@ export class PeopleViewComponent implements OnInit {
   protected namingConflict = signal<MergeSuggestion | null>(null);
 
   private _originalSubjects = new Map<number, Subject>();
+  private host = inject(ElementRef<HTMLElement>);
+  private observer?: IntersectionObserver;
+
+  constructor() {
+    // Re-observe cards whenever the subjects list changes (initial load, post-merge reload, etc.)
+    effect(() => {
+      this.photoService.subjects();
+      setTimeout(() => this.observeCards(), 0);
+    });
+  }
 
   async ngOnInit() {
     await this.photoService.loadSubjects();
     void this.loadMergeSuggestions();
-    void this.loadThumbnails();
+  }
+
+  ngAfterViewInit(): void {
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          const subjectId = Number((e.target as HTMLElement).dataset['subjectId']);
+          if (!Number.isNaN(subjectId)) {
+            void this.loadFaceCropForSubject(subjectId);
+            this.observer?.unobserve(e.target);
+          }
+        }
+      },
+      { root: null, rootMargin: '300px', threshold: 0.01 }
+    );
+  }
+
+  ngOnDestroy(): void {
+    this.observer?.disconnect();
+  }
+
+  private observeCards(): void {
+    if (!this.observer) return;
+    this.observer.disconnect();
+    const loaded = this.faceCropUrls();
+    const cards = this.host.nativeElement.querySelectorAll('[data-subject-id]') as NodeListOf<HTMLElement>;
+    cards.forEach((el: HTMLElement) => {
+      const subjectId = Number(el.dataset['subjectId']);
+      if (!loaded[subjectId]) this.observer!.observe(el);
+    });
+  }
+
+  private async loadFaceCropForSubject(subjectId: number): Promise<void> {
+    if (this.faceCropUrls()[subjectId]) return;
+    const subject = this.photoService.subjects().find(s => s.id === subjectId);
+    if (!subject?.thumbnail_face_id) return;
+    try {
+      const path = await this.photoService.getFaceCrop(subject.thumbnail_face_id);
+      const url = this.photoService.thumbnailUrl(path);
+      if (url) {
+        this.faceCropUrls.update(urls => {
+          const next = { ...urls, [subjectId]: url };
+          return this.withCap(next);
+        });
+      }
+    } catch (e) {
+      console.error(`Failed to load thumbnail for subject ${subjectId}`, e);
+    }
+  }
+
+  private withCap(urls: Record<number, string>): Record<number, string> {
+    const keys = Object.keys(urls);
+    if (keys.length <= FACE_CROP_CACHE_CAP) return urls;
+    const trimmed: Record<number, string> = {};
+    for (const k of keys.slice(keys.length - FACE_CROP_CACHE_CAP)) {
+      trimmed[Number(k)] = urls[Number(k)];
+    }
+    return trimmed;
   }
 
   private async loadMergeSuggestions() {
@@ -61,32 +131,14 @@ export class PeopleViewComponent implements OnInit {
     this.suggestionCropUrls.set(urls);
   }
 
-  private async loadThumbnails() {
-    const subjects = this.photoService.subjects();
-    const urls: Record<number, string> = {};
-
-    await Promise.all(subjects.map(async (s) => {
-      if (s.thumbnail_face_id) {
-        try {
-          const path = await this.photoService.getFaceCrop(s.thumbnail_face_id);
-          const url = this.photoService.thumbnailUrl(path);
-          if (url) urls[s.id] = url;
-        } catch (e) {
-          console.error(`Failed to load thumbnail for subject ${s.id}`, e);
-        }
-      }
-    }));
-
-    this.faceCropUrls.set(urls);
-  }
-
   protected openReview(suggestion: MergeSuggestion) {
     this.reviewingSuggestion.set(suggestion);
   }
 
   async onConfirmed() {
     this.reviewingSuggestion.set(null);
-    await Promise.all([this.loadThumbnails(), this.loadMergeSuggestions()]);
+    this.faceCropUrls.set({});
+    await Promise.all([this.photoService.loadSubjects(), this.loadMergeSuggestions()]);
   }
 
   async onDismissed() {
@@ -155,7 +207,8 @@ export class PeopleViewComponent implements OnInit {
 
   protected onConflictConfirmed(): void {
     this.namingConflict.set(null);
-    void Promise.all([this.loadThumbnails(), this.loadMergeSuggestions()]);
+    this.faceCropUrls.set({});
+    void Promise.all([this.photoService.loadSubjects(), this.loadMergeSuggestions()]);
   }
 
   protected onConflictDismissed(): void {
