@@ -76,6 +76,9 @@
         Processing {{ photos.pipelineStats().total_pending }} images
         @if (photos.pipelineStats().images_per_sec >= 0.1) {
           · {{ photos.pipelineStats().images_per_sec | number:'1.0-1' }} img/s
+          @if (formatEta(photos.etaSeconds())) {
+            · {{ formatEta(photos.etaSeconds()) }}
+          }
         }
       } @else {
         Library up to date
