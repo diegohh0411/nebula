@@ -18,7 +18,7 @@
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
           } @else {
-            <app-photo-grid [images]="photosA()" [rowHeight]="120" />
+            <app-photo-grid class="subject-photos" [images]="photosA()" layout="grid" [cellSize]="104" />
           }
         </div>
 
@@ -33,7 +33,7 @@
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
           } @else {
-            <app-photo-grid [images]="photosB()" [rowHeight]="120" />
+            <app-photo-grid class="subject-photos" [images]="photosB()" layout="grid" [cellSize]="104" />
           }
         </div>
       </div>

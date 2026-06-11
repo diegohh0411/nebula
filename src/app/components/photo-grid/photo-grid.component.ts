@@ -28,6 +28,12 @@ export class PhotoGridComponent implements AfterViewInit, OnDestroy {
 
   @Input() rowHeight: number = 220;
 
+  /** 'row' = single justified row (Flickr-style); 'grid' = wrapping multi-row grid. */
+  @Input() layout: 'row' | 'grid' = 'row';
+
+  /** Min cell edge (px) used in 'grid' layout to size the auto-fill columns/rows. */
+  @Input() cellSize: number = 120;
+
   protected photos = inject(PhotoService);
   protected Math = Math;
 
