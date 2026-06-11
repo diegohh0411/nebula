@@ -66,7 +66,7 @@ pub fn run() {
             let data_dir_pipe = data_dir.clone();
             tauri::async_runtime::spawn(async move {
                 // Resolve the user's chosen embedding model; default to SIGLIP_BASE.
-                let model_id = crate::db::get_setting(&pool_pipe, "embedding_model")
+                let model_id = crate::settings::repo::get_setting(&pool_pipe, "embedding_model")
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| crate::models::registry::SIGLIP_BASE.id.to_string());

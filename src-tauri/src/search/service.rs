@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 
-use crate::{db, models::SearchResult};
+use crate::models::SearchResult;
 
 pub async fn search_images(
     index: &crate::search::vector_index::IndexStore,
@@ -38,7 +38,7 @@ pub async fn build_search_results(
 ) -> Result<Vec<SearchResult>> {
     let mut results = Vec::with_capacity(scored.len());
     for (image_id, score) in scored {
-        if let Ok(Some(img)) = db::get_image_by_id(pool, image_id).await {
+        if let Ok(Some(img)) = crate::library::repo::get_image_by_id(pool, image_id).await {
             if img.deleted_at.is_some() {
                 continue; // guard against tombstone/soft-delete race
             }

@@ -2,7 +2,7 @@ use anyhow::Result;
 use sqlx::{Row, SqlitePool};
 
 use crate::models::{Subject, Tag, TagWithCount, SubjectMatch};
-use crate::db::{normalize, like_pattern, matches_tokens};
+use crate::search::text::{normalize, like_pattern, matches_tokens};
 
 pub async fn create_tag(pool: &SqlitePool, name: &str) -> Result<Tag> {
     let display = name.trim();

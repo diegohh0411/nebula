@@ -3,7 +3,7 @@ use log::{info, warn, error, debug};
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 
-use crate::db;
+use crate::people::repo as people_repo;
 
 pub const TAU_SIM: f32 = 0.45;
 pub const K_NEAREST: usize = 5;
@@ -241,9 +241,9 @@ fn build_components_with_constraints(
 
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     // 1. Rebuild similarity edge graph
-    db::clear_all_face_edges(pool).await?;
-    let all_face_ids = db::get_all_face_ids_with_vectors(pool).await?;
-    let face_subjects = db::get_assigned_face_subject_map(pool).await?;
+    people_repo::clear_all_face_edges(pool).await?;
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
 
     // Build subject-aware knn map: face_id → Vec<(neighbor_id, cosine_sim)>.
     // Same-subject neighbors are excluded so a dominant subject can't crowd
@@ -253,12 +253,12 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     // Compute mutual sim edges and persist
     let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
     for &(fa, fb, weight) in &sim_edges {
-        db::upsert_face_edge(pool, fa, fb, weight).await?;
+        people_repo::upsert_face_edge(pool, fa, fb, weight).await?;
     }
 
     // 2. Load constraints
-    let must_links = db::get_all_must_link_pairs(pool).await?;
-    let cannot_links = db::get_all_cannot_link_pairs(pool).await?;
+    let must_links = people_repo::get_all_must_link_pairs(pool).await?;
+    let cannot_links = people_repo::get_all_cannot_link_pairs(pool).await?;
 
     // 3. Build Union-Find with constraint enforcement
     let mut uf = build_components_with_constraints(sim_edges, &must_links, &cannot_links, &all_face_ids);
@@ -280,19 +280,19 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
         match action {
             LabelAction::AssignAll { faces, subject_id } => {
                 for fid in faces {
-                    db::update_face_subject(pool, fid, Some(subject_id)).await?;
+                    people_repo::update_face_subject(pool, fid, Some(subject_id)).await?;
                 }
             }
             LabelAction::NewSubject { faces } => {
-                let sid = db::insert_subject(pool, None, "person").await?;
+                let sid = people_repo::insert_subject(pool, None, "person").await?;
                 for fid in &faces {
-                    db::update_face_subject(pool, *fid, Some(sid)).await?;
+                    people_repo::update_face_subject(pool, *fid, Some(sid)).await?;
                 }
                 new_clusters_count += 1;
             }
             LabelAction::Noise { faces } => {
                 for fid in &faces {
-                    db::update_face_subject(pool, *fid, None).await?;
+                    people_repo::update_face_subject(pool, *fid, None).await?;
                 }
                 noise_count += faces.len();
             }
@@ -301,8 +301,8 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     }
 
     // 6. Cleanup
-    let deleted = db::delete_subjects_with_no_faces(pool).await?;
-    let _ = db::auto_assign_missing_thumbnails(pool).await;
+    let deleted = people_repo::delete_subjects_with_no_faces(pool).await?;
+    let _ = people_repo::auto_assign_missing_thumbnails(pool).await;
     let _ = find_merge_suggestions(pool).await;
 
     Ok(ReclusterResult {
@@ -314,7 +314,7 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
 }
 
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
-    db::clear_merge_suggestions(pool).await?;
+    people_repo::clear_merge_suggestions(pool).await?;
 
     let now = chrono::Utc::now().timestamp();
 
@@ -652,7 +652,7 @@ mod tests {
         sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
             .bind(face_f).bind(emb_bytes(&[0.999f32, 0.045, 0.0])).execute(&pool).await.unwrap();
 
-        crate::db::add_cannot_link(&pool, face_f, anchor_s, "removal").await.unwrap();
+        crate::people::repo::add_cannot_link(&pool, face_f, anchor_s, "removal").await.unwrap();
 
         cluster_unassigned_faces(&pool).await.unwrap();
 
@@ -695,10 +695,10 @@ mod tests {
         sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
             .bind(fb2).bind(emb_bytes(&[0.14f32, 0.99, 0.0])).execute(&pool).await.unwrap();
 
-        crate::db::add_must_link(&pool, fa1, fb1, "merge").await.unwrap();
-        crate::db::add_must_link(&pool, fa1, fb2, "merge").await.unwrap();
-        crate::db::add_must_link(&pool, fa2, fb1, "merge").await.unwrap();
-        crate::db::add_must_link(&pool, fa2, fb2, "merge").await.unwrap();
+        crate::people::repo::add_must_link(&pool, fa1, fb1, "merge").await.unwrap();
+        crate::people::repo::add_must_link(&pool, fa1, fb2, "merge").await.unwrap();
+        crate::people::repo::add_must_link(&pool, fa2, fb1, "merge").await.unwrap();
+        crate::people::repo::add_must_link(&pool, fa2, fb2, "merge").await.unwrap();
         sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
             .bind(subject_a).bind(subject_b).execute(&pool).await.unwrap();
         sqlx::query("DELETE FROM subjects WHERE id = ?")
@@ -737,7 +737,7 @@ mod tests {
             .bind(fb).bind(emb_bytes(&[0.99f32, 0.14, 0.0])).execute(&pool).await.unwrap();
 
         // Manually insert a face_edge between them (as recluster would)
-        db::upsert_face_edge(&pool, fa, fb, 0.99).await.unwrap();
+        people_repo::upsert_face_edge(&pool, fa, fb, 0.99).await.unwrap();
 
         find_merge_suggestions(&pool).await.unwrap();
 
@@ -769,8 +769,8 @@ mod tests {
         sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
             .bind(fb).bind(emb_bytes(&[0.99f32, 0.14, 0.0])).execute(&pool).await.unwrap();
 
-        db::upsert_face_edge(&pool, fa, fb, 0.99).await.unwrap();
-        crate::db::add_cannot_link(&pool, fa, fb, "dismiss").await.unwrap();
+        people_repo::upsert_face_edge(&pool, fa, fb, 0.99).await.unwrap();
+        crate::people::repo::add_cannot_link(&pool, fa, fb, "dismiss").await.unwrap();
 
         find_merge_suggestions(&pool).await.unwrap();
 

@@ -141,7 +141,7 @@ impl FlatIndex {
         }
 
         info!("[vector-index] Rebuilding index from SQLite…");
-        let all = crate::db::get_all_embeddings(pool).await?;
+        let all = crate::search::repo::get_all_embeddings(pool).await?;
 
         let dim = all
             .first()

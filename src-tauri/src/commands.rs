@@ -3,7 +3,6 @@ use sha2::{Sha256, Digest};
 use std::collections::HashSet;
 
 use crate::{
-    db,
     models::{SearchResult, SearchQuery, SubjectMatch},
     search, AppState,
 };
@@ -23,12 +22,12 @@ pub async fn search(
     match query {
         SearchQuery::Text { ref query } => {
             // 1. Tag-derived images, already ordered by tagged-subject count desc.
-            let tag_image_ids = db::get_tag_image_ids_ordered(pool, query).await.unwrap_or_default();
+            let tag_image_ids = crate::tags::repo::get_tag_image_ids_ordered(pool, query).await.unwrap_or_default();
 
             // 2. Name-derived images (accent-insensitive), appended after tag matches.
-            let matched = db::search_subjects_matching(pool, query).await.unwrap_or_default();
+            let matched = crate::tags::repo::search_subjects_matching(pool, query).await.unwrap_or_default();
             let subject_ids: Vec<i64> = matched.iter().map(|m| m.subject.id).collect();
-            let name_image_ids = db::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
+            let name_image_ids = crate::tags::repo::get_image_ids_for_subjects(pool, &subject_ids).await.unwrap_or_default();
 
             let mut pinned_ids: Vec<i64> = Vec::new();
             let mut pinned_set: HashSet<i64> = HashSet::new();
@@ -40,7 +39,7 @@ pub async fn search(
 
             let mut results = vec![];
             for image_id in &pinned_ids {
-                if let Ok(Some(img)) = db::get_image_by_id(pool, *image_id).await {
+                if let Ok(Some(img)) = crate::library::repo::get_image_by_id(pool, *image_id).await {
                     if img.deleted_at.is_some() {
                         continue;
                     }
@@ -64,10 +63,10 @@ pub async fn search(
                 format!("{:x}", hasher.finalize())
             };
 
-            let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
+            let query_embedding = if let Some(cached) = crate::search::repo::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
                 crate::search::math::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let model_id = db::get_setting(pool, "embedding_model")
+                let model_id = crate::settings::repo::get_setting(pool, "embedding_model")
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
@@ -77,7 +76,7 @@ pub async fn search(
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_text(&state.model_manager, query, spec).map_err(map_err)?;
                 let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
+                let _ = crate::search::repo::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
             };
 
@@ -91,12 +90,12 @@ pub async fn search(
                 }
             }
 
-            let _ = db::delete_stale_cache_entries(pool).await;
+            let _ = crate::search::repo::delete_stale_cache_entries(pool).await;
             Ok(results)
         }
 
         SearchQuery::ImageId { image_id } => {
-            let embedding_blob = db::get_image_embedding(pool, image_id)
+            let embedding_blob = crate::search::repo::get_image_embedding(pool, image_id)
                 .await
                 .map_err(map_err)?
                 .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
@@ -122,10 +121,10 @@ pub async fn search(
                 format!("{:x}", hasher.finalize())
             };
 
-            let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
+            let query_embedding = if let Some(cached) = crate::search::repo::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
                 crate::search::math::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
-                let model_id = db::get_setting(pool, "embedding_model")
+                let model_id = crate::settings::repo::get_setting(pool, "embedding_model")
                     .await
                     .unwrap_or(None)
                     .unwrap_or_else(|| "diegohh/siglip2-base-patch16-224".to_string());
@@ -136,7 +135,7 @@ pub async fn search(
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_image(&state.model_manager, &img, spec).map_err(map_err)?;
                 let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
+                let _ = crate::search::repo::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb
             };
 
@@ -144,7 +143,7 @@ pub async fn search(
                 .await
                 .map_err(map_err)?;
 
-            let _ = db::delete_stale_cache_entries(pool).await;
+            let _ = crate::search::repo::delete_stale_cache_entries(pool).await;
             search::build_search_results(pool, scored).await.map_err(map_err)
         }
     }
@@ -157,7 +156,7 @@ pub async fn get_processing_status(
     let ema_bits = state.throughput_ema.load(std::sync::atomic::Ordering::Relaxed);
     let images_per_sec = f32::from_bits(ema_bits);
 
-    db::get_processing_counts(&state.pool).await
+    crate::pipeline::queue::get_processing_counts(&state.pool).await
         .map(|s| crate::models::PipelineStatsPayload {
             total_pending: s.total_pending as u32,
             images_per_sec,

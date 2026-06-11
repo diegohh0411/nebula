@@ -94,12 +94,12 @@ pub async fn update_setting(
     let pool = &state.pool;
 
     if key == "embedding_model" {
-        let current = crate::db::get_setting(pool, &key).await.unwrap_or(None);
+        let current = crate::settings::repo::get_setting(pool, &key).await.unwrap_or(None);
         if current.as_ref() != Some(&value) {
             let spec = crate::models::registry::ModelSpec::find_by_id(&value)
                 .ok_or_else(|| format!("Unknown model: {}", value))?;
             state.model_manager.ensure_ready(&app, spec).await.map_err(|e| e.to_string())?;
-            crate::db::reset_all_embeddings(pool).await.map_err(|e| e.to_string())?;
+            crate::search::repo::reset_all_embeddings(pool).await.map_err(|e| e.to_string())?;
             if let Ok(mut idx) = state.index.write() {
                 *idx = Box::new(crate::search::vector_index::FlatIndex::new(768));
             }
@@ -109,9 +109,9 @@ pub async fn update_setting(
     }
 
     if key == "subject_model" {
-        let current = crate::db::get_setting(pool, &key).await.unwrap_or(None);
+        let current = crate::settings::repo::get_setting(pool, &key).await.unwrap_or(None);
         if current.as_ref() != Some(&value) {
-            crate::db::reset_all_subject_data(pool).await.map_err(|e| e.to_string())?;
+            crate::people::repo::reset_all_subject_data(pool).await.map_err(|e| e.to_string())?;
         }
     }
 

@@ -1,5 +1,5 @@
 use crate::{
-    db,
+    library::repo,
     models::{FolderWithCount, Image},
     AppState,
 };
@@ -24,7 +24,7 @@ pub async fn add_folder(
     let folder_id = folder.id;
 
     tauri::async_runtime::spawn(async move {
-        let folder_still_exists = db::list_folders_with_counts(&pool)
+        let folder_still_exists = repo::list_folders_with_counts(&pool)
             .await
             .map(|folders| folders.iter().any(|f| f.id == folder_id))
             .unwrap_or(false);
@@ -53,7 +53,7 @@ pub async fn remove_folder(
 pub async fn list_folders(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<FolderWithCount>, String> {
-    db::list_folders_with_counts(&state.pool)
+    repo::list_folders_with_counts(&state.pool)
         .await
         .map_err(map_err)
 }
@@ -63,7 +63,7 @@ pub async fn list_images(
     folder_id: Option<i64>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<Image>, String> {
-    db::list_images(&state.pool, folder_id)
+    repo::list_images(&state.pool, folder_id)
         .await
         .map_err(map_err)
 }
