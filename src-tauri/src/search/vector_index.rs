@@ -150,7 +150,7 @@ impl FlatIndex {
 
         let mut index = Self::new(dim);
         for (id, blob) in all {
-            if let Ok(vec) = crate::embedder::bytes_to_f32_vec(&blob) {
+            if let Ok(vec) = crate::search::math::bytes_to_f32_vec(&blob) {
                 index.add(id, &vec);
             }
         }

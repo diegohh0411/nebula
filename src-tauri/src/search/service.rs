@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use crate::{db, models::SearchResult};
 
 pub async fn search_images(
-    index: &crate::vector_index::IndexStore,
+    index: &crate::search::vector_index::IndexStore,
     query_embedding: Vec<f32>,
     limit: usize,
 ) -> Result<Vec<(i64, f32)>> {

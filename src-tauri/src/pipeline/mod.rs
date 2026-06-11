@@ -90,7 +90,7 @@ pub async fn run_pipeline(
     app: tauri::AppHandle,
     engine: Arc<crate::vision_engine::VisionEngine>,
     manager: Arc<crate::models::ModelManager>,
-    index: crate::vector_index::IndexStore,
+    index: crate::search::vector_index::IndexStore,
     data_dir: std::path::PathBuf,
     config: PipelineConfig,
     requested_spec: &'static crate::models::registry::ModelSpec,
@@ -281,7 +281,7 @@ pub async fn run_pipeline(
                     let (emb_result, face_result) = tokio::join!(erx, frx);
                     match emb_result {
                         Ok(Ok(emb)) => {
-                            let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                            let blob = crate::search::math::f32_slice_to_bytes(&emb);
                             if let Some((sem_qid, _)) = sem_entry {
                                 if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
                                     .await.is_ok()
@@ -329,7 +329,7 @@ pub async fn run_pipeline(
                 (Some(erx), None) => {
                     match erx.await {
                         Ok(Ok(emb)) => {
-                            let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                            let blob = crate::search::math::f32_slice_to_bytes(&emb);
                             if let Some((sem_qid, _)) = sem_entry {
                                 if crate::db::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
                                     .await.is_ok()
@@ -395,7 +395,7 @@ pub async fn run_pipeline(
         let app_state: tauri::State<crate::AppState> = app.state();
         app_state.throughput_ema.store(rate.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
-        crate::embedder::emit_progress(&pool, &app, rate).await;
+        crate::search::math::emit_progress(&pool, &app, rate).await;
 
         // Persist index snapshot
         let snap_path = data_dir.join("nebula.idx");

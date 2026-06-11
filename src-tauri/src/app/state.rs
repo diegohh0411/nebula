@@ -7,7 +7,7 @@ pub struct AppState {
     pub indexer: Arc<crate::library::indexer::Indexer>,
     pub vision_engine: Arc<crate::vision_engine::VisionEngine>,
     pub model_manager: Arc<crate::models::ModelManager>,
-    pub index: crate::vector_index::IndexStore,
+    pub index: crate::search::vector_index::IndexStore,
     pub preview: crate::preview::PreviewHandle,
     pub throughput_ema: std::sync::atomic::AtomicU32,
 }

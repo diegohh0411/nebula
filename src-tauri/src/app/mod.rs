@@ -21,9 +21,9 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(crate::db::init_db(&data_dir))?;
 
             let flat_index = tauri::async_runtime::block_on(
-                crate::vector_index::FlatIndex::load_or_rebuild(&data_dir, &pool)
+                crate::search::vector_index::FlatIndex::load_or_rebuild(&data_dir, &pool)
             )?;
-            let index: crate::vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
+            let index: crate::search::vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
             let pipeline_config = crate::pipeline::PipelineConfig::default();
             let vision_engine = Arc::new(crate::vision_engine::VisionEngine::new(

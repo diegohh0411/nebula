@@ -12,10 +12,8 @@ pub mod models;
 pub mod pipeline;
 // legacy flat modules still present, removed as their slices absorb them:
 mod commands;
-mod embedder;
 mod preprocess;
 mod preview;
-mod vector_index;
 mod thumbnail;
 pub mod vision_engine;
 

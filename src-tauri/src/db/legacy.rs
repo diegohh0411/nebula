@@ -1,64 +1,11 @@
 use anyhow::Result;
 use sqlx::{Row, SqlitePool};
 
-use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face, Subject, Tag, TagWithCount, SubjectMatch};
+use crate::models::{ProcessingStatus, Folder, FolderWithCount, Image, Face};
 use crate::library::repo::row_to_image;
 
-/// Lowercase + strip diacritics so "Cabaña" matches "cabana".
-pub fn normalize(s: &str) -> String {
-    s.trim()
-        .to_lowercase()
-        .chars()
-        .map(|c| match c {
-            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
-            'é' | 'è' | 'ë' | 'ê' => 'e',
-            'í' | 'ì' | 'ï' | 'î' => 'i',
-            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
-            'ú' | 'ù' | 'ü' | 'û' => 'u',
-            'ñ' => 'n',
-            'ç' => 'c',
-            other => other,
-        })
-        .collect()
-}
-
-/// Build a SQL `LIKE` pattern from a user query: normalized, with `%`/`_`/`\`
-/// escaped to literals and whitespace runs treated as wildcards (so "cabin 9"
-/// matches "cabin-9"). Returns `None` for an empty query. Pair with `ESCAPE '\'`.
-pub fn like_pattern(query: &str) -> Option<String> {
-    let norm = normalize(query);
-    if norm.is_empty() {
-        return None;
-    }
-    let mut pat = String::from("%");
-    for c in norm.chars() {
-        match c {
-            '\\' | '%' | '_' => {
-                pat.push('\\');
-                pat.push(c);
-            }
-            ' ' => pat.push('%'),
-            other => pat.push(other),
-        }
-    }
-    pat.push('%');
-    Some(pat)
-}
-
-/// True if every whitespace-separated token of the normalized `query` appears,
-/// in order, within the normalized `haystack`. Rust-side mirror of
-/// [`like_pattern`] for matching subject names (which aren't stored normalized).
-pub(crate) fn matches_tokens(haystack: &str, query_norm: &str) -> bool {
-    let mut pos = 0;
-    for tok in query_norm.split_whitespace() {
-        match haystack[pos..].find(tok) {
-            Some(i) => pos += i + tok.len(),
-            None => return false,
-        }
-    }
-    true
-}
-
+pub use crate::search::text::{normalize, like_pattern};
+pub(crate) use crate::search::text::matches_tokens;
 
 pub use crate::library::repo::{
     insert_folder, delete_folder, list_folders_with_counts, list_all_folders,
@@ -153,30 +100,10 @@ pub async fn mark_failed(pool: &SqlitePool, queue_id: i64, attempts: i32, error:
     Ok(())
 }
 
-pub async fn get_image_embedding(pool: &SqlitePool, id: i64) -> Result<Option<Vec<u8>>> {
-    let row = sqlx::query("SELECT embedding FROM images WHERE id = ? AND deleted_at IS NULL")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.and_then(|r| r.get::<Option<Vec<u8>>, _>("embedding")))
-}
-
-pub async fn get_all_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>> {
-    let rows = sqlx::query(
-        "SELECT id, embedding FROM images
-         WHERE semantic_analysis_done = 1 AND deleted_at IS NULL AND embedding IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| {
-            let id: i64 = r.get("id");
-            let emb: Option<Vec<u8>> = r.get("embedding");
-            emb.map(|e| (id, e))
-        })
-        .collect())
-}
+pub use crate::search::repo::{
+    get_image_embedding, get_all_embeddings,
+    get_cached_embedding, insert_cached_embedding, delete_stale_cache_entries, reset_all_embeddings,
+};
 
 pub async fn get_processing_counts(pool: &SqlitePool) -> Result<ProcessingStatus> {
     let row = sqlx::query(
@@ -213,81 +140,12 @@ pub use crate::tags::repo::{
     get_subjects_for_tag, get_image_ids_for_subjects,
 };
 
-pub async fn get_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type: &str) -> Result<Option<Vec<u8>>> {
-    let cutoff = chrono::Utc::now().timestamp() - 1800;
-    let row = sqlx::query(
-        "SELECT embedding FROM embedding_cache WHERE cache_key = ? AND query_type = ? AND created_at > ?"
-    )
-    .bind(cache_key)
-    .bind(query_type)
-    .bind(cutoff)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|r| r.get("embedding")))
-}
-
-pub async fn insert_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type: &str, embedding: &[u8]) -> Result<()> {
-    let now = chrono::Utc::now().timestamp();
-    sqlx::query(
-        "INSERT OR REPLACE INTO embedding_cache (cache_key, query_type, embedding, created_at) VALUES (?, ?, ?, ?)"
-    )
-    .bind(cache_key)
-    .bind(query_type)
-    .bind(embedding)
-    .bind(now)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn delete_stale_cache_entries(pool: &SqlitePool) -> Result<u64> {
-    let cutoff = chrono::Utc::now().timestamp() - 1800;
-    let result = sqlx::query("DELETE FROM embedding_cache WHERE created_at < ?")
-        .bind(cutoff)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
-}
-
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
     let row = sqlx::query("SELECT value FROM settings WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| r.get("value")))
-}
-
-pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin().await?;
-
-    // Clear image embeddings and reset status
-    sqlx::query("UPDATE images SET embedding = NULL, semantic_analysis_done = 0, subject_analysis_done = 0 WHERE deleted_at IS NULL")
-        .execute(&mut *tx)
-        .await?;
-
-    // Clear face embeddings (face detections remain, but need re-embedding)
-    sqlx::query("DELETE FROM face_vectors").execute(&mut *tx).await?;
-
-    // Clear model-dependent caches and suggestions
-    sqlx::query("DELETE FROM embedding_cache").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM merge_suggestions").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM embedding_queue").execute(&mut *tx).await?;
-
-    let now = chrono::Utc::now().timestamp();
-    // Re-populate queue for both pipelines
-    sqlx::query(
-        "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
-         SELECT id, 'semantic', 0, ? FROM images WHERE deleted_at IS NULL
-         UNION ALL
-         SELECT id, 'subject', 0, ? FROM images WHERE deleted_at IS NULL",
-    )
-    .bind(now)
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-    Ok(())
 }
 
 #[cfg(test)]

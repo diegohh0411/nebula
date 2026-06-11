@@ -74,7 +74,7 @@ pub async fn search(
             };
 
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "text").await.unwrap_or(None) {
-                crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
+                crate::search::math::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
                 let model_id = db::get_setting(pool, "embedding_model")
                     .await
@@ -85,7 +85,7 @@ pub async fn search(
 
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_text(&state.model_manager, query, spec).map_err(map_err)?;
-                let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                let blob = crate::search::math::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "text", &blob).await;
                 emb
             };
@@ -109,7 +109,7 @@ pub async fn search(
                 .await
                 .map_err(map_err)?
                 .ok_or_else(|| "Embedding not found for image — try indexing first".to_string())?;
-            let embedding_f32 = crate::embedder::bytes_to_f32_vec(&embedding_blob)
+            let embedding_f32 = crate::search::math::bytes_to_f32_vec(&embedding_blob)
                 .map_err(map_err)?;
 
             let mut scored = search::search_images(&state.index, embedding_f32, 50)
@@ -132,7 +132,7 @@ pub async fn search(
             };
 
             let query_embedding = if let Some(cached) = db::get_cached_embedding(pool, &cache_key, "image").await.unwrap_or(None) {
-                crate::embedder::bytes_to_f32_vec(&cached).map_err(map_err)?
+                crate::search::math::bytes_to_f32_vec(&cached).map_err(map_err)?
             } else {
                 let model_id = db::get_setting(pool, "embedding_model")
                     .await
@@ -144,7 +144,7 @@ pub async fn search(
                 let img = image::load_from_memory(&raw_bytes).map_err(map_err)?;
                 state.model_manager.ensure_ready(&app, spec).await.map_err(map_err)?;
                 let emb = state.vision_engine.embed_image(&state.model_manager, &img, spec).map_err(map_err)?;
-                let blob = crate::embedder::f32_slice_to_bytes(&emb);
+                let blob = crate::search::math::f32_slice_to_bytes(&emb);
                 let _ = db::insert_cached_embedding(pool, &cache_key, "image", &blob).await;
                 emb
             };
