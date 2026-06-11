@@ -94,25 +94,35 @@ fn compute_mutual_sim_edges(
 /// faces and the cross-subject "bridge" edge a merge suggestion depends on never
 /// forms (TT-57). Unassigned faces (no subject) are never filtered, so
 /// new-subject formation and assign-to-subject behavior are unchanged.
+///
+/// Cost note: when a single subject owns most of the library, `candidate_k`
+/// approaches the face count and the per-face loop trends toward O(N²). That is
+/// acceptable for a desktop photo library (N up to ~10k) and is dominated by the
+/// sqlite-vec query cost.
 async fn build_subject_aware_knn(
     pool: &SqlitePool,
     all_face_ids: &[i64],
     face_subjects: &HashMap<i64, i64>,
     k: usize,
 ) -> Result<HashMap<i64, Vec<(i64, f32)>>> {
-    // How many faces each subject owns — bounds how many same-subject neighbors
-    // could sit ahead of the first cross-subject one in the candidate list.
+    // How many *vectorized* faces each subject owns — bounds how many
+    // same-subject neighbors could sit ahead of the first cross-subject one in
+    // the candidate list. Counted from `all_face_ids` (faces that actually have
+    // vectors and can appear in knn results), not from `face_subjects` alone,
+    // which may include assigned faces that were never vectorized.
     let mut subject_sizes: HashMap<i64, usize> = HashMap::new();
-    for &sid in face_subjects.values() {
-        *subject_sizes.entry(sid).or_insert(0) += 1;
+    for &fid in all_face_ids {
+        if let Some(&sid) = face_subjects.get(&fid) {
+            *subject_sizes.entry(sid).or_insert(0) += 1;
+        }
     }
 
     let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
     for &fid in all_face_ids {
         let own_subject = face_subjects.get(&fid).copied();
-        // Over-fetch so that after dropping up to (subject_size - 1) same-subject
-        // neighbors, at least k cross-subject candidates remain. Bounded by the
-        // subject's real face count — no magic constant.
+        // Over-fetch k + subject_size candidates. `knn` excludes the query face
+        // itself, so at most (subject_size - 1) same-subject neighbors can
+        // appear; dropping them still leaves >= k cross-subject candidates.
         let candidate_k = match own_subject {
             Some(sid) => k + subject_sizes.get(&sid).copied().unwrap_or(0),
             None => k,
