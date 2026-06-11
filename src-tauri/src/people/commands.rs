@@ -1,7 +1,8 @@
 use crate::{
     db,
+    media::thumbnail,
     models::{SearchResult, Subject, Face, MergeSuggestion, NameSubjectResult, SubjectMatch},
-    thumbnail, AppState,
+    AppState,
 };
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {

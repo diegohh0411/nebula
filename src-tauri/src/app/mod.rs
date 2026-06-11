@@ -15,8 +15,8 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             crate::platform::logger::init(&data_dir);
             log::info!("Nebula backend initializing. Data directory: {:?}", data_dir);
-            std::fs::create_dir_all(crate::thumbnail::thumbnail_cache_dir(&data_dir))?;
-            std::fs::create_dir_all(crate::thumbnail::face_crop_cache_dir(&data_dir))?;
+            std::fs::create_dir_all(crate::media::thumbnail::thumbnail_cache_dir(&data_dir))?;
+            std::fs::create_dir_all(crate::media::thumbnail::face_crop_cache_dir(&data_dir))?;
 
             let pool = tauri::async_runtime::block_on(crate::db::init_db(&data_dir))?;
 
@@ -26,13 +26,13 @@ pub fn run() {
             let index: crate::search::vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
             let pipeline_config = crate::pipeline::PipelineConfig::default();
-            let vision_engine = Arc::new(crate::vision_engine::VisionEngine::new(
+            let vision_engine = Arc::new(crate::vision::engine::VisionEngine::new(
                 data_dir.clone(),
                 pipeline_config.placement,
             ));
             let model_manager = Arc::new(crate::models::ModelManager::new(data_dir.clone()));
 
-            let preview_handle = crate::preview::PreviewService::start(
+            let preview_handle = crate::media::preview::PreviewService::start(
                 pool.clone(),
                 app.handle().clone(),
                 data_dir.clone(),
@@ -91,7 +91,7 @@ pub fn run() {
             crate::library::commands::remove_folder,
             crate::library::commands::list_folders,
             crate::library::commands::list_images,
-            crate::commands::prioritize_previews,
+            crate::media::commands::prioritize_previews,
             crate::commands::search,
             crate::commands::get_processing_status,
             crate::people::commands::list_subjects,

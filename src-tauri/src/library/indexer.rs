@@ -24,7 +24,7 @@ pub struct Indexer {
     watcher: Arc<Mutex<FolderWatcher>>,
     hash_semaphore: Arc<Semaphore>,
     scan_mutex: Arc<tokio::sync::Mutex<()>>,
-    preview: crate::preview::PreviewHandle,
+    preview: crate::media::preview::PreviewHandle,
 }
 
 fn is_image(path: &Path) -> bool {
@@ -95,7 +95,7 @@ fn walk_dir_for_scan(dir: &Path, results: &mut Vec<PathBuf>) {
 }
 
 impl Indexer {
-    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle, preview: crate::preview::PreviewHandle) -> Result<Arc<Self>> {
+    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle, preview: crate::media::preview::PreviewHandle) -> Result<Arc<Self>> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let watcher = Arc::new(Mutex::new(FolderWatcher::new(event_tx)?));
 

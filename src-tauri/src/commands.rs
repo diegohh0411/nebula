@@ -5,20 +5,11 @@ use std::collections::HashSet;
 use crate::{
     db,
     models::{SearchResult, SearchQuery, SubjectMatch},
-    search, thumbnail, AppState,
+    search, AppState,
 };
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
-}
-
-#[tauri::command]
-pub async fn prioritize_previews(
-    image_ids: Vec<i64>,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    state.preview.prioritize(image_ids);
-    Ok(())
 }
 
 #[tauri::command]

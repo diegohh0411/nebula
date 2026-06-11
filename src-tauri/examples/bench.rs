@@ -51,7 +51,7 @@ fn main() {
     // directory that contains the `models/` subdirectory (the app's data dir).
     let embed_ctx = std::env::var("NEBULA_DATA_DIR").ok().map(|d| {
         let data_dir = PathBuf::from(d);
-        let engine = nebula_lib::vision_engine::VisionEngine::new(
+        let engine = nebula_lib::vision::engine::VisionEngine::new(
             data_dir.clone(),
             nebula_lib::pipeline::ComputePlacement::Cpu,
         );

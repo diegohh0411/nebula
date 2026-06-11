@@ -119,7 +119,7 @@ impl VisionEngine {
         let n = imgs.len();
         let mut pixel_values = ndarray::Array4::<f32>::zeros((n, 3, size, size));
         for (b, img) in imgs.iter().enumerate() {
-            crate::preprocess::fill_pixel_values(&mut pixel_values, b, img, size);
+            crate::vision::preprocess::fill_pixel_values(&mut pixel_values, b, img, size);
         }
 
         let vision_file = spec.vision_file.as_ref()

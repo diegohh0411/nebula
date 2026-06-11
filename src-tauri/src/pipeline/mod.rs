@@ -88,7 +88,7 @@ async fn save_faces(
 pub async fn run_pipeline(
     pool: sqlx::SqlitePool,
     app: tauri::AppHandle,
-    engine: Arc<crate::vision_engine::VisionEngine>,
+    engine: Arc<crate::vision::engine::VisionEngine>,
     manager: Arc<crate::models::ModelManager>,
     index: crate::search::vector_index::IndexStore,
     data_dir: std::path::PathBuf,
@@ -423,9 +423,9 @@ pub async fn run_pipeline(
                         if let Ok(Some((path, bbox))) =
                             crate::db::get_face_with_image(&pool, face_id).await
                         {
-                            let dest = crate::thumbnail::face_crop_path_for(&data_dir, face_id);
+                            let dest = crate::media::thumbnail::face_crop_path_for(&data_dir, face_id);
                             debug!("[pipeline] Eagerly generating face crop for face_id {} to {:?}", face_id, dest);
-                            if let Err(e) = crate::thumbnail::generate_face_crop(
+                            if let Err(e) = crate::media::thumbnail::generate_face_crop(
                                 std::path::PathBuf::from(path),
                                 dest,
                                 bbox,

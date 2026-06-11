@@ -169,7 +169,7 @@ pub fn write_preview(src: &Path, image_id: i64, data_dir: &Path) -> Result<PathB
     } else {
         img
     };
-    let dest = crate::thumbnail::preview_path_for(data_dir, image_id);
+    let dest = crate::media::thumbnail::preview_path_for(data_dir, image_id);
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -180,8 +180,8 @@ pub fn write_preview(src: &Path, image_id: i64, data_dir: &Path) -> Result<PathB
 /// Tier 2: decode with headroom, resize to 800px longest edge, write WebP.
 pub fn write_thumbnail(src: &Path, image_id: i64, data_dir: &Path) -> Result<PathBuf> {
     let img = decode_at_most(src, 1600)?;
-    let dest = crate::thumbnail::thumbnail_path_for(data_dir, image_id);
-    crate::thumbnail::write_thumbnail_from_image(&img, &dest)?;
+    let dest = crate::media::thumbnail::thumbnail_path_for(data_dir, image_id);
+    crate::media::thumbnail::write_thumbnail_from_image(&img, &dest)?;
     Ok(dest)
 }
 
