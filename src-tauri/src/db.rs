@@ -25,6 +25,43 @@ pub fn normalize(s: &str) -> String {
         .collect()
 }
 
+/// Build a SQL `LIKE` pattern from a user query: normalized, with `%`/`_`/`\`
+/// escaped to literals and whitespace runs treated as wildcards (so "cabin 9"
+/// matches "cabin-9"). Returns `None` for an empty query. Pair with `ESCAPE '\'`.
+pub fn like_pattern(query: &str) -> Option<String> {
+    let norm = normalize(query);
+    if norm.is_empty() {
+        return None;
+    }
+    let mut pat = String::from("%");
+    for c in norm.chars() {
+        match c {
+            '\\' | '%' | '_' => {
+                pat.push('\\');
+                pat.push(c);
+            }
+            ' ' => pat.push('%'),
+            other => pat.push(other),
+        }
+    }
+    pat.push('%');
+    Some(pat)
+}
+
+/// True if every whitespace-separated token of the normalized `query` appears,
+/// in order, within the normalized `haystack`. Rust-side mirror of
+/// [`like_pattern`] for matching subject names (which aren't stored normalized).
+fn matches_tokens(haystack: &str, query_norm: &str) -> bool {
+    let mut pos = 0;
+    for tok in query_norm.split_whitespace() {
+        match haystack[pos..].find(tok) {
+            Some(i) => pos += i + tok.len(),
+            None => return false,
+        }
+    }
+    true
+}
+
 /// Register the sqlite-vec extension with every new SQLite connection.
 /// Idempotent: safe to call multiple times; registers exactly once per process.
 pub fn ensure_sqlite_vec_registered() {
@@ -1003,18 +1040,17 @@ pub async fn delete_tag(pool: &SqlitePool, tag_id: i64) -> Result<()> {
 /// ordered by how many distinct tagged subjects appear in each image (desc),
 /// then date_taken desc. Soft-deleted images excluded.
 pub async fn get_tag_image_ids_ordered(pool: &SqlitePool, query: &str) -> Result<Vec<i64>> {
-    let q = normalize(query).replace(' ', "%");
-    if q.is_empty() {
-        return Ok(vec![]);
-    }
-    let like = format!("%{}%", q);
+    let like = match like_pattern(query) {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
     let rows = sqlx::query(
         "SELECT f.image_id
          FROM faces f
          JOIN subject_tags st ON st.subject_id = f.subject_id
          JOIN tags t ON t.id = st.tag_id
          JOIN images i ON i.id = f.image_id
-         WHERE t.name_normalized LIKE ? AND i.deleted_at IS NULL
+         WHERE t.name_normalized LIKE ? ESCAPE '\\' AND i.deleted_at IS NULL
          GROUP BY f.image_id
          ORDER BY COUNT(DISTINCT f.subject_id) DESC, MAX(i.date_taken) DESC")
         .bind(&like).fetch_all(pool).await?;
@@ -1023,9 +1059,10 @@ pub async fn get_tag_image_ids_ordered(pool: &SqlitePool, query: &str) -> Result
 
 pub async fn search_subjects_matching(pool: &SqlitePool, query: &str) -> Result<Vec<SubjectMatch>> {
     let q = normalize(query);
-    if q.is_empty() {
-        return Ok(vec![]);
-    }
+    let like = match like_pattern(query) {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
     let mut matched: Vec<Subject> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -1034,7 +1071,7 @@ pub async fn search_subjects_matching(pool: &SqlitePool, query: &str) -> Result<
         .fetch_all(pool).await?;
     for r in rows {
         let name: String = r.get("name");
-        if normalize(&name).contains(&q) {
+        if matches_tokens(&normalize(&name), &q) {
             let s = Subject {
                 id: r.get("id"), name: Some(name),
                 thumbnail_face_id: r.get("thumbnail_face_id"),
@@ -1045,13 +1082,12 @@ pub async fn search_subjects_matching(pool: &SqlitePool, query: &str) -> Result<
     }
 
     // tag matches — tags.name_normalized is already normalized
-    let like = format!("%{}%", q);
     let rows = sqlx::query(
         "SELECT s.id, s.name, s.thumbnail_face_id, s.type, s.added_at
          FROM subjects s
          JOIN subject_tags st ON st.subject_id = s.id
          JOIN tags t ON t.id = st.tag_id
-         WHERE t.name_normalized LIKE ?")
+         WHERE t.name_normalized LIKE ? ESCAPE '\\'")
         .bind(&like).fetch_all(pool).await?;
     for r in rows {
         let s = Subject {
@@ -2497,6 +2533,37 @@ mod tests {
         assert_eq!(normalize("  Über  "), "uber");
         assert_eq!(normalize("plain"), "plain");
         assert_eq!(normalize(""), "");
+    }
+
+    #[test]
+    fn test_like_pattern_wildcards_and_escaping() {
+        // whitespace becomes a wildcard so "cabin 9" matches "cabin-9"
+        assert_eq!(like_pattern("cabin 9").as_deref(), Some("%cabin%9%"));
+        // literal LIKE metacharacters are escaped
+        assert_eq!(like_pattern("50%_off").as_deref(), Some("%50\\%\\_off%"));
+        // empty / whitespace-only query yields no pattern
+        assert_eq!(like_pattern("   "), None);
+    }
+
+    #[tokio::test]
+    async fn test_search_subjects_matching_multiword_and_wildcards() {
+        let dir = std::env::temp_dir().join(format!("nebula_subjmw_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = init_db(&dir).await.unwrap();
+
+        let s: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Ana', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+        add_subject_tag(&pool, s, "Cabin-9").await.unwrap();
+
+        // multi-word query matches the hyphenated tag in both typeahead and search
+        let hits = search_subjects_matching(&pool, "cabin 9").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        let imgs_query = like_pattern("cabin 9");
+        assert_eq!(imgs_query.as_deref(), Some("%cabin%9%"));
+
+        // a stray '%' is treated literally, not as a wildcard -> no match
+        assert!(search_subjects_matching(&pool, "ca%n").await.unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
