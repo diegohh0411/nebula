@@ -1,0 +1,39 @@
+.tags-layout {
+  @apply flex gap-8;
+}
+
+.tag-list-panel {
+  @apply w-64 flex-shrink-0;
+}
+
+.tag-entry {
+  @apply group flex items-center gap-2 p-2 rounded-md cursor-pointer hover:bg-accent mb-1;
+}
+
+.tag-entry--selected {
+  @apply bg-accent;
+}
+
+.delete-btn {
+  @apply shrink-0;
+}
+
+.tag-subjects-panel {
+  @apply flex-1 min-w-0;
+}
+
+.subject-cards-grid {
+  @apply flex flex-wrap gap-4;
+}
+
+.subject-card {
+  @apply flex flex-col items-center gap-1 p-3 rounded-lg border border-border bg-background w-28 text-center;
+}
+
+.subject-avatar {
+  @apply w-14 h-14 rounded-full bg-muted flex items-center justify-center border border-border;
+}
+
+.subject-name {
+  @apply text-xs font-medium text-foreground truncate w-full text-center;
+}
