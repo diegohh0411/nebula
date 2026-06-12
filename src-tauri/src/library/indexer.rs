@@ -175,26 +175,14 @@ impl Indexer {
         match existing {
             None => {
                 debug!("process_file: found new file: {}", path_str);
-                let _permit = match self.hash_semaphore.acquire().await {
-                    Ok(permit) => permit,
-                    Err(e) => {
-                        error!("Failed to acquire hash semaphore for {}: {}", path_str, e);
-                        return;
-                    }
-                };
-                let hash = match compute_sha256(path).await {
-                    Ok(h) => h,
-                    Err(e) => {
-                        error!("Failed to hash {}: {}", path_str, e);
-                        return;
-                    }
-                };
 
+                // TT-BUGFIX: Defer SHA256 computation to make discovery "blitz-fast"
+                // Insert with a placeholder hash to get it queued instantly.
                 let image_id = match repo::insert_image(
                     &self.pool,
                     folder_id,
                     &path_str,
-                    &hash,
+                    "",
                     file_size,
                     mtime,
                 )
@@ -216,9 +204,25 @@ impl Indexer {
                     "image_added",
                     crate::models::ImageAddedPayload {
                         image_id,
-                        path: path_str,
+                        path: path_str.clone(),
                     },
                 );
+
+                // Spawn a background task to compute and update the real hash
+                let pool = self.pool.clone();
+                let semaphore = self.hash_semaphore.clone();
+                let path_buf = path.to_path_buf();
+                tokio::spawn(async move {
+                    if let Ok(_permit) = semaphore.acquire().await {
+                        if let Ok(hash) = compute_sha256(&path_buf).await {
+                            let _ = sqlx::query("UPDATE images SET file_hash = ? WHERE id = ?")
+                                .bind(&hash)
+                                .bind(image_id)
+                                .execute(&pool)
+                                .await;
+                        }
+                    }
+                });
             }
             Some(existing) => {
                 if mtime == existing.mtime && file_size == existing.file_size {
