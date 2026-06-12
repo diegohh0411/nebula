@@ -249,53 +249,66 @@ impl Indexer {
                     return;
                 }
 
-                let _permit = match self.hash_semaphore.acquire().await {
-                    Ok(permit) => permit,
-                    Err(e) => {
-                        error!("Failed to acquire hash semaphore for {}: {}", path_str, e);
-                        return;
-                    }
-                };
-                let hash = match compute_sha256(path).await {
-                    Ok(h) => h,
-                    Err(e) => {
-                        error!("Failed to hash {}: {}", path_str, e);
-                        return;
-                    }
-                };
+                let pool = self.pool.clone();
+                let semaphore = self.hash_semaphore.clone();
+                let path_buf = path.to_path_buf();
+                let app = self.app.clone();
+                let preview = self.preview.clone();
 
-                if hash == existing.file_hash {
-                    let _ =
-                        repo::update_image_metadata(&self.pool, existing.id, file_size, mtime).await;
-                    if existing.deleted_at.is_some() {
-                        let _ = self.app.emit(
-                            "image_added",
-                            crate::models::ImageAddedPayload {
+                tokio::spawn(async move {
+                    let _permit = match semaphore.acquire().await {
+                        Ok(permit) => permit,
+                        Err(e) => {
+                            error!("Failed to acquire hash semaphore for {}: {}", path_str, e);
+                            return;
+                        }
+                    };
+                    
+                    let hash = match compute_sha256(&path_buf).await {
+                        Ok(h) => h,
+                        Err(e) => {
+                            error!("Failed to hash {}: {}", path_str, e);
+                            let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED' WHERE id = ? AND mtime = ?")
+                                .bind(existing.id)
+                                .bind(mtime)
+                                .execute(&pool)
+                                .await;
+                            return;
+                        }
+                    };
+
+                    if hash == existing.file_hash {
+                        let _ = repo::update_image_metadata(&pool, existing.id, file_size, mtime).await;
+                        if existing.deleted_at.is_some() {
+                            let _ = app.emit(
+                                "image_added",
+                                crate::models::ImageAddedPayload {
+                                    image_id: existing.id,
+                                    path: path_str,
+                                },
+                            );
+                        }
+                    } else {
+                        let _ = repo::update_image_hash_changed(
+                            &pool,
+                            existing.id,
+                            &hash,
+                            file_size,
+                            mtime,
+                        )
+                        .await;
+                        if let Err(e) = crate::pipeline::queue::enqueue_image(&pool, existing.id).await {
+                            error!("Failed to enqueue image {}: {}", existing.id, e);
+                        }
+                        preview.enqueue_low(existing.id);
+                        let _ = app.emit(
+                            "image_updated",
+                            crate::models::ImageUpdatedPayload {
                                 image_id: existing.id,
-                                path: path_str,
                             },
                         );
                     }
-                } else {
-                    let _ = repo::update_image_hash_changed(
-                        &self.pool,
-                        existing.id,
-                        &hash,
-                        file_size,
-                        mtime,
-                    )
-                    .await;
-                    if let Err(e) = crate::pipeline::queue::enqueue_image(&self.pool, existing.id).await {
-                        error!("Failed to enqueue image {}: {}", existing.id, e);
-                    }
-                    self.preview.enqueue_low(existing.id);
-                    let _ = self.app.emit(
-                        "image_updated",
-                        crate::models::ImageUpdatedPayload {
-                            image_id: existing.id,
-                        },
-                    );
-                }
+                });
             }
         }
     }
