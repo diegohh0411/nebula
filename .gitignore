@@ -3,6 +3,11 @@
 # AI
 .superpowers/
 .opencode/
+.claude/
+
+# Secrets / environment
+.env
+.env.*
 
 # Compiled output
 /dist
