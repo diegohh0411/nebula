@@ -1,15 +1,16 @@
 import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
 import { TagWithCount, SubjectMatch } from '../../models/models';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
+import { HlmInput } from '@spartan-ng/helm/input';
 
 @Component({
   selector: 'app-tags-view',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterLink, EditableTextComponent],
+  imports: [CommonModule, EditableTextComponent, SubjectPersonCardComponent, HlmInput],
   templateUrl: './tags-view.component.html',
   styleUrl: './tags-view.component.css',
 })

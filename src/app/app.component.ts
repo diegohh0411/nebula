@@ -19,9 +19,9 @@ import { TauriEventsService } from './services/tauri-events.service';
   template: `
     <div class="flex h-screen bg-background text-foreground overflow-hidden">
       <app-sidebar class="flex-shrink-0" />
-      <div class="flex flex-col flex-1 min-w-0 h-full">
+      <main class="flex flex-col flex-1 min-w-0 h-full overflow-hidden">
         <router-outlet />
-      </div>
+      </main>
     </div>
   `,
   styles: [

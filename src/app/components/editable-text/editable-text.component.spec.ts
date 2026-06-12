@@ -363,6 +363,24 @@ describe('EditableTextComponent', () => {
     expect(tabbedSpy).toHaveBeenCalled();
   });
 
+  // ── Focus on edit entry ──────────────────────────────────────────────────────
+
+  it('focuses the input on a single click into edit mode', async () => {
+    const fixture = TestBed.createComponent(EditableTextComponent);
+    fixture.componentInstance.placeholder = '+ Add a name';
+    fixture.detectChanges();
+
+    // First entry into edit mode (single click on the placeholder span).
+    const trigger = fixture.nativeElement.querySelector('[role="button"]') as HTMLElement;
+    trigger.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const input = fixture.nativeElement.querySelector('input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    expect(document.activeElement).toBe(input);
+  });
+
   // ── doCommit is idempotent ───────────────────────────────────────────────────
 
   it('blur after Enter does not emit a second (commit)', () => {

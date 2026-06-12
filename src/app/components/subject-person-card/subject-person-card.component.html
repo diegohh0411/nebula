@@ -1,0 +1,27 @@
+<button type="button" class="person-card group" (click)="navigate()">
+  @if (cropUrl(); as url) {
+    <img [src]="url" [alt]="displayName" loading="lazy" decoding="async" class="person-card-img" />
+  } @else {
+    <span class="person-card-placeholder">👤</span>
+  }
+
+  <div class="person-card-scrim"></div>
+
+  <div class="person-card-meta">
+    @if (match().tags.length > 0) {
+      <div class="person-card-tags">
+        @for (tag of match().tags.slice(0, 2); track tag.id) {
+          <span class="person-card-tag">{{ tag.name }}</span>
+        }
+        @if (match().tags.length > 2) {
+          <span class="person-card-tag">+{{ match().tags.length - 2 }}</span>
+        }
+      </div>
+    }
+    <span class="person-card-name">{{ displayName }}</span>
+  </div>
+
+  @if (removable()) {
+    <span class="person-card-remove" role="button" tabindex="0" (click)="onRemove($event)" (keydown.enter)="onRemove($event)" (keydown.space)="onRemove($event)">Remove</span>
+  }
+</button>
