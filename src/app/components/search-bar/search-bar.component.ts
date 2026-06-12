@@ -11,7 +11,7 @@ import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
-import { SubjectMatch } from '../../models/models';
+import { SubjectMatch, formatEta } from '../../models/models';
 
 type BadgeState = 'active' | 'completing' | 'idle';
 
@@ -29,6 +29,7 @@ export class SearchBarComponent implements OnDestroy {
   protected query = signal('');
   protected isDragOver = signal(false);
   protected badgeState = signal<BadgeState>('idle');
+  protected readonly formatEta = formatEta;
   protected typeaheadMatches = signal<SubjectMatch[]>([]);
   protected typeaheadOpen = signal(false);
 
