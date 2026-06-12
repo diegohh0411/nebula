@@ -7,6 +7,7 @@ import {
   AfterViewInit,
   OnDestroy,
 } from '@angular/core';
+import { LucideAngularModule } from 'lucide-angular';
 import { Image, SearchResult, ProcessingStage, getProcessingStage } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 import { startViewTransition } from '../../utils/view-transition';
@@ -15,6 +16,7 @@ import { startViewTransition } from '../../utils/view-transition';
   selector: 'app-photo-grid',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [LucideAngularModule],
   templateUrl: './photo-grid.component.html',
   styleUrl: './photo-grid.component.css',
 })
