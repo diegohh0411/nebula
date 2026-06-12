@@ -22,6 +22,6 @@
   </div>
 
   @if (removable()) {
-    <span class="person-card-remove" role="button" (click)="onRemove($event)">Remove</span>
+    <span class="person-card-remove" role="button" tabindex="0" (click)="onRemove($event)" (keydown.enter)="onRemove($event)" (keydown.space)="onRemove($event)">Remove</span>
   }
 </button>
