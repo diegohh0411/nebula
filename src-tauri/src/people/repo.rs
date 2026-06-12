@@ -466,6 +466,15 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
         .execute(pool)
         .await?;
 
+    sqlx::query(
+        "INSERT OR IGNORE INTO subject_tags (subject_id, tag_id, added_at) \
+         SELECT ?, tag_id, added_at FROM subject_tags WHERE subject_id = ?"
+    )
+    .bind(target_id)
+    .bind(source_id)
+    .execute(pool)
+    .await?;
+
     sqlx::query("DELETE FROM merge_suggestions WHERE subject_id_a = ? OR subject_id_b = ? OR subject_id_a = ? OR subject_id_b = ?")
         .bind(target_id)
         .bind(target_id)

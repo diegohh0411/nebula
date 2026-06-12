@@ -63,6 +63,22 @@ async fn make_merge_pool() -> SqlitePool {
             UNIQUE(face_a, face_b, kind)
         )"
     ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "CREATE TABLE tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            name_normalized TEXT NOT NULL UNIQUE,
+            added_at INTEGER NOT NULL
+        )"
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "CREATE TABLE subject_tags (
+            subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            added_at INTEGER NOT NULL,
+            PRIMARY KEY (subject_id, tag_id)
+        )"
+    ).execute(&pool).await.unwrap();
     pool
 }
 
@@ -674,6 +690,53 @@ async fn merge_subjects_writes_must_link_constraints() {
     let expected_b = fa.max(fb);
     assert_eq!(stored_a, expected_a);
     assert_eq!(stored_b, expected_b);
+}
+
+#[tokio::test]
+async fn merge_subjects_preserves_and_unifies_tags() {
+    let pool = init_test_pool().await;
+
+    let target: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Target', 'person', 0) RETURNING id"
+    ).fetch_one(&pool).await.unwrap();
+    let source: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Source', 'person', 0) RETURNING id"
+    ).fetch_one(&pool).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0)"
+    ).bind(target).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (2, ?, 0,0,1,1,0)"
+    ).bind(source).execute(&pool).await.unwrap();
+
+    let target_only = add_subject_tag(&pool, target, "target-only").await.unwrap();
+    let source_only = add_subject_tag(&pool, source, "source-only").await.unwrap();
+    let shared = add_subject_tag(&pool, target, "shared").await.unwrap();
+    add_subject_tag(&pool, source, "shared").await.unwrap();
+
+    merge_subjects(&pool, target, source).await.unwrap();
+
+    let surviving_tags = get_subject_tags(&pool, target).await.unwrap();
+    let tag_names: Vec<String> = surviving_tags.iter().map(|t| t.name.clone()).collect();
+    assert!(tag_names.contains(&"target-only".to_string()));
+    assert!(tag_names.contains(&"source-only".to_string()), "source-only tag must be transferred to target");
+    assert!(tag_names.contains(&"shared".to_string()));
+    assert_eq!(surviving_tags.len(), 3, "shared tag must not be duplicated");
+
+    let source_tags = get_subject_tags(&pool, source).await.unwrap();
+    assert!(source_tags.is_empty(), "source subject tags should be gone after merge");
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 1);
+
+    let list = list_tags_with_counts(&pool).await.unwrap();
+    assert_eq!(list.len(), 3);
+    for t in [&target_only, &source_only, &shared] {
+        let found = list.iter().find(|lt| lt.id == t.id).expect("tag still exists");
+        assert_eq!(found.subject_count, 1, "each surviving tag should be attached exactly once");
+    }
 }
 
 #[tokio::test]
