@@ -4,12 +4,13 @@ import { RouterLink } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
 import { TagWithCount, SubjectMatch } from '../../models/models';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+import { HlmInput } from '@spartan-ng/helm/input';
 
 @Component({
   selector: 'app-tags-view',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, RouterLink, EditableTextComponent],
+  imports: [CommonModule, RouterLink, EditableTextComponent, HlmInput],
   templateUrl: './tags-view.component.html',
   styleUrl: './tags-view.component.css',
 })
