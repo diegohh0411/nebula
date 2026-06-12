@@ -41,6 +41,17 @@ export class PhotoService {
   readonly searchText = signal<string>('');
   readonly subjectMatches = signal<SubjectMatch[]>([]);
 
+  /** ISO date keys whose photo rows are collapsed/hidden in the gallery. */
+  readonly collapsedDates = signal<Set<string>>(new Set());
+
+  toggleDateCollapsed(date: string): void {
+    this.collapsedDates.update((set) => {
+      const next = new Set(set);
+      next.has(date) ? next.delete(date) : next.add(date);
+      return next;
+    });
+  }
+
   // ---- Lightbox state ----
   readonly selectedImage = signal<Image | SearchResult | null>(null);
   readonly transitioningImageId = signal<number | null>(null);
@@ -109,6 +120,7 @@ export class PhotoService {
       this.dayGroups(),
       this.viewportWidth(),
       this.targetRowHeight(),
+      this.collapsedDates(),
     );
     const matches = this.subjectMatches();
     if (this.searchResults() !== null && matches.length > 0) {
@@ -433,6 +445,10 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
   today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
+  const weekAgo = new Date(today);
+  weekAgo.setDate(today.getDate() - 7);
+  const twoWeeksAgo = new Date(today);
+  twoWeeksAgo.setDate(today.getDate() - 14);
 
   const map = new Map<string, DayGroup>();
 
@@ -449,6 +465,10 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
         label = 'Today';
       } else if (d.getTime() === yesterday.getTime()) {
         label = 'Yesterday';
+      } else if (d.getTime() > weekAgo.getTime()) {
+        label = 'This Week';
+      } else if (d.getTime() > twoWeeksAgo.getTime()) {
+        label = 'Last Week';
       } else {
         label = d.toLocaleDateString('en-US', {
           year: 'numeric',
@@ -470,11 +490,20 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
 function flattenToVirtualRowsJustified(
   groups: DayGroup[],
   containerWidth: number,
-  targetHeight: number
+  targetHeight: number,
+  collapsed: Set<string> = new Set(),
 ): VirtualRow[] {
   const rows: VirtualRow[] = [];
   for (const group of groups) {
-    rows.push({ type: 'header', label: group.label, date: group.date });
+    const isCollapsed = collapsed.has(group.date);
+    rows.push({
+      type: 'header',
+      label: group.label,
+      date: group.date,
+      collapsed: isCollapsed,
+      count: group.images.length,
+    });
+    if (isCollapsed) continue;
     const justifiedRows = buildJustifiedRows(group.images, containerWidth, targetHeight, 4);
     for (const row of justifiedRows) {
       rows.push({ type: 'row', images: row.images, rowHeight: row.rowHeight });

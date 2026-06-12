@@ -122,7 +122,7 @@ export interface NameSubjectResult {
 /** A virtual scroll row: either a people strip, a day header, or a row of images */
 export type VirtualRow =
   | { type: 'people'; matches: SubjectMatch[] }
-  | { type: 'header'; label: string; date: string }
+  | { type: 'header'; label: string; date: string; collapsed: boolean; count: number }
   | { type: 'row'; images: (Image | SearchResult)[]; rowHeight: number };
 
 export interface ModelDownloadEvent {

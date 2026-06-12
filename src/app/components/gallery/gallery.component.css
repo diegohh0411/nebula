@@ -39,10 +39,23 @@
 .day-header {
   @apply sticky top-0 z-10 px-4 py-2 text-xs font-semibold uppercase
          tracking-wider text-muted-foreground
-         bg-background/90 backdrop-blur-sm border-b border-border/50;
+         bg-background/90 backdrop-blur-sm border-b border-border/50
+         w-full gap-2 cursor-pointer;
   height: 36px;
   display: flex;
   align-items: center;
+}
+
+.day-header-chevron {
+  @apply transition-transform duration-150;
+}
+
+.day-header-chevron.is-collapsed {
+  @apply -rotate-90;
+}
+
+.day-header-count {
+  @apply ml-auto text-[11px] font-medium normal-case tracking-normal text-muted-foreground;
 }
 
 .subjects-row {
