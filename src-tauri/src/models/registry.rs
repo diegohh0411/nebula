@@ -86,25 +86,6 @@ impl ModelSpec {
   }
 }
 
-pub const SIGLIP_BASE: ModelSpec = ModelSpec {
-  id: "onnx-community/siglip2-base-patch16-224-ONNX",
-  hf_repo: "onnx-community/siglip2-base-patch16-224-ONNX",
-  model_type: ModelType::TextImageEmbedding,
-  cache_dir: "siglip2-base-224-split",
-  model_file: ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") },
-  tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
-  display_name: "Standard",
-  display_description: "Balanced quality and speed (86M params, split towers)",
-  image_size: 224,
-  vision_file: Some(ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") }),
-  text_file: Some(ModelFile { filename: "text_model.onnx", remote_path: Some("onnx/text_model.onnx") }),
-  vision_input: "pixel_values",
-  vision_output: "pooler_output",
-  text_input: "input_ids",
-  text_output: "pooler_output",
-  size_bytes: 660_000_000, // vision_model.onnx (~360 MB) + text_model.onnx (~270 MB) + tokenizer.json
-};
-
 pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   id: "onnx-community/siglip2-base-patch32-256-ONNX",
   hf_repo: "onnx-community/siglip2-base-patch32-256-ONNX",
@@ -114,8 +95,8 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   // logic used by SIGLIP_BASE; the text tower is declared separately below.
   model_file: ModelFile { filename: "vision_model_quantized.onnx", remote_path: Some("onnx/vision_model_quantized.onnx") },
   tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
-  display_name: "Fast",
-  display_description: "Optimized for consumer CPUs — INT8 quantized, 32px patches (64 tokens vs 196)",
+  display_name: "Blitz",
+  display_description: "Faster search with a small quality tradeoff. Good for large libraries and slower hardware.",
   image_size: 256,
   vision_file: Some(ModelFile { filename: "vision_model_quantized.onnx", remote_path: Some("onnx/vision_model_quantized.onnx") }),
   text_file: Some(ModelFile { filename: "text_model_quantized.onnx", remote_path: Some("onnx/text_model_quantized.onnx") }),
@@ -126,6 +107,25 @@ pub const SIGLIP_FAST: ModelSpec = ModelSpec {
   text_input: "input_ids",
   text_output: "pooler_output",
   size_bytes: 169_000_000, // vision_model_quantized.onnx (~90 MB) + text_model_quantized.onnx (~70 MB) + tokenizer.json
+};
+
+pub const SIGLIP_BASE: ModelSpec = ModelSpec {
+  id: "onnx-community/siglip2-base-patch16-224-ONNX",
+  hf_repo: "onnx-community/siglip2-base-patch16-224-ONNX",
+  model_type: ModelType::TextImageEmbedding,
+  cache_dir: "siglip2-base-224-split",
+  model_file: ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") },
+  tokenizer_file: Some(ModelFile { filename: "tokenizer.json", remote_path: None }),
+  display_name: "Standard",
+  display_description: "Best search accuracy. Recommended for most users.",
+  image_size: 224,
+  vision_file: Some(ModelFile { filename: "vision_model.onnx", remote_path: Some("onnx/vision_model.onnx") }),
+  text_file: Some(ModelFile { filename: "text_model.onnx", remote_path: Some("onnx/text_model.onnx") }),
+  vision_input: "pixel_values",
+  vision_output: "pooler_output",
+  text_input: "input_ids",
+  text_output: "pooler_output",
+  size_bytes: 660_000_000, // vision_model.onnx (~360 MB) + text_model.onnx (~270 MB) + tokenizer.json
 };
 
 pub const BUFFALO_S_RECOGNITION: ModelSpec = ModelSpec {
@@ -170,7 +170,7 @@ pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
   id: "buffalo_s_gender_age",
   hf_repo: "public-data/insightface",
   model_type: ModelType::FaceEmbedding,
-  cache_dir: "buffalo_s",
+  cache_dir: "insightface",
   model_file: ModelFile { filename: "genderage.onnx", remote_path: Some("models/buffalo_l/genderage.onnx") },
   tokenizer_file: None,
   display_name: "Buffalo S Gender/Age",
@@ -188,57 +188,9 @@ pub const BUFFALO_S_GENDER_AGE: ModelSpec = ModelSpec {
 pub const BUFFALO_S_PRESET: FaceIdPreset = FaceIdPreset {
     id: "blitz",
     name: "Blitz",
-    description: "Maximum inference speed, for bulk processing (~25 MB)",
+    description: "Fastest face recognition. Ideal for large libraries.",
     detector: &BUFFALO_S_DETECTION,
     embedder: &BUFFALO_S_RECOGNITION,
-    gender_age: &BUFFALO_S_GENDER_AGE,
-    detector_input_size: (640, 640),
-};
-
-pub const BUFFALO_L_DETECTION: ModelSpec = ModelSpec {
-  id: "buffalo_l_detection",
-  hf_repo: "immich-app/buffalo_l",
-  model_type: ModelType::FaceDetection,
-  cache_dir: "buffalo_l",
-  model_file: ModelFile { filename: "detection.onnx", remote_path: Some("detection/model.onnx") },
-  tokenizer_file: None,
-  display_name: "Buffalo L Detection",
-  display_description: "High-accuracy face detection model",
-  image_size: 0,
-  vision_file: None,
-  text_file: None,
-  vision_input: "",
-  vision_output: "",
-  text_input: "",
-  text_output: "",
-  size_bytes: 17_000_000,
-};
-
-pub const BUFFALO_L_RECOGNITION: ModelSpec = ModelSpec {
-  id: "buffalo_l_recognition",
-  hf_repo: "immich-app/buffalo_l",
-  model_type: ModelType::FaceEmbedding,
-  cache_dir: "buffalo_l",
-  model_file: ModelFile { filename: "recognition.onnx", remote_path: Some("recognition/model.onnx") },
-  tokenizer_file: None,
-  display_name: "Buffalo L Recognition",
-  display_description: "High-accuracy face recognition model (R100 backbone)",
-  image_size: 0,
-  vision_file: None,
-  text_file: None,
-  vision_input: "",
-  vision_output: "",
-  text_input: "",
-  text_output: "",
-  size_bytes: 144_000_000,
-};
-
-pub const BUFFALO_L_PRESET: FaceIdPreset = FaceIdPreset {
-    id: "quality",
-    name: "Quality",
-    description: "3–4× more accurate than Blitz — best balance of accuracy and speed (~170 MB)",
-    detector: &BUFFALO_L_DETECTION,
-    embedder: &BUFFALO_L_RECOGNITION,
     gender_age: &BUFFALO_S_GENDER_AGE,
     detector_input_size: (640, 640),
 };
@@ -283,8 +235,8 @@ pub const ANTELOPE_V2_RECOGNITION: ModelSpec = ModelSpec {
 
 pub const ANTELOPE_V2_PRESET: FaceIdPreset = FaceIdPreset {
     id: "precision",
-    name: "Precision",
-    description: "Maximum accuracy — glintr100 backbone, best for difficult lighting and angles (~280 MB)",
+    name: "Standard",
+    description: "Highest-accuracy face recognition. Best for challenging photos with tricky lighting or angles.",
     detector: &ANTELOPE_V2_DETECTION,
     embedder: &ANTELOPE_V2_RECOGNITION,
     gender_age: &BUFFALO_S_GENDER_AGE,
@@ -292,12 +244,11 @@ pub const ANTELOPE_V2_PRESET: FaceIdPreset = FaceIdPreset {
 };
 
 pub const ALL_MODELS: &[&ModelSpec] = &[
-    &SIGLIP_BASE, &SIGLIP_FAST,
-    &BUFFALO_S_RECOGNITION, &BUFFALO_S_DETECTION, &BUFFALO_S_GENDER_AGE,
-    &BUFFALO_L_DETECTION, &BUFFALO_L_RECOGNITION,
+    &SIGLIP_FAST, &SIGLIP_BASE,
+    &BUFFALO_S_DETECTION, &BUFFALO_S_RECOGNITION, &BUFFALO_S_GENDER_AGE,
     &ANTELOPE_V2_DETECTION, &ANTELOPE_V2_RECOGNITION,
 ];
-pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET, &BUFFALO_L_PRESET, &ANTELOPE_V2_PRESET];
+pub const ALL_PRESETS: &[&FaceIdPreset] = &[&BUFFALO_S_PRESET, &ANTELOPE_V2_PRESET];
 
 impl ModelSpec {
   /// Find a model specification by its ID
@@ -319,32 +270,43 @@ mod tests {
 
     #[test]
     fn test_faceid_preset_gender_age_is_not_option() {
-        // Verify that gender_age is not an Option type
         let preset = &BUFFALO_S_PRESET;
-
-        // This should compile and work without unwrapping or matching on Option
         let gender_age_model = preset.gender_age;
-
-        // Verify it's the expected model
         assert_eq!(gender_age_model.id, "buffalo_s_gender_age");
         assert_eq!(gender_age_model.hf_repo, "public-data/insightface");
     }
 
     #[test]
     fn test_find_by_id_works() {
-        let preset = FaceIdPreset::find_by_id("blitz");
-        assert!(preset.is_some());
-
-        let preset = preset.unwrap();
+        let preset = FaceIdPreset::find_by_id("blitz").unwrap();
         assert_eq!(preset.id, "blitz");
         assert_eq!(preset.name, "Blitz");
-
-        // Verify gender_age is accessible directly (not an Option)
         assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
     }
 
     #[test]
-    fn standard_model_has_split_towers() {
+    fn blitz_smart_search_model_is_first_and_named_correctly() {
+        let first = ALL_MODELS
+            .iter()
+            .find(|m| matches!(m.model_type, ModelType::TextImageEmbedding))
+            .expect("at least one TextImageEmbedding model");
+        assert_eq!(first.id, "onnx-community/siglip2-base-patch32-256-ONNX", "SIGLIP_FAST (Blitz) must be first");
+        assert_eq!(first.display_name, "Blitz");
+    }
+
+    #[test]
+    fn standard_smart_search_model_is_named_correctly() {
+        let standard = ALL_MODELS
+            .iter()
+            .filter(|m| matches!(m.model_type, ModelType::TextImageEmbedding))
+            .nth(1)
+            .expect("second TextImageEmbedding model");
+        assert_eq!(standard.id, "onnx-community/siglip2-base-patch16-224-ONNX");
+        assert_eq!(standard.display_name, "Standard");
+    }
+
+    #[test]
+    fn standard_smart_search_model_has_split_towers() {
         let s = &SIGLIP_BASE;
         assert!(s.vision_file.is_some(), "vision tower must be configured");
         assert!(s.text_file.is_some(), "text tower must be configured");
@@ -354,39 +316,41 @@ mod tests {
     }
 
     #[test]
+    fn gender_age_model_uses_insightface_cache_dir() {
+        assert_eq!(BUFFALO_S_GENDER_AGE.cache_dir, "insightface");
+    }
+
+    #[test]
+    fn only_two_face_presets_registered() {
+        assert_eq!(ALL_PRESETS.len(), 2);
+    }
+
+    #[test]
     fn all_presets_are_registered_and_findable() {
         for preset in ALL_PRESETS {
             let found = FaceIdPreset::find_by_id(preset.id);
             assert!(found.is_some(), "preset '{}' not findable by id", preset.id);
         }
         assert!(FaceIdPreset::find_by_id("blitz").is_some());
-        assert!(FaceIdPreset::find_by_id("quality").is_some());
+        assert!(FaceIdPreset::find_by_id("quality").is_none(), "quality preset must be removed");
         assert!(FaceIdPreset::find_by_id("precision").is_some());
     }
 
     #[test]
-    fn quality_preset_uses_buffalo_l_models() {
-        let preset = FaceIdPreset::find_by_id("quality").unwrap();
-        assert_eq!(preset.embedder.hf_repo, "immich-app/buffalo_l");
-        assert_eq!(preset.detector.hf_repo, "immich-app/buffalo_l");
-        assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
-        assert!(preset.embedder.size_bytes > 100_000_000, "buffalo_l recognition must be >100 MB");
-    }
-
-    #[test]
-    fn precision_preset_uses_antelopev2_models() {
+    fn standard_face_preset_is_named_standard() {
         let preset = FaceIdPreset::find_by_id("precision").unwrap();
+        assert_eq!(preset.name, "Standard");
         assert_eq!(preset.embedder.hf_repo, "immich-app/antelopev2");
         assert_eq!(preset.detector.hf_repo, "immich-app/antelopev2");
         assert_eq!(preset.gender_age.id, "buffalo_s_gender_age");
-        assert!(preset.embedder.size_bytes > 200_000_000, "antelopev2 recognition must be >200 MB");
+        assert!(preset.embedder.size_bytes > 200_000_000);
     }
 
     #[test]
-    fn all_face_models_in_all_models() {
+    fn buffalo_l_models_not_in_all_models() {
         let ids: Vec<_> = ALL_MODELS.iter().map(|m| m.id).collect();
-        assert!(ids.contains(&"buffalo_l_detection"));
-        assert!(ids.contains(&"buffalo_l_recognition"));
+        assert!(!ids.contains(&"buffalo_l_detection"), "buffalo_l must be removed");
+        assert!(!ids.contains(&"buffalo_l_recognition"), "buffalo_l must be removed");
         assert!(ids.contains(&"antelopev2_detection"));
         assert!(ids.contains(&"antelopev2_recognition"));
     }
