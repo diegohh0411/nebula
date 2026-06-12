@@ -111,6 +111,11 @@ pub async fn update_setting(
     if key == "subject_model" {
         let current = crate::settings::repo::get_setting(pool, &key).await.unwrap_or(None);
         if current.as_ref() != Some(&value) {
+            let preset = crate::models::registry::FaceIdPreset::find_by_id(&value)
+                .ok_or_else(|| format!("Unknown preset: {}", value))?;
+            state.model_manager.ensure_ready(&app, preset.detector).await.map_err(|e| e.to_string())?;
+            state.model_manager.ensure_ready(&app, preset.embedder).await.map_err(|e| e.to_string())?;
+            state.model_manager.ensure_ready(&app, preset.gender_age).await.map_err(|e| e.to_string())?;
             crate::people::repo::reset_all_subject_data(pool).await.map_err(|e| e.to_string())?;
         }
     }
@@ -133,7 +138,7 @@ mod tests {
             .iter()
             .find(|m| matches!(m.model_type, crate::models::registry::ModelType::TextImageEmbedding))
             .map(|m| m.id);
-        assert_eq!(first, Some("onnx-community/siglip2-base-patch16-224-ONNX"));
+        assert_eq!(first, Some("onnx-community/siglip2-base-patch32-256-ONNX"));
     }
 
     #[test]
