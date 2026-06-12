@@ -1,0 +1,12 @@
+# managed by lefthook
+post-checkout:
+  commands:
+    sync-claude-dir:
+      run: |
+        WORKTREE_ROOT=$(git rev-parse --show-toplevel)
+        MAIN_REPO_ROOT=$(git rev-parse --git-common-dir | sed 's/\/.git$//')
+        if [[ "$WORKTREE_ROOT" != "$MAIN_REPO_ROOT" && -d "$MAIN_REPO_ROOT/.claude" ]]; then
+          echo "Syncing .claude/ to $WORKTREE_ROOT..."
+          mkdir -p "$WORKTREE_ROOT/.claude"
+          cp -r "$MAIN_REPO_ROOT/.claude/." "$WORKTREE_ROOT/.claude/"
+        fi
