@@ -141,10 +141,9 @@ export class SubjectDetailComponent implements OnInit {
     const name = value || null;
     try {
       const result = await this.photos.nameSubject(id, name);
-      this.detail.update((d) => {
-        if (d) d.subject.name = name;
-        return d;
-      });
+      this.detail.update((d) =>
+        d ? { ...d, subject: { ...d.subject, name } } : d,
+      );
       if (result.duplicate_subject_id) {
         this.conflictingSubjectId.set(result.duplicate_subject_id);
         this.showNameConflict.set(true);
