@@ -30,6 +30,9 @@
       ],
       "@spartan-ng/helm/card": [
         "./src/app/libs/ui/card/src/index.ts"
+      ],
+      "@spartan-ng/helm/input": [
+        "./src/app/libs/ui/input/src/index.ts"
       ]
     }
   },

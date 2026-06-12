@@ -1,4 +1,4 @@
-<div class="tags-container p-8">
+<div class="tags-container">
   <h1 class="text-3xl font-bold mb-8">Tags</h1>
 
   <div class="tags-layout">
@@ -8,7 +8,8 @@
       <div class="flex flex-col gap-1 mb-4">
         <div class="flex gap-2">
           <input
-            class="flex-1 text-sm border border-border rounded px-3 py-1.5 bg-background"
+            hlmInput
+            class="flex-1"
             placeholder="New tag name…"
             [value]="newTagName()"
             (input)="newTagName.set($any($event.target).value)"
@@ -61,16 +62,7 @@
         } @else {
           <div class="subject-cards-grid">
             @for (match of tagSubjects(); track match.subject.id) {
-              <div class="subject-card">
-                <a [routerLink]="['/subject', match.subject.id]" class="subject-avatar">
-                  <span class="text-2xl">&#x1F464;</span>
-                </a>
-                <span class="subject-name">{{ match.subject.name || 'Unnamed' }}</span>
-                <button
-                  class="text-xs text-muted-foreground hover:text-destructive mt-1"
-                  (click)="removeSubjectFromTag(match.subject.id)"
-                >Remove</button>
-              </div>
+              <app-subject-person-card [match]="match" [removable]="true" (remove)="removeSubjectFromTag($event)" />
             }
           </div>
         }

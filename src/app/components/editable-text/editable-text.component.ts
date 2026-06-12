@@ -7,6 +7,8 @@ import {
   ViewChild,
   ElementRef,
   afterNextRender,
+  inject,
+  Injector,
 } from '@angular/core';
 
 @Component({
@@ -25,8 +27,8 @@ export class EditableTextComponent {
   @Input() set startEditing(trigger: boolean) {
     if (trigger && !this.isEditing()) {
       this.draft.set(this.value ?? '');
-      this._focusPending.set(true);
       this.isEditing.set(true);
+      this.focusInput();
     }
   }
 
@@ -39,25 +41,25 @@ export class EditableTextComponent {
 
   protected isEditing = signal(false);
   protected draft = signal('');
-  private _focusPending = signal(false);
+  private injector = inject(Injector);
 
   @ViewChild('inputEl') private inputRef?: ElementRef<HTMLInputElement>;
 
-  constructor() {
-    afterNextRender({
-      read: () => {
-        if (this._focusPending()) {
-          this._focusPending.set(false);
-          this.inputRef?.nativeElement.focus();
-        }
-      },
-    });
-  }
-
   protected startEdit(): void {
     this.draft.set(this.value ?? '');
-    this._focusPending.set(true);
     this.isEditing.set(true);
+    this.focusInput();
+  }
+
+  private focusInput(): void {
+    afterNextRender(
+      () => {
+        const el = this.inputRef?.nativeElement;
+        el?.focus();
+        el?.select();
+      },
+      { injector: this.injector },
+    );
   }
 
   protected onKeydown(event: KeyboardEvent): void {

@@ -104,6 +104,7 @@ mod tests {
 
     #[test]
     fn effective_rate_holds_prev_when_raw_is_zero() {
+        // Window momentarily has <2 samples → raw 0; must hold the last value.
         assert_eq!(super::effective_rate(0.0, 9.0), 9.0);
     }
 

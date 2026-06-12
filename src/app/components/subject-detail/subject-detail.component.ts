@@ -15,6 +15,7 @@ import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { buildJustifiedRows } from '../../utils/justified-layout';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+import { HlmInput } from '@spartan-ng/helm/input';
 
 @Component({
   selector: 'app-subject-detail',
@@ -27,6 +28,7 @@ import { EditableTextComponent } from '../editable-text/editable-text.component'
     PhotoGridComponent,
     LightboxComponent,
     EditableTextComponent,
+    HlmInput,
   ],
   templateUrl: './subject-detail.component.html',
   styleUrl: './subject-detail.component.css',
@@ -141,10 +143,9 @@ export class SubjectDetailComponent implements OnInit {
     const name = value || null;
     try {
       const result = await this.photos.nameSubject(id, name);
-      this.detail.update((d) => {
-        if (d) d.subject.name = name;
-        return d;
-      });
+      this.detail.update((d) =>
+        d ? { ...d, subject: { ...d.subject, name } } : d,
+      );
       if (result.duplicate_subject_id) {
         this.conflictingSubjectId.set(result.duplicate_subject_id);
         this.showNameConflict.set(true);

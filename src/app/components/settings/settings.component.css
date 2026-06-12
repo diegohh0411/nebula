@@ -1,5 +1,17 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .settings-container {
-  @apply p-8 max-w-[640px] mx-auto;
+  @apply p-8 pb-16 mx-auto w-full flex-1 overflow-y-auto;
+}
+
+.settings-content {
+  @apply flex flex-col gap-10;
 }
 
 .settings-header {
