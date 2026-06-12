@@ -1,9 +1,9 @@
 .sidebar-container {
-  @apply flex flex-col h-full w-64 border-r border-border bg-background;
+  @apply flex flex-col h-full w-64 border-r border-border bg-background px-4;
 }
 
 .sidebar-header {
-  @apply flex items-center px-4 py-3 border-b border-border flex-shrink-0;
+  @apply flex items-center py-3 border-b border-border flex-shrink-0;
 }
 
 .sidebar-title {
@@ -15,15 +15,15 @@
 }
 
 .sidebar-nav {
-  @apply flex-1 overflow-y-auto py-2;
+  @apply flex-1 overflow-y-auto py-2 -mx-4 px-4;
 }
 
 .sidebar-empty {
-  @apply text-xs text-muted-foreground px-4 py-2;
+  @apply text-xs text-muted-foreground py-2;
 }
 
 .folder-item {
-  @apply flex items-center w-full gap-2 px-3 py-2 text-sm rounded-none
+  @apply flex items-center w-full gap-2 py-2 text-sm rounded-none
          text-foreground hover:bg-accent hover:text-accent-foreground
          transition-colors cursor-pointer border-0 bg-transparent text-left;
 }
@@ -60,7 +60,7 @@
 
 /* Footer */
 .sidebar-footer {
-  @apply flex flex-col gap-2 p-3 border-t border-border flex-shrink-0;
+  @apply flex flex-col gap-2 py-3 border-t border-border flex-shrink-0;
 }
 
 .btn-add-folder {
