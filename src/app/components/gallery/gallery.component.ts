@@ -11,6 +11,7 @@ import {
   OnInit,
 } from '@angular/core';
 import { Router } from '@angular/router';
+import { LucideAngularModule } from 'lucide-angular';
 import { PhotoService } from '../../services/photo.service';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { LightboxComponent } from '../lightbox/lightbox.component';
@@ -33,6 +34,7 @@ import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
     SubjectPersonCardComponent,
     ScrollingModule,
     CdkAutoSizeVirtualScroll,
+    LucideAngularModule,
   ],
   templateUrl: './gallery.component.html',
   styleUrl: './gallery.component.css',
