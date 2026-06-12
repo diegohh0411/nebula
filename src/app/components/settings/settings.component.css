@@ -1,5 +1,9 @@
 .settings-container {
-  @apply p-8 max-w-[640px] mx-auto;
+  @apply p-8 pb-16 max-w-[640px] mx-auto w-full h-full overflow-y-auto;
+}
+
+.settings-content {
+  @apply flex flex-col gap-10;
 }
 
 .settings-header {
