@@ -10,6 +10,10 @@
   @apply text-xs font-semibold uppercase tracking-widest text-muted-foreground;
 }
 
+.sidebar-title--sub {
+  @apply block mt-2 mb-1;
+}
+
 .sidebar-nav {
   @apply flex-1 overflow-y-auto py-2;
 }
