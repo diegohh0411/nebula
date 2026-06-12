@@ -202,7 +202,6 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         PRIMARY KEY (face_a, face_b)
     )
 "),
-    (7, "ALTER TABLE images ADD COLUMN hash_status TEXT NOT NULL DEFAULT 'PENDING'"),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
