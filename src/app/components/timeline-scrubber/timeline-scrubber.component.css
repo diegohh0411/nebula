@@ -1,6 +1,10 @@
 :host {
-  @apply fixed right-0 top-16 bottom-0 w-8 z-40 bg-background/20 backdrop-blur-sm
-         border-l border-border/50 hover:bg-background/80 transition-colors duration-200;
+  @apply fixed right-0 top-16 bottom-0 w-6 z-40 bg-transparent
+         opacity-0 hover:opacity-100 transition-opacity duration-200;
+}
+
+:host:hover {
+  @apply bg-background/70 backdrop-blur-sm border-l border-border/50;
 }
 
 .scrubber-track {
