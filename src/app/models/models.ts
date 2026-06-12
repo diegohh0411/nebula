@@ -10,6 +10,7 @@ export interface Image {
   folder_id: number;
   path: string;
   file_hash: string;
+  hash_status: string;
   date_taken: number | null;
   mtime: number;
   thumbnail_path: string | null;

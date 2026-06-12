@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS images (
     folder_id              INTEGER NOT NULL REFERENCES folders(id),
     path                   TEXT UNIQUE NOT NULL,
     file_hash              TEXT NOT NULL,
+    hash_status            TEXT NOT NULL DEFAULT 'PENDING',
     file_size              INTEGER NOT NULL DEFAULT 0,
     date_taken             INTEGER,
     mtime                  INTEGER NOT NULL,

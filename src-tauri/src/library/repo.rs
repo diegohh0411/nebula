@@ -80,6 +80,7 @@ pub(crate) fn row_to_image(r: &sqlx::sqlite::SqliteRow) -> Image {
         folder_id: r.get("folder_id"),
         path: r.get("path"),
         file_hash: r.get("file_hash"),
+        hash_status: r.get("hash_status"),
         file_size: r.get::<i64, _>("file_size"),
         date_taken: r.get("date_taken"),
         mtime: r.get("mtime"),
@@ -127,7 +128,7 @@ pub async fn update_image_hash_changed(
 ) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
-        "UPDATE images SET file_hash = ?, file_size = ?, mtime = ?,
+        "UPDATE images SET file_hash = ?, hash_status = 'DONE', file_size = ?, mtime = ?,
          semantic_analysis_done = 0, subject_analysis_done = 0, embedding = NULL,
          thumbnail_path = NULL, preview_path = NULL,
          updated_at = ?, deleted_at = NULL WHERE id = ?",
@@ -139,6 +140,7 @@ pub async fn update_image_hash_changed(
     .bind(image_id)
     .execute(pool)
     .await?;
+
     Ok(())
 }
 
@@ -150,7 +152,7 @@ pub async fn update_image_metadata(
 ) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
-        "UPDATE images SET file_size = ?, mtime = ?, updated_at = ?, deleted_at = NULL WHERE id = ?",
+        "UPDATE images SET hash_status = 'DONE', file_size = ?, mtime = ?, updated_at = ?, deleted_at = NULL WHERE id = ?",
     )
     .bind(file_size)
     .bind(mtime)
@@ -173,7 +175,7 @@ pub async fn clear_image_deleted(pool: &SqlitePool, image_id: i64) -> Result<()>
 
 pub async fn get_all_images_for_rescan(pool: &SqlitePool) -> Result<Vec<DbImage>> {
     let rows = sqlx::query(
-        "SELECT id, path, mtime, file_size, file_hash, deleted_at FROM images",
+        "SELECT id, path, mtime, file_size, file_hash, hash_status, deleted_at FROM images",
     )
     .fetch_all(pool)
     .await?;
@@ -186,6 +188,7 @@ pub async fn get_all_images_for_rescan(pool: &SqlitePool) -> Result<Vec<DbImage>
             mtime: r.get("mtime"),
             file_size: r.get::<i64, _>("file_size"),
             file_hash: r.get("file_hash"),
+            hash_status: r.get("hash_status"),
             deleted_at: r.get("deleted_at"),
         })
         .collect())
@@ -193,7 +196,7 @@ pub async fn get_all_images_for_rescan(pool: &SqlitePool) -> Result<Vec<DbImage>
 
 pub async fn get_image_metadata_by_path(pool: &SqlitePool, path: &str) -> Result<Option<DbImage>> {
     let row = sqlx::query(
-        "SELECT id, path, mtime, file_size, file_hash, deleted_at FROM images WHERE path = ?",
+        "SELECT id, path, mtime, file_size, file_hash, hash_status, deleted_at FROM images WHERE path = ?",
     )
     .bind(path)
     .fetch_optional(pool)
@@ -205,6 +208,7 @@ pub async fn get_image_metadata_by_path(pool: &SqlitePool, path: &str) -> Result
         mtime: r.get("mtime"),
         file_size: r.get::<i64, _>("file_size"),
         file_hash: r.get("file_hash"),
+        hash_status: r.get("hash_status"),
         deleted_at: r.get("deleted_at"),
     }))
 }
@@ -262,7 +266,7 @@ pub async fn images_needing_preview(pool: &SqlitePool) -> Result<Vec<i64>> {
 pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Vec<Image>> {
     let rows = if let Some(fid) = folder_id {
         sqlx::query(
-            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path, preview_path,
+            "SELECT id, folder_id, path, file_hash, hash_status, file_size, date_taken, mtime, thumbnail_path, preview_path,
                     semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE folder_id = ? AND deleted_at IS NULL
              ORDER BY COALESCE(date_taken, mtime) DESC",
@@ -272,7 +276,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
         .await?
     } else {
         sqlx::query(
-            "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path, preview_path,
+            "SELECT id, folder_id, path, file_hash, hash_status, file_size, date_taken, mtime, thumbnail_path, preview_path,
                     semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
              FROM images WHERE deleted_at IS NULL
              ORDER BY COALESCE(date_taken, mtime) DESC",
@@ -286,7 +290,7 @@ pub async fn list_images(pool: &SqlitePool, folder_id: Option<i64>) -> Result<Ve
 
 pub async fn get_image_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Image>> {
     let row = sqlx::query(
-        "SELECT id, folder_id, path, file_hash, file_size, date_taken, mtime, thumbnail_path, preview_path,
+        "SELECT id, folder_id, path, file_hash, hash_status, file_size, date_taken, mtime, thumbnail_path, preview_path,
                 semantic_analysis_done, subject_analysis_done, added_at, updated_at, deleted_at
          FROM images WHERE id = ?",
     )

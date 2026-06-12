@@ -214,18 +214,28 @@ impl Indexer {
                 let path_buf = path.to_path_buf();
                 tokio::spawn(async move {
                     if let Ok(_permit) = semaphore.acquire().await {
-                        if let Ok(hash) = compute_sha256(&path_buf).await {
-                            let _ = sqlx::query("UPDATE images SET file_hash = ? WHERE id = ? AND file_hash = ''")
-                                .bind(&hash)
-                                .bind(image_id)
-                                .execute(&pool)
-                                .await;
+                        match compute_sha256(&path_buf).await {
+                            Ok(hash) => {
+                                let _ = sqlx::query("UPDATE images SET file_hash = ?, hash_status = 'DONE' WHERE id = ? AND mtime = ?")
+                                    .bind(&hash)
+                                    .bind(image_id)
+                                    .bind(mtime)
+                                    .execute(&pool)
+                                    .await;
+                            }
+                            Err(_) => {
+                                let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED' WHERE id = ? AND mtime = ?")
+                                    .bind(image_id)
+                                    .bind(mtime)
+                                    .execute(&pool)
+                                    .await;
+                            }
                         }
                     }
                 });
             }
             Some(existing) => {
-                if mtime == existing.mtime && file_size == existing.file_size {
+                if mtime == existing.mtime && file_size == existing.file_size && existing.hash_status == "DONE" {
                     if existing.deleted_at.is_some() {
                         let _ = repo::clear_image_deleted(&self.pool, existing.id).await;
                         let _ = self.app.emit(
