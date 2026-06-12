@@ -9,6 +9,7 @@ import {
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { LucideAngularModule } from 'lucide-angular';
 import { Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
 import { SubjectMatch, formatEta } from '../../models/models';
@@ -19,7 +20,7 @@ type BadgeState = 'active' | 'completing' | 'idle';
   selector: 'app-search-bar',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, DecimalPipe],
+  imports: [FormsModule, DecimalPipe, LucideAngularModule],
   templateUrl: './search-bar.component.html',
   styleUrl: './search-bar.component.css',
 })
