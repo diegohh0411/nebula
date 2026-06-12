@@ -105,11 +105,16 @@ export class PhotoService {
 
   /** Flat virtual scroll rows: interleaved headers + justified rows */
   readonly virtualRows = computed<VirtualRow[]>(() => {
-    return flattenToVirtualRowsJustified(
+    const base = flattenToVirtualRowsJustified(
       this.dayGroups(),
       this.viewportWidth(),
-      this.targetRowHeight()
+      this.targetRowHeight(),
     );
+    const matches = this.subjectMatches();
+    if (this.searchResults() !== null && matches.length > 0) {
+      return [{ type: 'people', matches }, ...base];
+    }
+    return base;
   });
 
   /** Total photo count across all folders, independent of selection. */

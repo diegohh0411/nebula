@@ -1,0 +1,46 @@
+.person-card {
+  @apply relative block w-40 aspect-[3/4] rounded-2xl overflow-hidden flex-shrink-0
+         border border-white/10 shadow-lg bg-muted text-left
+         transition-transform duration-150 ease-out
+         focus:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .person-card:hover { transform: translateY(-4px); }
+  .person-card:hover .person-card-img { transform: scale(1.05); }
+}
+
+.person-card-img {
+  @apply absolute inset-0 w-full h-full object-cover transition-transform duration-200 ease-out;
+}
+
+.person-card-placeholder {
+  @apply absolute inset-0 flex items-center justify-center text-5xl text-muted-foreground;
+}
+
+.person-card-scrim {
+  @apply absolute inset-0 pointer-events-none;
+  background: linear-gradient(to top,
+    rgba(8, 8, 11, 0.92) 0%, rgba(8, 8, 11, 0.45) 28%, transparent 55%);
+}
+
+.person-card-meta {
+  @apply absolute left-3 right-3 bottom-3 flex flex-col gap-1.5;
+}
+
+.person-card-tags { @apply flex gap-1.5; }
+
+.person-card-tag {
+  @apply text-[10px] font-semibold text-white px-2 py-0.5 rounded-full
+         bg-white/20 backdrop-blur-sm;
+}
+
+.person-card-name {
+  @apply text-[15px] font-semibold text-white tracking-tight truncate;
+}
+
+.person-card-remove {
+  @apply absolute top-2 right-2 text-[11px] text-white/90 px-2 py-0.5 rounded-full
+         bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity
+         hover:bg-destructive;
+}

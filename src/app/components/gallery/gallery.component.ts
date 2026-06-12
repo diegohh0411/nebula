@@ -16,6 +16,7 @@ import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { SearchBarComponent } from '../search-bar/search-bar.component';
 import { TimelineScrubberComponent } from '../timeline-scrubber/timeline-scrubber.component';
+import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
 import { VirtualRow, SubjectMatch } from '../../models/models';
 import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
 import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
@@ -29,6 +30,7 @@ import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
     LightboxComponent,
     TimelineScrubberComponent,
     SearchBarComponent,
+    SubjectPersonCardComponent,
     ScrollingModule,
     CdkAutoSizeVirtualScroll,
   ],
@@ -152,6 +154,7 @@ export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   protected trackRow(_idx: number, row: VirtualRow): string {
+    if (row.type === 'people') return 'people-row';
     if (row.type === 'header') return `header-${row.date}`;
     const first = row.images[0];
     const id = first ? ('id' in first ? first.id : first.image_id) : _idx;
@@ -159,6 +162,7 @@ export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   protected getRowHeight(row: VirtualRow): number {
+    if (row.type === 'people') return 220; // Approximate height for the people strip
     if (row.type === 'header') return 48; // Standard header height
     return row.rowHeight;
   }

@@ -62,16 +62,7 @@
         } @else {
           <div class="subject-cards-grid">
             @for (match of tagSubjects(); track match.subject.id) {
-              <div class="subject-card">
-                <a [routerLink]="['/subject', match.subject.id]" class="subject-avatar">
-                  <span class="text-2xl">&#x1F464;</span>
-                </a>
-                <span class="subject-name">{{ match.subject.name || 'Unnamed' }}</span>
-                <button
-                  class="text-xs text-muted-foreground hover:text-destructive mt-1"
-                  (click)="removeSubjectFromTag(match.subject.id)"
-                >Remove</button>
-              </div>
+              <app-subject-person-card [match]="match" [removable]="true" (remove)="removeSubjectFromTag($event)" />
             }
           </div>
         }

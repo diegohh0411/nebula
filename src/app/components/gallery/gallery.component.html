@@ -22,30 +22,6 @@
     </div>
   }
 
-  <!-- Subjects row: shown when search is active and subjects matched -->
-  @if (photos.searchResults() !== null && photos.subjectMatches().length > 0) {
-    <div class="subjects-row">
-      <span class="subjects-row-label">People</span>
-      <div class="subjects-row-cards">
-        @for (match of photos.subjectMatches(); track match.subject.id) {
-          <button class="subject-card" (click)="navigateToSubject(match)">
-            <div class="subject-avatar">
-              <span class="subject-avatar-placeholder">&#x1F464;</span>
-            </div>
-            <span class="subject-name">{{ match.subject.name }}</span>
-            @if (match.tags.length > 0) {
-              <div class="subject-tags">
-                @for (tag of match.tags; track tag.id) {
-                  <span class="subject-tag">{{ tag.name }}</span>
-                }
-              </div>
-            }
-          </button>
-        }
-      </div>
-    </div>
-  }
-
   <!-- Gallery scroll container -->
   <cdk-virtual-scroll-viewport
     class="gallery-viewport"
@@ -55,7 +31,16 @@
     (pointerdown)="onPointerDown($event)"
   >
     <div *cdkVirtualFor="let row of photos.virtualRows(); trackBy: trackRow" class="viewport-item">
-      @if (row.type === 'header') {
+      @if (row.type === 'people') {
+        <div class="subjects-row">
+          <span class="subjects-row-label">People</span>
+          <div class="subjects-row-cards">
+            @for (match of row.matches; track match.subject.id) {
+              <app-subject-person-card [match]="match" />
+            }
+          </div>
+        </div>
+      } @else if (row.type === 'header') {
         <div class="day-header">{{ row.label }}</div>
       } @else {
         <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />

@@ -119,8 +119,9 @@ export interface NameSubjectResult {
   duplicate_subject_id: number | null;
 }
 
-/** A virtual scroll row: either a day header or a row of images */
+/** A virtual scroll row: either a people strip, a day header, or a row of images */
 export type VirtualRow =
+  | { type: 'people'; matches: SubjectMatch[] }
   | { type: 'header'; label: string; date: string }
   | { type: 'row'; images: (Image | SearchResult)[]; rowHeight: number };
 
