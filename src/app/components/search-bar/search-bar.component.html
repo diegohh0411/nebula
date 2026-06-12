@@ -69,6 +69,9 @@
         @if (photos.pipelineStats().images_per_sec >= 0.1) {
           · {{ photos.pipelineStats().images_per_sec | number:'1.0-1' }} img/s
         }
+        @if (etaLabel(); as eta) {
+          · {{ eta }}
+        }
       } @else {
         Library up to date
       }
