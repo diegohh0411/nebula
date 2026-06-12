@@ -50,9 +50,12 @@ export interface PipelineStats {
 export function formatEta(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '';
   if (seconds < 60) return `~${Math.round(seconds)}s left`;
-  if (seconds < 3600) return `~${Math.round(seconds / 60)} min left`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.round((seconds % 3600) / 60);
+  
+  const totalMinutes = Math.round(seconds / 60);
+  if (totalMinutes < 60) return `~${totalMinutes} min left`;
+  
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
   return m > 0 ? `~${h}h ${m}m left` : `~${h}h left`;
 }
 

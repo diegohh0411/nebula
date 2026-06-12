@@ -204,7 +204,7 @@ impl Indexer {
                     "image_added",
                     crate::models::ImageAddedPayload {
                         image_id,
-                        path: path_str.clone(),
+                        path: path_str,
                     },
                 );
 
@@ -215,7 +215,7 @@ impl Indexer {
                 tokio::spawn(async move {
                     if let Ok(_permit) = semaphore.acquire().await {
                         if let Ok(hash) = compute_sha256(&path_buf).await {
-                            let _ = sqlx::query("UPDATE images SET file_hash = ? WHERE id = ?")
+                            let _ = sqlx::query("UPDATE images SET file_hash = ? WHERE id = ? AND file_hash = ''")
                                 .bind(&hash)
                                 .bind(image_id)
                                 .execute(&pool)
