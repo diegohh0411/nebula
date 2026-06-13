@@ -1,0 +1,14 @@
+<div class="flex items-center justify-between mb-8" [class.pb-4]="border" [class.border-b]="border" [class.border-border]="border">
+  <div class="flex items-center gap-3">
+    @if (icon) {
+      <lucide-icon [name]="icon" class="w-8 h-8 text-primary"></lucide-icon>
+    }
+    <div>
+      <h1 class="text-3xl font-bold">{{ title }}</h1>
+      @if (subtitle) {
+        <p class="text-muted-foreground">{{ subtitle }}</p>
+      }
+    </div>
+  </div>
+  <ng-content select="[actions]"></ng-content>
+</div>
