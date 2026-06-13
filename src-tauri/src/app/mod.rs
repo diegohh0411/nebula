@@ -1,7 +1,6 @@
 //! Tauri application wiring: Builder, setup, command registry.
 pub mod state;
 pub use state::AppState;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -57,6 +56,10 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 indexer_rescan.start_rescan().await;
             });
+
+            // TT-75: single bounded BLAKE3 hash worker; runs only while the
+            // inference queue is shallow so a large import reaches full throughput fast.
+            crate::library::hasher::spawn_hash_worker(pool.clone());
 
             let pool_pipe = pool.clone();
             let app_pipe = app.handle().clone();

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{info, warn, error, debug};
+use log::{error, debug};
 use rayon::prelude::*;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -100,7 +100,7 @@ impl Indexer {
                 folder_map.push((path, folder.id));
             }
         }
-        folder_map.sort_by(|a, b| b.0.as_os_str().len().cmp(&a.0.as_os_str().len()));
+        folder_map.sort_by_key(|b| std::cmp::Reverse(b.0.as_os_str().len()));
 
         let indexer = Arc::new(Self {
             pool,
@@ -127,7 +127,7 @@ impl Indexer {
                 .into_iter()
                 .map(|f| (PathBuf::from(f.path), f.id))
                 .collect();
-            map.sort_by(|a, b| b.0.as_os_str().len().cmp(&a.0.as_os_str().len()));
+            map.sort_by_key(|b| std::cmp::Reverse(b.0.as_os_str().len()));
             *self.folder_map.write().await = map;
         }
     }
@@ -332,7 +332,7 @@ impl Indexer {
             self.process_file(path, *folder_id, known).await;
 
             done += 1;
-            if done % 100 == 0 || done == total {
+            if done.is_multiple_of(100) || done == total {
                 let _ = self.app.emit(
                     "sync_progress",
                     SyncProgressPayload { done, total },
