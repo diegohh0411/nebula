@@ -188,6 +188,42 @@ pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Resu
     Ok(rows.iter().map(row_to_image).collect())
 }
 
+pub async fn list_faces_for_subject_with_images(
+    pool: &SqlitePool,
+    subject_id: i64,
+) -> Result<Vec<crate::models::SubjectPhotoFace>> {
+    let rows = sqlx::query(
+        r#"SELECT i.id AS image_id, i.path, i.thumbnail_path, i.preview_path,
+                  i.date_taken, i.mtime,
+                  f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h
+           FROM faces f
+           JOIN images i ON i.id = f.image_id
+           WHERE f.subject_id = ? AND i.deleted_at IS NULL
+           ORDER BY COALESCE(i.date_taken, i.mtime) DESC"#,
+    )
+    .bind(subject_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| crate::models::SubjectPhotoFace {
+            image_id: r.get("image_id"),
+            path: r.get("path"),
+            thumbnail_path: r.get("thumbnail_path"),
+            preview_path: r.get("preview_path"),
+            date_taken: r.get("date_taken"),
+            mtime: r.get("mtime"),
+            face_bbox: crate::models::FaceBBox {
+                x: r.get("bbox_x"),
+                y: r.get("bbox_y"),
+                w: r.get("bbox_w"),
+                h: r.get("bbox_h"),
+            },
+        })
+        .collect())
+}
+
 pub async fn get_largest_face_for_subject(
     pool: &SqlitePool,
     subject_id: i64,

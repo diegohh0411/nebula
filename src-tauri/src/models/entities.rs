@@ -177,3 +177,22 @@ pub enum SearchQuery {
         mime_type: String,
     },
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FaceBBox {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubjectPhotoFace {
+    pub image_id: i64,
+    pub path: String,
+    pub thumbnail_path: Option<String>,
+    pub preview_path: Option<String>,
+    pub date_taken: Option<i64>,
+    pub mtime: i64,
+    pub face_bbox: FaceBBox,
+}

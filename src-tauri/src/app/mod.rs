@@ -113,6 +113,7 @@ pub fn run() {
             crate::people::commands::get_face_crop,
             crate::people::commands::set_subject_thumbnail,
             crate::people::commands::get_subject_photos,
+            crate::people::commands::get_subject_photos_with_faces,
             crate::people::commands::get_subject_detail,
             crate::people::commands::get_merge_suggestions,
             crate::people::commands::merge_subjects,

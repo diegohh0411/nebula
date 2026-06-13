@@ -8,7 +8,8 @@ use crate::library::repo::{
 use crate::people::repo::{
     add_cannot_link, add_must_link, clear_all_face_edges, dismiss_merge_suggestion,
     get_all_similarity_edges, get_dismissed_pair_set, get_face_with_image, get_merge_suggestions,
-    insert_face, merge_subjects, upgrade_subject_thumbnails, upsert_face_edge,
+    insert_face, list_faces_for_subject_with_images, merge_subjects, upgrade_subject_thumbnails,
+    upsert_face_edge,
 };
 use crate::search::text::{like_pattern, normalize};
 use crate::tags::repo::{
@@ -1096,4 +1097,124 @@ async fn test_tag_crud() {
         .all(|t| t.id != t1.id));
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
+    let pool = init_test_pool().await;
+    let folder_id = insert_folder(&pool, "/tmp/sf").await.unwrap();
+
+    // img_a: most recent by date_taken; img_b: no date_taken, ordered by mtime;
+    // img_c: soft-deleted and must be excluded.
+    let img_a = insert_image(&pool, folder_id, "/tmp/sf/a.jpg", "ha", 1, 100)
+        .await
+        .unwrap();
+    let img_b = insert_image(&pool, folder_id, "/tmp/sf/b.jpg", "hb", 1, 200)
+        .await
+        .unwrap();
+    let img_c = insert_image(&pool, folder_id, "/tmp/sf/c.jpg", "hc", 1, 999)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE images SET date_taken = 300, thumbnail_path = '/t/a.jpg', preview_path = '/p/a.jpg' WHERE id = ?")
+        .bind(img_a).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?")
+        .bind(img_c)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let subject = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let other = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Two faces of the subject in img_a -> two grid cells for the same image.
+    insert_face(
+        &pool,
+        img_a,
+        Some(subject),
+        (0.1, 0.1, 0.2, 0.2),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    insert_face(
+        &pool,
+        img_a,
+        Some(subject),
+        (0.5, 0.5, 0.3, 0.3),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    insert_face(
+        &pool,
+        img_b,
+        Some(subject),
+        (0.4, 0.6, 0.1, 0.1),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    // Excluded: face on a soft-deleted image, and a face belonging to another subject.
+    insert_face(
+        &pool,
+        img_c,
+        Some(subject),
+        (0.0, 0.0, 0.1, 0.1),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    insert_face(
+        &pool,
+        img_b,
+        Some(other),
+        (0.0, 0.0, 0.1, 0.1),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+
+    let rows = list_faces_for_subject_with_images(&pool, subject)
+        .await
+        .unwrap();
+
+    // One row per face: 2 (img_a) + 1 (img_b); deleted image and other subject excluded.
+    assert_eq!(
+        rows.len(),
+        3,
+        "one row per face occurrence, filtering deleted/other-subject"
+    );
+    // Ordered by COALESCE(date_taken, mtime) DESC: img_a (date_taken 300) before img_b (mtime 200).
+    assert_eq!(rows[0].image_id, img_a);
+    assert_eq!(rows[1].image_id, img_a);
+    assert_eq!(rows[2].image_id, img_b);
+    assert_eq!(rows[0].thumbnail_path.as_deref(), Some("/t/a.jpg"));
+    assert_eq!(rows[0].preview_path.as_deref(), Some("/p/a.jpg"));
+    assert_eq!(rows[0].date_taken, Some(300));
+    // The two img_a faces carry their distinct bboxes.
+    let mut a_x: Vec<f64> = rows
+        .iter()
+        .filter(|r| r.image_id == img_a)
+        .map(|r| r.face_bbox.x)
+        .collect();
+    a_x.sort_by(|p, q| p.partial_cmp(q).unwrap());
+    assert!((a_x[0] - 0.1).abs() < 1e-9 && (a_x[1] - 0.5).abs() < 1e-9);
+    // img_b face has no date_taken; ordering used mtime fallback.
+    assert_eq!(rows[2].date_taken, None);
+    assert!((rows[2].face_bbox.w - 0.1).abs() < 1e-9);
 }
