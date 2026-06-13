@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn frontality_neutral_when_landmarks_missing() {
         assert_eq!(frontality(None), 0.5);
-        assert_eq!(frontality(Some(&vec![(0.0, 0.0)])), 0.5); // wrong count
+        assert_eq!(frontality(Some(&[(0.0, 0.0)])), 0.5); // wrong count
     }
 
     #[test]
@@ -99,10 +99,17 @@ mod tests {
         // nose far off-center (turned head), eyes still level
         let lms = vec![(0.4, 0.5), (0.6, 0.5), (0.40, 0.6), (0.4, 0.7), (0.5, 0.7)];
         let turned = frontality(Some(&lms));
-        let centered = frontality(Some(&vec![
-            (0.4, 0.5), (0.6, 0.5), (0.5, 0.6), (0.43, 0.7), (0.57, 0.7),
+        let centered = frontality(Some(&[
+            (0.4, 0.5),
+            (0.6, 0.5),
+            (0.5, 0.6),
+            (0.43, 0.7),
+            (0.57, 0.7),
         ]));
-        assert!(turned < centered, "turned ({turned}) must score below centered ({centered})");
+        assert!(
+            turned < centered,
+            "turned ({turned}) must score below centered ({centered})"
+        );
     }
 
     #[test]

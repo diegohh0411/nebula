@@ -11,6 +11,7 @@ pub async fn upsert_vector(pool: &SqlitePool, face_id: i64, embedding: &[f32]) -
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn delete_vector(pool: &SqlitePool, face_id: i64) -> Result<()> {
     sqlx::query("DELETE FROM face_vectors WHERE rowid = ?")
         .bind(face_id)
@@ -78,6 +79,7 @@ pub async fn knn_cosine_sim(pool: &SqlitePool, face_id: i64, k: usize) -> Result
     Ok(sims)
 }
 
+#[allow(dead_code)]
 pub async fn get_all_face_vectors(pool: &SqlitePool) -> Result<Vec<(i64, Vec<f32>)>> {
     let rows = sqlx::query("SELECT rowid, embedding FROM face_vectors")
         .fetch_all(pool)

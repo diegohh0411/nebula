@@ -46,6 +46,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - name: Format check (static)
         working-directory: src-tauri
         run: cargo fmt --all --check
