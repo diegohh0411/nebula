@@ -397,13 +397,13 @@ async fn process_image(
 mod tests {
     use super::*;
 
-    fn write_jpeg(w: u32, h: u32) -> std::path::PathBuf {
+    fn write_jpeg(dir: &std::path::Path, w: u32, h: u32) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
         let mut img = image::RgbImage::new(w, h);
         for p in img.pixels_mut() {
             *p = image::Rgb([120, 180, 60]);
         }
-        let path =
-            std::env::temp_dir().join(format!("nebula_dec_{}_{}x{}.jpg", std::process::id(), w, h));
+        let path = dir.join(format!("src_{}x{}.jpg", w, h));
         image::DynamicImage::ImageRgb8(img)
             .save_with_format(&path, image::ImageFormat::Jpeg)
             .unwrap();
@@ -412,20 +412,22 @@ mod tests {
 
     #[test]
     fn decode_at_most_scales_large_jpeg_down() {
-        let path = write_jpeg(2000, 1000);
+        let dir = std::env::temp_dir().join(format!("nebula_dec_scale_{}", std::process::id()));
+        let path = write_jpeg(&dir, 2000, 1000);
         let img = decode_at_most(&path, 256).unwrap();
         // Coarse scale: result must be no larger than the original and non-empty.
         assert!(img.width() > 0 && img.height() > 0);
         assert!(img.width() <= 2000 && img.height() <= 1000);
-        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn decode_at_most_does_not_upscale_small_image() {
-        let path = write_jpeg(100, 80);
+        let dir = std::env::temp_dir().join(format!("nebula_dec_small_{}", std::process::id()));
+        let path = write_jpeg(&dir, 100, 80);
         let img = decode_at_most(&path, 256).unwrap();
         assert!(img.width() <= 100 && img.height() <= 80);
-        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -437,26 +439,24 @@ mod tests {
     #[test]
     fn write_preview_creates_small_webp() {
         let data_dir = std::env::temp_dir().join(format!("nebula_prev_{}", std::process::id()));
-        let src = write_jpeg(1600, 1200);
+        let src = write_jpeg(&data_dir, 1600, 1200);
         let out = write_preview(&src, 7, &data_dir).unwrap();
         assert!(out.exists());
         let loaded = image::open(&out).unwrap();
         assert!(loaded.width() <= 256 && loaded.height() <= 256);
         std::fs::remove_dir_all(&data_dir).ok();
-        std::fs::remove_file(&src).ok();
     }
 
     #[test]
     fn write_thumbnail_creates_800px_webp() {
         let data_dir = std::env::temp_dir().join(format!("nebula_thumb_{}", std::process::id()));
-        let src = write_jpeg(1600, 1200);
+        let src = write_jpeg(&data_dir, 1600, 1200);
         let out = write_thumbnail(&src, 7, &data_dir).unwrap();
         assert!(out.exists());
         let loaded = image::open(&out).unwrap();
         assert!(loaded.width() <= 800 && loaded.height() <= 800);
         assert!(loaded.width() == 800 || loaded.height() == 800);
         std::fs::remove_dir_all(&data_dir).ok();
-        std::fs::remove_file(&src).ok();
     }
 
     #[test]
