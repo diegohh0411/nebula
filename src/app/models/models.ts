@@ -128,6 +128,23 @@ export interface MergeSuggestion {
   score: number;
 }
 
+export interface FaceBBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface SubjectPhotoFace {
+  image_id: number;
+  path: string;
+  thumbnail_path: string | null;
+  preview_path: string | null;
+  date_taken: number | null;
+  mtime: number;
+  face_bbox: FaceBBox;
+}
+
 export interface NameSubjectResult {
   duplicate_subject_id: number | null;
 }

@@ -17,6 +17,8 @@ import {
   Tag,
   TagWithCount,
   SubjectMatch,
+  SubjectPhotoFace,
+  FaceBBox,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -222,6 +224,10 @@ export class PhotoService {
 
   async getSubjectPhotos(subjectId: number): Promise<SearchResult[]> {
     return await invoke<SearchResult[]>('get_subject_photos', { subjectId });
+  }
+
+  async getSubjectPhotosWithFaces(subjectId: number): Promise<SubjectPhotoFace[]> {
+    return await invoke<SubjectPhotoFace[]>('get_subject_photos_with_faces', { subjectId });
   }
 
   async setSubjectThumbnail(subjectId: number, faceId: number): Promise<void> {
