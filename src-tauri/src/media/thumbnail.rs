@@ -1,8 +1,8 @@
 use anyhow::Result;
-use std::path::{Path, PathBuf};
 use image::DynamicImage;
+use std::path::{Path, PathBuf};
 
-pub use crate::platform::paths::{thumbnail_cache_dir, face_crop_cache_dir};
+pub use crate::platform::paths::{face_crop_cache_dir, thumbnail_cache_dir};
 
 pub fn thumbnail_path_for(data_dir: &Path, image_id: i64) -> PathBuf {
     thumbnail_cache_dir(data_dir).join(format!("{}.webp", image_id))
@@ -45,7 +45,12 @@ pub async fn generate_face_crop(
         let x = (cx - side / 2.0).clamp(0.0, iw - side);
         let y = (cy - side / 2.0).clamp(0.0, ih - side);
 
-        let square = img.crop_imm(x.round() as u32, y.round() as u32, side.round() as u32, side.round() as u32);
+        let square = img.crop_imm(
+            x.round() as u32,
+            y.round() as u32,
+            side.round() as u32,
+            side.round() as u32,
+        );
         // Square -> square keeps aspect ratio (no squish).
         let resized = square.resize_exact(OUT, OUT, image::imageops::FilterType::CatmullRom);
         resized.save_with_format(&dest_path, image::ImageFormat::WebP)?;
@@ -97,7 +102,8 @@ mod tests {
     /// named after the image id, and be deterministic for the same inputs.
     #[test]
     fn thumbnail_path_for_is_under_data_dir_and_deterministic() {
-        let data_dir = std::env::temp_dir().join(format!("nebula_test_data_{}", std::process::id()));
+        let data_dir =
+            std::env::temp_dir().join(format!("nebula_test_data_{}", std::process::id()));
         let image_id: i64 = 42;
 
         let path = thumbnail_path_for(&data_dir, image_id);
@@ -131,7 +137,9 @@ mod tests {
         let dest = std::env::temp_dir().join(format!("nebula_crop_{}.webp", std::process::id()));
 
         // bbox: x=0.4,y=0.4,w=0.2,h=0.3 (taller than wide) — must NOT be squished.
-        generate_face_crop(src.clone(), dest.clone(), (0.4, 0.4, 0.2, 0.3)).await.unwrap();
+        generate_face_crop(src.clone(), dest.clone(), (0.4, 0.4, 0.2, 0.3))
+            .await
+            .unwrap();
 
         let out = image::open(&dest).unwrap();
         assert_eq!(out.width(), 320, "crop width must be 320");
@@ -146,7 +154,9 @@ mod tests {
     #[test]
     fn early_preview_writes_thumbnail_file() {
         let data_dir = std::env::temp_dir().join(format!(
-            "nebula_test_early_preview_{}_{}", std::process::id(), 1u64
+            "nebula_test_early_preview_{}_{}",
+            std::process::id(),
+            1u64
         ));
         let image_id: i64 = 7;
         let img = red(400, 300);

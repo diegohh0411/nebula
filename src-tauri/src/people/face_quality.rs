@@ -100,9 +100,16 @@ mod tests {
         let lms = vec![(0.4, 0.5), (0.6, 0.5), (0.40, 0.6), (0.4, 0.7), (0.5, 0.7)];
         let turned = frontality(Some(&lms));
         let centered = frontality(Some(&vec![
-            (0.4, 0.5), (0.6, 0.5), (0.5, 0.6), (0.43, 0.7), (0.57, 0.7),
+            (0.4, 0.5),
+            (0.6, 0.5),
+            (0.5, 0.6),
+            (0.43, 0.7),
+            (0.57, 0.7),
         ]));
-        assert!(turned < centered, "turned ({turned}) must score below centered ({centered})");
+        assert!(
+            turned < centered,
+            "turned ({turned}) must score below centered ({centered})"
+        );
     }
 
     #[test]

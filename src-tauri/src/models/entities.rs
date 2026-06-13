@@ -165,7 +165,15 @@ pub struct SearchResult {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SearchQuery {
-    Text { query: String },
-    ImageId { image_id: i64 },
-    ImageBytes { data: String, #[allow(dead_code)] mime_type: String },
+    Text {
+        query: String,
+    },
+    ImageId {
+        image_id: i64,
+    },
+    ImageBytes {
+        data: String,
+        #[allow(dead_code)]
+        mime_type: String,
+    },
 }

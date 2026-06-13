@@ -1,9 +1,9 @@
-use log::{Record, Level, Metadata, LevelFilter};
+use chrono::Local;
+use log::{Level, LevelFilter, Metadata, Record};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use chrono::Local;
 
 struct FileLogger {
     log_path: PathBuf,
@@ -55,6 +55,6 @@ pub fn init(data_dir: &std::path::Path) {
         log_path,
         file_mutex: Mutex::new(()),
     };
-    let _ = log::set_boxed_logger(Box::new(logger))
-        .map(|()| log::set_max_level(LevelFilter::Debug));
+    let _ =
+        log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(LevelFilter::Debug));
 }

@@ -8,10 +8,7 @@ use crate::db;
 
 /// Encode a Vec<f32> to raw little-endian bytes for storage as BLOB.
 pub fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|v| v.to_le_bytes())
-        .collect()
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// Decode raw little-endian bytes back to a Vec<f32>.

@@ -1,11 +1,11 @@
 use anyhow::Result;
+use log::{debug, error, info, warn};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use log::{info, warn, error, debug};
 
 use crate::library::indexer::Indexer;
 use crate::models::{DebouncedEvent, DebouncedEventKind};
@@ -16,13 +16,11 @@ pub struct FolderWatcher {
 
 impl FolderWatcher {
     pub fn new(event_tx: mpsc::UnboundedSender<Event>) -> Result<Self> {
-        let inner = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            match res {
-                Ok(event) => {
-                    let _ = event_tx.send(event);
-                }
-                Err(e) => error!("file watcher backend error: {e}"),
+        let inner = notify::recommended_watcher(move |res: notify::Result<Event>| match res {
+            Ok(event) => {
+                let _ = event_tx.send(event);
             }
+            Err(e) => error!("file watcher backend error: {e}"),
         })?;
         Ok(Self { inner })
     }
@@ -38,10 +36,7 @@ impl FolderWatcher {
     }
 }
 
-pub async fn run_debounce_loop(
-    mut rx: mpsc::UnboundedReceiver<Event>,
-    indexer: Arc<Indexer>,
-) {
+pub async fn run_debounce_loop(mut rx: mpsc::UnboundedReceiver<Event>, indexer: Arc<Indexer>) {
     let mut debounce_map: HashMap<PathBuf, (DebouncedEventKind, Instant)> = HashMap::new();
     let mut interval = tokio::time::interval(Duration::from_millis(200));
 

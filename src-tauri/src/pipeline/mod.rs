@@ -33,10 +33,10 @@ impl Default for PipelineConfig {
     }
 }
 
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::Manager;
-use log::{info, warn, error, debug};
 
 async fn save_faces(
     pool: &sqlx::SqlitePool,
@@ -67,7 +67,9 @@ async fn save_faces(
         .await
         {
             Ok(face_id) => {
-                if let Err(e) = crate::people::face_store::upsert_vector(pool, face_id, &face_emb).await {
+                if let Err(e) =
+                    crate::people::face_store::upsert_vector(pool, face_id, &face_emb).await
+                {
                     error!("[pipeline] upsert_vector failed for face {face_id}: {e}");
                     all_ok = false;
                 }
@@ -81,7 +83,13 @@ async fn save_faces(
     if all_ok {
         let _ = crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
     } else {
-        let _ = crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, "one or more face inserts failed").await;
+        let _ = crate::pipeline::queue::mark_failed(
+            pool,
+            sub_qid,
+            sub_attempts,
+            "one or more face inserts failed",
+        )
+        .await;
     }
 }
 
@@ -99,7 +107,8 @@ pub async fn run_pipeline(
     use tauri::Emitter;
 
     // Require split towers; fall back to SIGLIP_BASE if the chosen model lacks them.
-    let spec: &'static crate::models::registry::ModelSpec = if requested_spec.vision_file.is_some() {
+    let spec: &'static crate::models::registry::ModelSpec = if requested_spec.vision_file.is_some()
+    {
         requested_spec
     } else {
         warn!(
@@ -136,7 +145,11 @@ pub async fn run_pipeline(
     info!("[pipeline] Face analyzer initialized.");
 
     let embed_tx = embed_actor::spawn_embed_actor(
-        engine.clone(), manager.clone(), spec, config.batch_size, config.infer_channel_depth,
+        engine.clone(),
+        manager.clone(),
+        spec,
+        config.batch_size,
+        config.infer_channel_depth,
     );
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
@@ -147,13 +160,31 @@ pub async fn run_pipeline(
 
     loop {
         // Pull both queues
-        let sem_batch = match crate::pipeline::queue::get_queue_batch(&pool, "semantic", config.batch_size as i64).await {
+        let sem_batch = match crate::pipeline::queue::get_queue_batch(
+            &pool,
+            "semantic",
+            config.batch_size as i64,
+        )
+        .await
+        {
             Ok(b) => b,
-            Err(e) => { error!("[pipeline] semantic queue fetch error: {e}"); vec![] }
+            Err(e) => {
+                error!("[pipeline] semantic queue fetch error: {e}");
+                vec![]
+            }
         };
-        let sub_batch = match crate::pipeline::queue::get_queue_batch(&pool, "subject", config.batch_size as i64).await {
+        let sub_batch = match crate::pipeline::queue::get_queue_batch(
+            &pool,
+            "subject",
+            config.batch_size as i64,
+        )
+        .await
+        {
             Ok(b) => b,
-            Err(e) => { error!("[pipeline] subject queue fetch error: {e}"); vec![] }
+            Err(e) => {
+                error!("[pipeline] subject queue fetch error: {e}");
+                vec![]
+            }
         };
 
         if sem_batch.is_empty() && sub_batch.is_empty() {
@@ -174,7 +205,10 @@ pub async fn run_pipeline(
         );
 
         // Merge by image_id, tracking separate queue_ids for each operation
-        let mut image_work: std::collections::HashMap<i64, (Option<(i64, i32)>, Option<(i64, i32)>)> = std::collections::HashMap::new();
+        let mut image_work: std::collections::HashMap<
+            i64,
+            (Option<(i64, i32)>, Option<(i64, i32)>),
+        > = std::collections::HashMap::new();
         for (qid, image_id, attempts) in sem_batch {
             image_work.entry(image_id).or_default().0 = Some((qid, attempts));
         }
@@ -196,12 +230,18 @@ pub async fn run_pipeline(
         let mut handles = Vec::new();
         for (image_id, sem_entry, sub_entry) in batch {
             let pool_c = pool.clone();
-            let permit = sem.clone().acquire_owned().await.expect("local semaphore closed unexpectedly");
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("local semaphore closed unexpectedly");
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 let image = match crate::library::repo::get_image_by_id(&pool_c, image_id).await {
                     Ok(Some(i)) => i,
-                    Ok(None) => return Err((sem_entry, sub_entry, format!("image {image_id} not found"))),
+                    Ok(None) => {
+                        return Err((sem_entry, sub_entry, format!("image {image_id} not found")))
+                    }
                     Err(e) => return Err((sem_entry, sub_entry, e.to_string())),
                 };
                 let path = image.path.clone();
@@ -225,10 +265,22 @@ pub async fn run_pipeline(
                 Ok(Err((sem_entry, sub_entry, err_msg))) => {
                     error!("[pipeline] decode failed: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
-                        let _ = crate::pipeline::queue::mark_failed(&pool, sem_qid, sem_attempts, &err_msg).await;
+                        let _ = crate::pipeline::queue::mark_failed(
+                            &pool,
+                            sem_qid,
+                            sem_attempts,
+                            &err_msg,
+                        )
+                        .await;
                     }
                     if let Some((sub_qid, sub_attempts)) = sub_entry {
-                        let _ = crate::pipeline::queue::mark_failed(&pool, sub_qid, sub_attempts, &err_msg).await;
+                        let _ = crate::pipeline::queue::mark_failed(
+                            &pool,
+                            sub_qid,
+                            sub_attempts,
+                            &err_msg,
+                        )
+                        .await;
                     }
                 }
                 Err(e) => error!("[pipeline] decode task panicked: {e}"),
@@ -236,7 +288,11 @@ pub async fn run_pipeline(
         }
 
         let images_processed_this_iter = decoded.len();
-        debug!("[pipeline] Decoded {}/{} images for inference", images_processed_this_iter, decoded.len());
+        debug!(
+            "[pipeline] Decoded {}/{} images for inference",
+            images_processed_this_iter,
+            decoded.len()
+        );
 
         // Stage 2: dispatch embed + face, write results
         let mut processed_subject_work = false;
@@ -255,28 +311,67 @@ pub async fn run_pipeline(
         for (image_id, sem_entry, sub_entry, d) in decoded {
             let erx = if let Some((sem_qid, sem_attempts)) = sem_entry {
                 let (etx, erx) = tokio::sync::oneshot::channel();
-                if embed_tx.send(embed_actor::EmbedRequest { decoded: d.clone(), reply: etx }).await.is_ok() {
+                if embed_tx
+                    .send(embed_actor::EmbedRequest {
+                        decoded: d.clone(),
+                        reply: etx,
+                    })
+                    .await
+                    .is_ok()
+                {
                     Some(erx)
                 } else {
-                    let _ = crate::pipeline::queue::mark_failed(&pool, sem_qid, sem_attempts, "embed actor closed").await;
+                    let _ = crate::pipeline::queue::mark_failed(
+                        &pool,
+                        sem_qid,
+                        sem_attempts,
+                        "embed actor closed",
+                    )
+                    .await;
                     None
                 }
             } else {
                 None
             };
-            pending.push(Pending { image_id, sem_entry, sub_entry, d, erx });
+            pending.push(Pending {
+                image_id,
+                sem_entry,
+                sub_entry,
+                d,
+                erx,
+            });
         }
 
         // Phase B — for each image: dispatch face then join!(embed_result, face_result).
         // This restores the embed/face overlap that the old serial CPU path dropped,
         // while the pre-dispatched embed batch is processed by the actor.
-        for Pending { image_id, sem_entry, sub_entry, d, erx } in pending {
+        for Pending {
+            image_id,
+            sem_entry,
+            sub_entry,
+            d,
+            erx,
+        } in pending
+        {
             let frx = if let Some((sub_qid, sub_attempts)) = sub_entry {
                 let (ftx, frx) = tokio::sync::oneshot::channel();
-                if face_tx.send(face_actor::FaceRequest { decoded: d.clone(), reply: ftx }).await.is_ok() {
+                if face_tx
+                    .send(face_actor::FaceRequest {
+                        decoded: d.clone(),
+                        reply: ftx,
+                    })
+                    .await
+                    .is_ok()
+                {
                     Some(frx)
                 } else {
-                    let _ = crate::pipeline::queue::mark_failed(&pool, sub_qid, sub_attempts, "face actor closed").await;
+                    let _ = crate::pipeline::queue::mark_failed(
+                        &pool,
+                        sub_qid,
+                        sub_attempts,
+                        "face actor closed",
+                    )
+                    .await;
                     None
                 }
             } else {
@@ -290,24 +385,41 @@ pub async fn run_pipeline(
                         Ok(Ok(emb)) => {
                             let blob = crate::search::math::f32_slice_to_bytes(&emb);
                             if let Some((sem_qid, _)) = sem_entry {
-                                if crate::pipeline::queue::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
-                                    .await.is_ok()
+                                if crate::pipeline::queue::mark_semantic_analysis_done(
+                                    &pool, sem_qid, image_id, &blob,
+                                )
+                                .await
+                                .is_ok()
                                 {
                                     index.write().unwrap().add(image_id, &emb);
-                                    info!("[pipeline] Saved semantic embedding for image {image_id}");
+                                    info!(
+                                        "[pipeline] Saved semantic embedding for image {image_id}"
+                                    );
                                 }
                             }
                         }
                         Ok(Err(e)) => {
                             error!("[pipeline] Embedding error for image {image_id}: {e}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sem_qid, sem_attempts, &e.to_string()).await;
+                                let _ = crate::pipeline::queue::mark_failed(
+                                    &pool,
+                                    sem_qid,
+                                    sem_attempts,
+                                    &e.to_string(),
+                                )
+                                .await;
                             }
                         }
                         Err(_) => {
                             error!("[pipeline] Embed reply channel dropped for image {image_id}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sem_qid, sem_attempts, "embed reply channel dropped").await;
+                                let _ = crate::pipeline::queue::mark_failed(
+                                    &pool,
+                                    sem_qid,
+                                    sem_attempts,
+                                    "embed reply channel dropped",
+                                )
+                                .await;
                             }
                         }
                     }
@@ -322,67 +434,102 @@ pub async fn run_pipeline(
                         Ok(Err(e)) => {
                             error!("[pipeline] Face analysis error for image {image_id}: {e}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sub_qid, sub_attempts, &e.to_string()).await;
+                                let _ = crate::pipeline::queue::mark_failed(
+                                    &pool,
+                                    sub_qid,
+                                    sub_attempts,
+                                    &e.to_string(),
+                                )
+                                .await;
                             }
                         }
                         Err(_) => {
                             error!("[pipeline] Face reply channel dropped for image {image_id}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sub_qid, sub_attempts, "face reply channel dropped").await;
+                                let _ = crate::pipeline::queue::mark_failed(
+                                    &pool,
+                                    sub_qid,
+                                    sub_attempts,
+                                    "face reply channel dropped",
+                                )
+                                .await;
                             }
                         }
                     }
                 }
-                (Some(erx), None) => {
-                    match erx.await {
-                        Ok(Ok(emb)) => {
-                            let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                            if let Some((sem_qid, _)) = sem_entry {
-                                if crate::pipeline::queue::mark_semantic_analysis_done(&pool, sem_qid, image_id, &blob)
-                                    .await.is_ok()
-                                {
-                                    index.write().unwrap().add(image_id, &emb);
-                                    info!("[pipeline] Saved semantic embedding for image {image_id}");
-                                }
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("[pipeline] Embedding error for image {image_id}: {e}");
-                            if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sem_qid, sem_attempts, &e.to_string()).await;
-                            }
-                        }
-                        Err(_) => {
-                            error!("[pipeline] Embed reply channel dropped for image {image_id}");
-                            if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sem_qid, sem_attempts, "embed reply channel dropped").await;
+                (Some(erx), None) => match erx.await {
+                    Ok(Ok(emb)) => {
+                        let blob = crate::search::math::f32_slice_to_bytes(&emb);
+                        if let Some((sem_qid, _)) = sem_entry {
+                            if crate::pipeline::queue::mark_semantic_analysis_done(
+                                &pool, sem_qid, image_id, &blob,
+                            )
+                            .await
+                            .is_ok()
+                            {
+                                index.write().unwrap().add(image_id, &emb);
+                                info!("[pipeline] Saved semantic embedding for image {image_id}");
                             }
                         }
                     }
-                }
-                (None, Some(frx)) => {
-                    match frx.await {
-                        Ok(Ok(faces)) => {
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
-                                processed_subject_work = true;
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("[pipeline] Face analysis error for image {image_id}: {e}");
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sub_qid, sub_attempts, &e.to_string()).await;
-                            }
-                        }
-                        Err(_) => {
-                            error!("[pipeline] Face reply channel dropped for image {image_id}");
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(&pool, sub_qid, sub_attempts, "face reply channel dropped").await;
-                            }
+                    Ok(Err(e)) => {
+                        error!("[pipeline] Embedding error for image {image_id}: {e}");
+                        if let Some((sem_qid, sem_attempts)) = sem_entry {
+                            let _ = crate::pipeline::queue::mark_failed(
+                                &pool,
+                                sem_qid,
+                                sem_attempts,
+                                &e.to_string(),
+                            )
+                            .await;
                         }
                     }
-                }
+                    Err(_) => {
+                        error!("[pipeline] Embed reply channel dropped for image {image_id}");
+                        if let Some((sem_qid, sem_attempts)) = sem_entry {
+                            let _ = crate::pipeline::queue::mark_failed(
+                                &pool,
+                                sem_qid,
+                                sem_attempts,
+                                "embed reply channel dropped",
+                            )
+                            .await;
+                        }
+                    }
+                },
+                (None, Some(frx)) => match frx.await {
+                    Ok(Ok(faces)) => {
+                        if let Some((sub_qid, sub_attempts)) = sub_entry {
+                            info!("[pipeline] Found {} faces in image {image_id}", faces.len());
+                            save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                            processed_subject_work = true;
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        error!("[pipeline] Face analysis error for image {image_id}: {e}");
+                        if let Some((sub_qid, sub_attempts)) = sub_entry {
+                            let _ = crate::pipeline::queue::mark_failed(
+                                &pool,
+                                sub_qid,
+                                sub_attempts,
+                                &e.to_string(),
+                            )
+                            .await;
+                        }
+                    }
+                    Err(_) => {
+                        error!("[pipeline] Face reply channel dropped for image {image_id}");
+                        if let Some((sub_qid, sub_attempts)) = sub_entry {
+                            let _ = crate::pipeline::queue::mark_failed(
+                                &pool,
+                                sub_qid,
+                                sub_attempts,
+                                "face reply channel dropped",
+                            )
+                            .await;
+                        }
+                    }
+                },
                 (None, None) => {}
             }
 
@@ -402,9 +549,15 @@ pub async fn run_pipeline(
         // when the window momentarily lacks samples, so the speed never blanks
         // mid-processing.
         let app_state: tauri::State<crate::AppState> = app.state();
-        let prev = f32::from_bits(app_state.throughput_ema.load(std::sync::atomic::Ordering::Relaxed));
+        let prev = f32::from_bits(
+            app_state
+                .throughput_ema
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         let effective = crate::pipeline::throughput::effective_rate(raw_rate, prev);
-        app_state.throughput_ema.store(effective.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        app_state
+            .throughput_ema
+            .store(effective.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
         crate::search::math::emit_progress(&pool, &app).await;
 
@@ -429,13 +582,20 @@ pub async fn run_pipeline(
                 // generate the crop file eagerly so the People grid has it before the
                 // frontend asks (closes the lazy-generation first-paint delay).
                 if let Ok(changed) = crate::people::repo::upgrade_subject_thumbnails(&pool).await {
-                    info!("[pipeline] Upgraded thumbnails for {} subjects", changed.len());
+                    info!(
+                        "[pipeline] Upgraded thumbnails for {} subjects",
+                        changed.len()
+                    );
                     for (_subject_id, face_id) in changed {
                         if let Ok(Some((path, bbox))) =
                             crate::people::repo::get_face_with_image(&pool, face_id).await
                         {
-                            let dest = crate::media::thumbnail::face_crop_path_for(&data_dir, face_id);
-                            debug!("[pipeline] Eagerly generating face crop for face_id {} to {:?}", face_id, dest);
+                            let dest =
+                                crate::media::thumbnail::face_crop_path_for(&data_dir, face_id);
+                            debug!(
+                                "[pipeline] Eagerly generating face crop for face_id {} to {:?}",
+                                face_id, dest
+                            );
                             if let Err(e) = crate::media::thumbnail::generate_face_crop(
                                 std::path::PathBuf::from(path),
                                 dest,
