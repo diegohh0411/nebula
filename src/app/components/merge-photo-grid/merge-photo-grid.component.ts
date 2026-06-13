@@ -96,7 +96,7 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
   }
 
   protected thumbUrl(img: SubjectPhotoFace): string | null {
-    return this.photos.thumbnailUrl(img.thumbnail_path ?? img.preview_path);
+    return this.photos.thumbnailUrl(img.preview_path ?? img.thumbnail_path);
   }
 
   protected focus(img: SubjectPhotoFace): { x: string; y: string } {
