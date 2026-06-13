@@ -469,6 +469,25 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
     Ok(())
 }
 
+#[allow(dead_code)]
+pub async fn get_dismissed_pair_set(pool: &SqlitePool) -> Result<HashSet<(i64, i64)>> {
+    let rows = sqlx::query("SELECT subject_id_a, subject_id_b FROM dismissed_pairs")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let a = r.get::<i64, _>("subject_id_a");
+            let b = r.get::<i64, _>("subject_id_b");
+            if a < b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        })
+        .collect())
+}
+
 pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> {
     let row = sqlx::query("SELECT subject_id_a, subject_id_b FROM merge_suggestions WHERE id = ?")
         .bind(id)
@@ -659,6 +678,17 @@ pub async fn upsert_face_edge(
 pub async fn clear_all_face_edges(pool: &SqlitePool) -> Result<()> {
     sqlx::query("DELETE FROM face_edges").execute(pool).await?;
     Ok(())
+}
+
+#[allow(dead_code)]
+pub async fn get_all_similarity_edges(pool: &SqlitePool) -> Result<Vec<(i64, i64, f32)>> {
+    let rows = sqlx::query("SELECT face_a, face_b, weight FROM face_edges")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get("face_a"), r.get("face_b"), r.get::<f32, _>("weight")))
+        .collect())
 }
 
 pub async fn get_all_must_link_pairs(pool: &SqlitePool) -> Result<Vec<(i64, i64)>> {
