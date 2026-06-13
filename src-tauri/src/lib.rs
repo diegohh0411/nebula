@@ -1,15 +1,15 @@
 mod app;
 mod db;
-mod platform;
 mod library;
 mod media;
-mod search;
+pub mod models;
 mod people;
+pub mod pipeline;
+mod platform;
+mod search;
+mod settings;
 mod tags;
 pub mod vision;
-mod settings;
-pub mod models;
-pub mod pipeline;
 // legacy flat modules still present, removed as their slices absorb them:
 mod commands;
 

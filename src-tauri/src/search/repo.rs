@@ -26,7 +26,11 @@ pub async fn get_all_embeddings(pool: &SqlitePool) -> Result<Vec<(i64, Vec<u8>)>
         .collect())
 }
 
-pub async fn get_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type: &str) -> Result<Option<Vec<u8>>> {
+pub async fn get_cached_embedding(
+    pool: &SqlitePool,
+    cache_key: &str,
+    query_type: &str,
+) -> Result<Option<Vec<u8>>> {
     let cutoff = chrono::Utc::now().timestamp() - 1800;
     let row = sqlx::query(
         "SELECT embedding FROM embedding_cache WHERE cache_key = ? AND query_type = ? AND created_at > ?"
@@ -39,7 +43,12 @@ pub async fn get_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type
     Ok(row.map(|r| r.get("embedding")))
 }
 
-pub async fn insert_cached_embedding(pool: &SqlitePool, cache_key: &str, query_type: &str, embedding: &[u8]) -> Result<()> {
+pub async fn insert_cached_embedding(
+    pool: &SqlitePool,
+    cache_key: &str,
+    query_type: &str,
+    embedding: &[u8],
+) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
         "INSERT OR REPLACE INTO embedding_cache (cache_key, query_type, embedding, created_at) VALUES (?, ?, ?, ?)"
@@ -69,11 +78,19 @@ pub async fn reset_all_embeddings(pool: &SqlitePool) -> Result<()> {
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("DELETE FROM face_vectors").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM face_vectors")
+        .execute(&mut *tx)
+        .await?;
 
-    sqlx::query("DELETE FROM embedding_cache").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM merge_suggestions").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM embedding_queue").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM embedding_cache")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM merge_suggestions")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM embedding_queue")
+        .execute(&mut *tx)
+        .await?;
 
     let now = chrono::Utc::now().timestamp();
     sqlx::query(

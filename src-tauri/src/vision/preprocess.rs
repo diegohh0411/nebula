@@ -3,12 +3,7 @@ use ndarray::Array4;
 
 /// Resize `img` to `size`x`size` and write it into `dst` at batch index `b`,
 /// normalized to [-1, 1] in CHW order. `dst` must have shape (B, 3, size, size).
-pub fn fill_pixel_values(
-    dst: &mut Array4<f32>,
-    b: usize,
-    img: &DynamicImage,
-    size: usize,
-) {
+pub fn fill_pixel_values(dst: &mut Array4<f32>, b: usize, img: &DynamicImage, size: usize) {
     // Triangle is markedly faster than Lanczos3 with negligible effect on
     // embeddings at 224-256px inputs.
     let resized = img.resize_exact(
@@ -61,7 +56,9 @@ mod tests {
     #[test]
     fn fill_writes_into_correct_batch_slot() {
         let mut img = image::RgbImage::new(4, 4);
-        for p in img.pixels_mut() { *p = image::Rgb([255, 0, 0]); }
+        for p in img.pixels_mut() {
+            *p = image::Rgb([255, 0, 0]);
+        }
         let dimg = DynamicImage::ImageRgb8(img);
 
         let size = 2;

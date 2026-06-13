@@ -38,10 +38,7 @@ pub async fn add_folder(
 }
 
 #[tauri::command]
-pub async fn remove_folder(
-    id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn remove_folder(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
     state
         .indexer
         .remove_folder(id)

@@ -1,7 +1,7 @@
 //! Library persistence: folders + images.
+use crate::library::models::{DbImage, Folder, FolderWithCount, Image};
 use anyhow::Result;
 use sqlx::{Row, SqlitePool};
-use crate::library::models::{Folder, FolderWithCount, Image, DbImage};
 
 pub async fn insert_folder(pool: &SqlitePool, path: &str) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
@@ -233,7 +233,11 @@ pub async fn soft_delete_image(pool: &SqlitePool, path: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn update_thumbnail_path(pool: &SqlitePool, image_id: i64, thumb_path: &str) -> Result<()> {
+pub async fn update_thumbnail_path(
+    pool: &SqlitePool,
+    image_id: i64,
+    thumb_path: &str,
+) -> Result<()> {
     sqlx::query("UPDATE images SET thumbnail_path = ? WHERE id = ?")
         .bind(thumb_path)
         .bind(image_id)
@@ -242,7 +246,11 @@ pub async fn update_thumbnail_path(pool: &SqlitePool, image_id: i64, thumb_path:
     Ok(())
 }
 
-pub async fn update_preview_path(pool: &SqlitePool, image_id: i64, preview_path: &str) -> Result<()> {
+pub async fn update_preview_path(
+    pool: &SqlitePool,
+    image_id: i64,
+    preview_path: &str,
+) -> Result<()> {
     sqlx::query("UPDATE images SET preview_path = ? WHERE id = ?")
         .bind(preview_path)
         .bind(image_id)

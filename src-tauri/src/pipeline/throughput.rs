@@ -15,14 +15,17 @@ pub struct ThroughputWindow {
 
 impl ThroughputWindow {
     pub fn new(window_secs: f32) -> Self {
-        Self { window_secs, entries: VecDeque::new() }
+        Self {
+            window_secs,
+            entries: VecDeque::new(),
+        }
     }
 
     /// Record that `count` images completed at `now_secs` seconds since some fixed epoch.
     pub fn record(&mut self, count: usize, now_secs: f32) {
         self.entries.push_back((now_secs, count));
         let cutoff = now_secs - self.window_secs;
-        while self.entries.front().map_or(false, |(t, _)| *t < cutoff) {
+        while self.entries.front().is_some_and(|(t, _)| *t < cutoff) {
             self.entries.pop_front();
         }
     }
@@ -46,7 +49,11 @@ impl ThroughputWindow {
 /// published value (`prev`). A transient "not enough samples" 0 from the sliding
 /// window must never blank the displayed speed while processing is active.
 pub fn effective_rate(raw: f32, prev: f32) -> f32 {
-    if raw > 0.0 { raw } else { prev }
+    if raw > 0.0 {
+        raw
+    } else {
+        prev
+    }
 }
 
 #[cfg(test)]
@@ -67,7 +74,10 @@ mod tests {
         // Window holds all 6 entries; span = 9 - 4 = 5s → 72/5 = 14.4 img/s.
         // Old EMA (0.3/0.7) seeded at 3 img/s would only reach ~10.5 here.
         let rate = w.rate(9.0);
-        assert!(rate >= 12.0, "expected rate >= 12 img/s after fast batches, got {rate:.1}");
+        assert!(
+            rate >= 12.0,
+            "expected rate >= 12 img/s after fast batches, got {rate:.1}"
+        );
     }
 
     #[test]
@@ -94,7 +104,10 @@ mod tests {
         w.record(12, 11.0);
         // In window at t=11: [10, 11], total=24, span=1s → 24 img/s
         let rate = w.rate(11.0);
-        assert!(rate >= 20.0, "stale entries must be excluded, got {rate:.1}");
+        assert!(
+            rate >= 20.0,
+            "stale entries must be excluded, got {rate:.1}"
+        );
     }
 
     #[test]

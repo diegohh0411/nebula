@@ -1,6 +1,6 @@
 use crate::{
     media::thumbnail,
-    models::{SearchResult, Subject, Face, MergeSuggestion, NameSubjectResult, SubjectMatch},
+    models::{Face, MergeSuggestion, NameSubjectResult, SearchResult, Subject, SubjectMatch},
     people::repo,
     tags::repo as tags_repo,
     AppState,
@@ -47,24 +47,41 @@ pub async fn name_subject(
 }
 
 #[tauri::command]
-pub async fn list_faces(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
-    repo::list_faces_for_subject(&state.pool, subject_id).await.map_err(map_err)
+pub async fn list_faces(
+    subject_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<Face>, String> {
+    repo::list_faces_for_subject(&state.pool, subject_id)
+        .await
+        .map_err(map_err)
 }
 
 #[tauri::command]
-pub async fn list_faces_for_image(image_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<Face>, String> {
-    repo::list_faces_for_image(&state.pool, image_id).await.map_err(map_err)
+pub async fn list_faces_for_image(
+    image_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<Face>, String> {
+    repo::list_faces_for_image(&state.pool, image_id)
+        .await
+        .map_err(map_err)
 }
 
 #[tauri::command]
-pub async fn get_face_crop(face_id: i64, state: tauri::State<'_, AppState>) -> Result<String, String> {
+pub async fn get_face_crop(
+    face_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let pool = &state.pool;
     let data_dir = &state.data_dir;
 
-    let face = repo::get_face_by_id(pool, face_id).await.map_err(map_err)?
+    let face = repo::get_face_by_id(pool, face_id)
+        .await
+        .map_err(map_err)?
         .ok_or_else(|| "Face not found".to_string())?;
 
-    let image = crate::library::repo::get_image_by_id(pool, face.image_id).await.map_err(map_err)?
+    let image = crate::library::repo::get_image_by_id(pool, face.image_id)
+        .await
+        .map_err(map_err)?
         .ok_or_else(|| "Image not found".to_string())?;
 
     let crop_path = thumbnail::face_crop_path_for(data_dir, face_id);
@@ -72,32 +89,48 @@ pub async fn get_face_crop(face_id: i64, state: tauri::State<'_, AppState>) -> R
         thumbnail::generate_face_crop(
             std::path::PathBuf::from(&image.path),
             crop_path.clone(),
-            (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h)
-        ).await.map_err(map_err)?;
+            (face.bbox_x, face.bbox_y, face.bbox_w, face.bbox_h),
+        )
+        .await
+        .map_err(map_err)?;
     }
 
     Ok(crop_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-pub async fn set_subject_thumbnail(subject_id: i64, face_id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    repo::update_subject_thumbnail_face(&state.pool, subject_id, face_id).await.map_err(map_err)
+pub async fn set_subject_thumbnail(
+    subject_id: i64,
+    face_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    repo::update_subject_thumbnail_face(&state.pool, subject_id, face_id)
+        .await
+        .map_err(map_err)
 }
 
 #[tauri::command]
-pub async fn get_subject_photos(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<Vec<SearchResult>, String> {
-    let images = repo::list_images_for_subject(&state.pool, subject_id).await.map_err(map_err)?;
-    Ok(images.into_iter().map(|img| SearchResult {
-        image_id: img.id,
-        path: img.path,
-        thumbnail_path: img.thumbnail_path,
-        preview_path: img.preview_path,
-        score: 1.0,
-        date_taken: img.date_taken,
-        mtime: img.mtime,
-        semantic_analysis_done: img.semantic_analysis_done,
-        subject_analysis_done: img.subject_analysis_done,
-    }).collect())
+pub async fn get_subject_photos(
+    subject_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SearchResult>, String> {
+    let images = repo::list_images_for_subject(&state.pool, subject_id)
+        .await
+        .map_err(map_err)?;
+    Ok(images
+        .into_iter()
+        .map(|img| SearchResult {
+            image_id: img.id,
+            path: img.path,
+            thumbnail_path: img.thumbnail_path,
+            preview_path: img.preview_path,
+            score: 1.0,
+            date_taken: img.date_taken,
+            mtime: img.mtime,
+            semantic_analysis_done: img.semantic_analysis_done,
+            subject_analysis_done: img.subject_analysis_done,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -111,12 +144,18 @@ pub async fn get_subject_photos_with_faces(
 }
 
 #[tauri::command]
-pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<crate::models::SubjectDetail, String> {
-    let mut detail = repo::get_subject_detail_with_counts(&state.pool, subject_id).await.map_err(map_err)?
+pub async fn get_subject_detail(
+    subject_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::models::SubjectDetail, String> {
+    let mut detail = repo::get_subject_detail_with_counts(&state.pool, subject_id)
+        .await
+        .map_err(map_err)?
         .ok_or_else(|| "Subject not found".to_string())?;
 
     if detail.subject.thumbnail_face_id.is_none() {
-        if let Ok(Some(face_id)) = repo::get_largest_face_for_subject(&state.pool, subject_id).await {
+        if let Ok(Some(face_id)) = repo::get_largest_face_for_subject(&state.pool, subject_id).await
+        {
             let _ = repo::update_subject_thumbnail_face(&state.pool, subject_id, face_id).await;
             detail.subject.thumbnail_face_id = Some(face_id);
         }
@@ -185,10 +224,7 @@ pub async fn create_subject_for_face(
 }
 
 #[tauri::command]
-pub async fn unassign_face(
-    face_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn unassign_face(face_id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let pool = &state.pool;
     if let Ok(Some(face)) = repo::get_face_by_id(pool, face_id).await {
         if let Some(subject_id) = face.subject_id {
@@ -212,5 +248,7 @@ pub async fn search_subjects(
     query: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SubjectMatch>, String> {
-    tags_repo::search_subjects_matching(&state.pool, &query).await.map_err(map_err)
+    tags_repo::search_subjects_matching(&state.pool, &query)
+        .await
+        .map_err(map_err)
 }

@@ -4,20 +4,15 @@ use tauri::AppHandle;
 
 use tauri::Emitter;
 
-use crate::db;
-
 /// Encode a Vec<f32> to raw little-endian bytes for storage as BLOB.
 pub fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
-    values
-        .iter()
-        .flat_map(|v| v.to_le_bytes())
-        .collect()
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// Decode raw little-endian bytes back to a Vec<f32>.
 pub fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>> {
     anyhow::ensure!(
-        bytes.len() % 4 == 0,
+        bytes.len().is_multiple_of(4),
         "invalid embedding byte length: expected a multiple of 4, got {}",
         bytes.len()
     );
@@ -32,16 +27,6 @@ pub fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>> {
             )
         })
         .collect())
-}
-
-pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
-    let dot_product: f32 = v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum();
-    let norm1: f32 = v1.iter().map(|a| a * a).sum::<f32>().sqrt();
-    let norm2: f32 = v2.iter().map(|a| a * a).sum::<f32>().sqrt();
-    if norm1 == 0.0 || norm2 == 0.0 {
-        return 0.0;
-    }
-    dot_product / (norm1 * norm2)
 }
 
 pub(crate) async fn emit_progress(pool: &SqlitePool, app: &AppHandle) {

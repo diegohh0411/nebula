@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use image::DynamicImage;
-use log::{info, warn, error, debug};
-use std::path::{Path, PathBuf};
+use log::error;
 use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,7 +17,11 @@ pub struct PreviewQueue {
 
 impl PreviewQueue {
     pub fn new() -> Self {
-        Self { high: VecDeque::new(), low: VecDeque::new(), seen: HashSet::new() }
+        Self {
+            high: VecDeque::new(),
+            low: VecDeque::new(),
+            seen: HashSet::new(),
+        }
     }
 
     /// Enqueue at low priority. Returns true if newly added (not seen before).
@@ -57,7 +61,9 @@ impl PreviewQueue {
 }
 
 impl Default for PreviewQueue {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Pure parallelism decision: burst (all cores) while there is high-priority
@@ -111,7 +117,13 @@ impl Governor {
         let now_ms = self.start.elapsed().as_millis() as u64;
         let last = self.last_high_demand_ms.load(Ordering::Relaxed);
         let secs = (now_ms.saturating_sub(last)) as f64 / 1000.0;
-        compute_parallelism(secs, high_pending, self.burst, self.trickle, self.window.as_secs_f64())
+        compute_parallelism(
+            secs,
+            high_pending,
+            self.burst,
+            self.trickle,
+            self.window.as_secs_f64(),
+        )
     }
 }
 
@@ -122,7 +134,10 @@ impl Governor {
 /// resize to the target dimensions.
 pub fn decode_at_most(path: &Path, target_long_edge: u32) -> Result<DynamicImage> {
     let is_jpeg = matches!(
-        path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .as_deref(),
         Some("jpg" | "jpeg")
     );
     if is_jpeg {
@@ -147,13 +162,13 @@ fn decode_jpeg_scaled(path: &Path, target_long_edge: u32) -> Result<DynamicImage
     let (w, h) = (w as u32, h as u32);
     match info.pixel_format {
         PixelFormat::RGB24 => {
-            let buf = image::RgbImage::from_raw(w, h, pixels)
-                .context("rgb buffer size mismatch")?;
+            let buf =
+                image::RgbImage::from_raw(w, h, pixels).context("rgb buffer size mismatch")?;
             Ok(DynamicImage::ImageRgb8(buf))
         }
         PixelFormat::L8 => {
-            let buf = image::GrayImage::from_raw(w, h, pixels)
-                .context("luma buffer size mismatch")?;
+            let buf =
+                image::GrayImage::from_raw(w, h, pixels).context("luma buffer size mismatch")?;
             Ok(DynamicImage::ImageLuma8(buf))
         }
         // CMYK32, L16, etc.: let the caller's image::open fallback handle it.
@@ -333,9 +348,13 @@ async fn process_image(
         let res = tokio::task::spawn_blocking(move || write_preview(&src, image_id, &dd)).await;
         match res {
             Ok(Ok(path)) => {
-                if crate::library::repo::update_preview_path(pool, image_id, &path.to_string_lossy())
-                    .await
-                    .is_ok()
+                if crate::library::repo::update_preview_path(
+                    pool,
+                    image_id,
+                    &path.to_string_lossy(),
+                )
+                .await
+                .is_ok()
                 {
                     let _ = app.emit(
                         "image_updated",
@@ -350,12 +369,17 @@ async fn process_image(
 
     // Tier 2 — 800px thumbnail.
     {
-        let res = tokio::task::spawn_blocking(move || write_thumbnail(&src, image_id, &data_dir)).await;
+        let res =
+            tokio::task::spawn_blocking(move || write_thumbnail(&src, image_id, &data_dir)).await;
         match res {
             Ok(Ok(path)) => {
-                if crate::library::repo::update_thumbnail_path(pool, image_id, &path.to_string_lossy())
-                    .await
-                    .is_ok()
+                if crate::library::repo::update_thumbnail_path(
+                    pool,
+                    image_id,
+                    &path.to_string_lossy(),
+                )
+                .await
+                .is_ok()
                 {
                     let _ = app.emit(
                         "image_updated",
@@ -373,32 +397,37 @@ async fn process_image(
 mod tests {
     use super::*;
 
-    fn write_jpeg(w: u32, h: u32) -> std::path::PathBuf {
+    fn write_jpeg(dir: &std::path::Path, w: u32, h: u32) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
         let mut img = image::RgbImage::new(w, h);
-        for p in img.pixels_mut() { *p = image::Rgb([120, 180, 60]); }
-        let path = std::env::temp_dir()
-            .join(format!("nebula_dec_{}_{}x{}.jpg", std::process::id(), w, h));
+        for p in img.pixels_mut() {
+            *p = image::Rgb([120, 180, 60]);
+        }
+        let path = dir.join(format!("src_{}x{}.jpg", w, h));
         image::DynamicImage::ImageRgb8(img)
-            .save_with_format(&path, image::ImageFormat::Jpeg).unwrap();
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .unwrap();
         path
     }
 
     #[test]
     fn decode_at_most_scales_large_jpeg_down() {
-        let path = write_jpeg(2000, 1000);
+        let dir = std::env::temp_dir().join(format!("nebula_dec_scale_{}", std::process::id()));
+        let path = write_jpeg(&dir, 2000, 1000);
         let img = decode_at_most(&path, 256).unwrap();
         // Coarse scale: result must be no larger than the original and non-empty.
         assert!(img.width() > 0 && img.height() > 0);
         assert!(img.width() <= 2000 && img.height() <= 1000);
-        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn decode_at_most_does_not_upscale_small_image() {
-        let path = write_jpeg(100, 80);
+        let dir = std::env::temp_dir().join(format!("nebula_dec_small_{}", std::process::id()));
+        let path = write_jpeg(&dir, 100, 80);
         let img = decode_at_most(&path, 256).unwrap();
         assert!(img.width() <= 100 && img.height() <= 80);
-        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -409,29 +438,25 @@ mod tests {
 
     #[test]
     fn write_preview_creates_small_webp() {
-        let data_dir = std::env::temp_dir()
-            .join(format!("nebula_prev_{}", std::process::id()));
-        let src = write_jpeg(1600, 1200);
+        let data_dir = std::env::temp_dir().join(format!("nebula_prev_{}", std::process::id()));
+        let src = write_jpeg(&data_dir, 1600, 1200);
         let out = write_preview(&src, 7, &data_dir).unwrap();
         assert!(out.exists());
         let loaded = image::open(&out).unwrap();
         assert!(loaded.width() <= 256 && loaded.height() <= 256);
         std::fs::remove_dir_all(&data_dir).ok();
-        std::fs::remove_file(&src).ok();
     }
 
     #[test]
     fn write_thumbnail_creates_800px_webp() {
-        let data_dir = std::env::temp_dir()
-            .join(format!("nebula_thumb_{}", std::process::id()));
-        let src = write_jpeg(1600, 1200);
+        let data_dir = std::env::temp_dir().join(format!("nebula_thumb_{}", std::process::id()));
+        let src = write_jpeg(&data_dir, 1600, 1200);
         let out = write_thumbnail(&src, 7, &data_dir).unwrap();
         assert!(out.exists());
         let loaded = image::open(&out).unwrap();
         assert!(loaded.width() <= 800 && loaded.height() <= 800);
         assert!(loaded.width() == 800 || loaded.height() == 800);
         std::fs::remove_dir_all(&data_dir).ok();
-        std::fs::remove_file(&src).ok();
     }
 
     #[test]
@@ -507,33 +532,51 @@ mod tests {
         let test_dir = std::env::temp_dir().join(format!("nebula_e2e_{}", std::process::id()));
         std::fs::create_dir_all(&test_dir).unwrap();
         let pool = crate::db::init_db(&test_dir).await.unwrap();
-        let fid = crate::library::repo::insert_folder(&pool, "/tmp/f").await.unwrap();
+        let fid = crate::library::repo::insert_folder(&pool, "/tmp/f")
+            .await
+            .unwrap();
 
         // Create a real source image on disk within the test directory.
         let mut img = image::RgbImage::new(1600, 1200);
-        for p in img.pixels_mut() { *p = image::Rgb([120, 180, 60]); }
+        for p in img.pixels_mut() {
+            *p = image::Rgb([120, 180, 60]);
+        }
         let src = test_dir.join("source.jpg");
         image::DynamicImage::ImageRgb8(img)
-            .save_with_format(&src, image::ImageFormat::Jpeg).unwrap();
+            .save_with_format(&src, image::ImageFormat::Jpeg)
+            .unwrap();
 
-        let id = crate::library::repo::insert_image(
-            &pool, fid, src.to_str().unwrap(), "h", 1, 1,
-        ).await.unwrap();
+        let id = crate::library::repo::insert_image(&pool, fid, src.to_str().unwrap(), "h", 1, 1)
+            .await
+            .unwrap();
 
         // Before: needs preview.
-        assert!(crate::library::repo::images_needing_preview(&pool).await.unwrap().contains(&id));
+        assert!(crate::library::repo::images_needing_preview(&pool)
+            .await
+            .unwrap()
+            .contains(&id));
 
         // Tier 1 then tier 2, persisting paths as process_image would.
         let p = write_preview(&src, id, &test_dir).unwrap();
-        crate::library::repo::update_preview_path(&pool, id, p.to_str().unwrap()).await.unwrap();
+        crate::library::repo::update_preview_path(&pool, id, p.to_str().unwrap())
+            .await
+            .unwrap();
         let t = write_thumbnail(&src, id, &test_dir).unwrap();
-        crate::library::repo::update_thumbnail_path(&pool, id, t.to_str().unwrap()).await.unwrap();
+        crate::library::repo::update_thumbnail_path(&pool, id, t.to_str().unwrap())
+            .await
+            .unwrap();
 
         // After: both paths set, no longer in the needs-preview set.
-        let img = crate::library::repo::get_image_by_id(&pool, id).await.unwrap().unwrap();
+        let img = crate::library::repo::get_image_by_id(&pool, id)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(img.preview_path.is_some());
         assert!(img.thumbnail_path.is_some());
-        assert!(!crate::library::repo::images_needing_preview(&pool).await.unwrap().contains(&id));
+        assert!(!crate::library::repo::images_needing_preview(&pool)
+            .await
+            .unwrap()
+            .contains(&id));
 
         std::fs::remove_dir_all(&test_dir).ok();
     }

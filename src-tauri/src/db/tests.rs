@@ -2,19 +2,19 @@ use sqlx::SqlitePool;
 
 use crate::db::init_db;
 use crate::library::repo::{
-    insert_folder, insert_image, get_image_by_id,
-    update_thumbnail_path, update_preview_path, images_needing_preview,
+    get_image_by_id, images_needing_preview, insert_folder, insert_image, update_preview_path,
+    update_thumbnail_path,
 };
 use crate::people::repo::{
-    get_merge_suggestions, dismiss_merge_suggestion, get_dismissed_pair_set,
-    merge_subjects, upsert_face_edge, clear_all_face_edges, get_all_similarity_edges,
-    add_cannot_link, add_must_link, insert_face, upgrade_subject_thumbnails,
-    get_face_with_image, list_faces_for_subject_with_images,
+    add_cannot_link, add_must_link, clear_all_face_edges, dismiss_merge_suggestion,
+    get_all_similarity_edges, get_dismissed_pair_set, get_face_with_image, get_merge_suggestions,
+    insert_face, list_faces_for_subject_with_images, merge_subjects, upgrade_subject_thumbnails,
+    upsert_face_edge,
 };
-use crate::search::text::{normalize, like_pattern};
+use crate::search::text::{like_pattern, normalize};
 use crate::tags::repo::{
-    add_subject_tag, get_tag_image_ids_ordered, search_subjects_matching,
-    get_subject_tags, list_tags_with_counts, rename_tag, remove_subject_tag, delete_tag,
+    add_subject_tag, delete_tag, get_subject_tags, get_tag_image_ids_ordered,
+    list_tags_with_counts, remove_subject_tag, rename_tag, search_subjects_matching,
 };
 
 async fn make_pool() -> SqlitePool {
@@ -26,8 +26,11 @@ async fn make_pool() -> SqlitePool {
             thumbnail_face_id INTEGER,
             type TEXT NOT NULL DEFAULT 'person',
             added_at INTEGER NOT NULL
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "CREATE TABLE faces (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,8 +39,11 @@ async fn make_pool() -> SqlitePool {
             bbox_x REAL NOT NULL, bbox_y REAL NOT NULL,
             bbox_w REAL NOT NULL, bbox_h REAL NOT NULL,
             added_at INTEGER NOT NULL
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
@@ -50,8 +56,11 @@ async fn make_merge_pool() -> SqlitePool {
             subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
             score REAL NOT NULL,
             created_at INTEGER NOT NULL
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "CREATE TABLE constraints (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,30 +70,39 @@ async fn make_merge_pool() -> SqlitePool {
             source TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             UNIQUE(face_a, face_b, kind)
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "CREATE TABLE tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             name_normalized TEXT NOT NULL UNIQUE,
             added_at INTEGER NOT NULL
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
         "CREATE TABLE subject_tags (
             subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
             tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
             added_at INTEGER NOT NULL,
             PRIMARY KEY (subject_id, tag_id)
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
 async fn insert_subject(pool: &SqlitePool, name: Option<&str>) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES (?, 'person', 0) RETURNING id"
+        "INSERT INTO subjects (name, type, added_at) VALUES (?, 'person', 0) RETURNING id",
     )
     .bind(name)
     .fetch_one(pool)
@@ -97,20 +115,35 @@ async fn get_merge_suggestions_with_limit_returns_top_n_by_score() {
     let pool = make_merge_pool().await;
 
     let a: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let b: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let c: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Carol', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Carol', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let d: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Dave', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Dave', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let e: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Eve', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Eve', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     for (sa, sb, score) in [
         (a, b, 0.95f64),
@@ -126,13 +159,19 @@ async fn get_merge_suggestions_with_limit_returns_top_n_by_score() {
 
     let top3 = get_merge_suggestions(&pool, Some(3)).await.unwrap();
     assert_eq!(top3.len(), 3);
-    assert!((top3[0].score - 0.95).abs() < 1e-9, "first should be highest score");
+    assert!(
+        (top3[0].score - 0.95).abs() < 1e-9,
+        "first should be highest score"
+    );
     assert!((top3[1].score - 0.90).abs() < 1e-9);
     assert!((top3[2].score - 0.80).abs() < 1e-9);
 
     let all = get_merge_suggestions(&pool, None).await.unwrap();
     assert_eq!(all.len(), 5, "no limit should return all 5");
-    assert!((all[0].score - 0.95).abs() < 1e-9, "first should still be highest score");
+    assert!(
+        (all[0].score - 0.95).abs() < 1e-9,
+        "first should still be highest score"
+    );
 }
 
 async fn make_images_pool() -> SqlitePool {
@@ -213,9 +252,13 @@ async fn update_preview_path_persists_and_is_readable() {
     std::fs::create_dir_all(&dir).unwrap();
     let pool = init_db(&dir).await.unwrap();
     let folder_id = insert_folder(&pool, "/tmp/f").await.unwrap();
-    let image_id = insert_image(&pool, folder_id, "/tmp/f/a.jpg", "h", 1, 1).await.unwrap();
+    let image_id = insert_image(&pool, folder_id, "/tmp/f/a.jpg", "h", 1, 1)
+        .await
+        .unwrap();
 
-    update_preview_path(&pool, image_id, "/tmp/p_7.webp").await.unwrap();
+    update_preview_path(&pool, image_id, "/tmp/p_7.webp")
+        .await
+        .unwrap();
 
     let img = get_image_by_id(&pool, image_id).await.unwrap().unwrap();
     assert_eq!(img.preview_path.as_deref(), Some("/tmp/p_7.webp"));
@@ -228,9 +271,15 @@ async fn images_needing_preview_excludes_thumbnailed_and_deleted() {
     std::fs::create_dir_all(&dir).unwrap();
     let pool = init_db(&dir).await.unwrap();
     let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
-    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "h1", 1, 1).await.unwrap();
-    let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "h2", 1, 1).await.unwrap();
-    update_thumbnail_path(&pool, a, "/tmp/a.webp").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "h1", 1, 1)
+        .await
+        .unwrap();
+    let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "h2", 1, 1)
+        .await
+        .unwrap();
+    update_thumbnail_path(&pool, a, "/tmp/a.webp")
+        .await
+        .unwrap();
 
     let need = images_needing_preview(&pool).await.unwrap();
     assert!(need.contains(&b));
@@ -246,11 +295,17 @@ async fn make_dismissal_pool() -> SqlitePool {
             subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
             subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
             dismissed_at INTEGER NOT NULL
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query(
-        "CREATE UNIQUE INDEX idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)"
-    ).execute(&pool).await.unwrap();
+        "CREATE UNIQUE INDEX idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     pool
 }
 
@@ -259,26 +314,41 @@ async fn dismiss_persists_pair_in_dismissed_pairs() {
     let pool = make_dismissal_pool().await;
 
     let a: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let b: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     let suggestion_id: i64 = sqlx::query_scalar(
         "INSERT INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) VALUES (?, ?, 0.9, 0) RETURNING id"
     ).bind(a).bind(b).fetch_one(&pool).await.unwrap();
 
-    dismiss_merge_suggestion(&pool, suggestion_id).await.unwrap();
+    dismiss_merge_suggestion(&pool, suggestion_id)
+        .await
+        .unwrap();
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count, 0, "suggestion should be deleted");
 
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     let dismissed: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM dismissed_pairs WHERE subject_id_a = ? AND subject_id_b = ?"
-    ).bind(lo).bind(hi).fetch_one(&pool).await.unwrap();
+        "SELECT COUNT(*) FROM dismissed_pairs WHERE subject_id_a = ? AND subject_id_b = ?",
+    )
+    .bind(lo)
+    .bind(hi)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(dismissed, 1, "dismissed pair should be persisted");
 }
 
@@ -295,30 +365,50 @@ async fn get_dismissed_pair_set_returns_stored_pairs() {
             bbox_w REAL NOT NULL DEFAULT 0.5,
             bbox_h REAL NOT NULL DEFAULT 0.5,
             added_at INTEGER NOT NULL DEFAULT 0
-        )"
-    ).execute(&pool).await.unwrap();
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let a: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let b: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     let (lo, hi) = if a < b { (a, b) } else { (b, a) };
     sqlx::query(
-        "INSERT INTO dismissed_pairs (subject_id_a, subject_id_b, dismissed_at) VALUES (?, ?, 0)"
-    ).bind(lo).bind(hi).execute(&pool).await.unwrap();
+        "INSERT INTO dismissed_pairs (subject_id_a, subject_id_b, dismissed_at) VALUES (?, ?, 0)",
+    )
+    .bind(lo)
+    .bind(hi)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     sqlx::query(
         "INSERT INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) VALUES (?, ?, 0.95, 0)"
     ).bind(lo).bind(hi).execute(&pool).await.unwrap();
 
     let dismissed = get_dismissed_pair_set(&pool).await.unwrap();
-    assert!(dismissed.contains(&(lo, hi)), "dismissed set should include the pair");
+    assert!(
+        dismissed.contains(&(lo, hi)),
+        "dismissed set should include the pair"
+    );
 
     let is_dismissed = dismissed.contains(&(lo, hi));
-    assert!(is_dismissed, "pair should be flagged as dismissed so clustering skips it");
+    assert!(
+        is_dismissed,
+        "pair should be flagged as dismissed so clustering skips it"
+    );
 }
 
 #[tokio::test]
@@ -330,13 +420,12 @@ async fn merge_unnamed_into_named_preserves_name() {
 
     merge_subjects(&pool, named_id, unnamed_id).await.unwrap();
 
-    let surviving_name: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM subjects WHERE id = ?"
-    )
-    .bind(named_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let surviving_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM subjects WHERE id = ?")
+            .bind(named_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(surviving_name, Some("Casandra".to_string()));
 
@@ -356,13 +445,12 @@ async fn merge_named_into_unnamed_preserves_name() {
 
     merge_subjects(&pool, unnamed_id, named_id).await.unwrap();
 
-    let surviving_name: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM subjects WHERE id = ?"
-    )
-    .bind(unnamed_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let surviving_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM subjects WHERE id = ?")
+            .bind(unnamed_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(surviving_name, Some("Casandra".to_string()));
 
@@ -382,13 +470,12 @@ async fn merge_named_into_named_preserves_target_name() {
 
     merge_subjects(&pool, target_id, source_id).await.unwrap();
 
-    let surviving_name: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM subjects WHERE id = ?"
-    )
-    .bind(target_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let surviving_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM subjects WHERE id = ?")
+            .bind(target_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(surviving_name, Some("Cas".to_string()));
 
@@ -408,13 +495,12 @@ async fn merge_unnamed_into_unnamed_stays_unnamed() {
 
     merge_subjects(&pool, target_id, source_id).await.unwrap();
 
-    let surviving_name: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM subjects WHERE id = ?"
-    )
-    .bind(target_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let surviving_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM subjects WHERE id = ?")
+            .bind(target_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(surviving_name, None);
 
@@ -424,7 +510,6 @@ async fn merge_unnamed_into_unnamed_stays_unnamed() {
         .unwrap();
     assert_eq!(count, 1);
 }
-
 
 #[tokio::test]
 async fn upsert_face_edge_normalizes_order_and_deduplicates() {
@@ -506,7 +591,10 @@ async fn must_link_and_cannot_link_are_independent_rows() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 2, "must_link and cannot_link on the same pair are distinct rows");
+    assert_eq!(
+        count, 2,
+        "must_link and cannot_link on the same pair are distinct rows"
+    );
 }
 
 #[tokio::test]
@@ -516,8 +604,14 @@ async fn faces_table_has_quality_columns() {
         .fetch_all(&pool)
         .await
         .unwrap();
-    assert!(cols.contains(&"det_score".to_string()), "faces must have det_score; got {cols:?}");
-    assert!(cols.contains(&"quality_score".to_string()), "faces must have quality_score; got {cols:?}");
+    assert!(
+        cols.contains(&"det_score".to_string()),
+        "faces must have det_score; got {cols:?}"
+    );
+    assert!(
+        cols.contains(&"quality_score".to_string()),
+        "faces must have quality_score; got {cols:?}"
+    );
 }
 
 #[tokio::test]
@@ -528,7 +622,10 @@ async fn sqlite_vec_extension_loads() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert!(!version.is_empty(), "vec_version() should return a non-empty string");
+    assert!(
+        !version.is_empty(),
+        "vec_version() should return a non-empty string"
+    );
 }
 
 #[tokio::test]
@@ -568,20 +665,18 @@ async fn merge_moves_source_faces_to_target() {
 
     merge_subjects(&pool, target, source).await.unwrap();
 
-    let f1_subject: Option<i64> =
-        sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
-            .bind(src_face1)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let f1_subject: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+        .bind(src_face1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(f1_subject, Some(target), "src_face1 must move to target");
 
-    let f2_subject: Option<i64> =
-        sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
-            .bind(src_face2)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let f2_subject: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+        .bind(src_face2)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(f2_subject, Some(target), "src_face2 must move to target");
 }
 
@@ -590,11 +685,17 @@ async fn merge_subjects_writes_must_link_constraints() {
     let pool = init_test_pool().await;
 
     let alice: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let bob: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     let fa: i64 = sqlx::query_scalar(
         "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0) RETURNING id"
@@ -606,13 +707,21 @@ async fn merge_subjects_writes_must_link_constraints() {
     merge_subjects(&pool, alice, bob).await.unwrap();
 
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM constraints WHERE kind = 'must_link' AND source = 'merge'"
-    ).fetch_one(&pool).await.unwrap();
-    assert_eq!(count, 1, "one must_link expected for fa-fb cross-group pair");
+        "SELECT COUNT(*) FROM constraints WHERE kind = 'must_link' AND source = 'merge'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 1,
+        "one must_link expected for fa-fb cross-group pair"
+    );
 
-    let (stored_a, stored_b): (i64, i64) = sqlx::query_as(
-        "SELECT face_a, face_b FROM constraints WHERE kind = 'must_link'"
-    ).fetch_one(&pool).await.unwrap();
+    let (stored_a, stored_b): (i64, i64) =
+        sqlx::query_as("SELECT face_a, face_b FROM constraints WHERE kind = 'must_link'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let expected_a = fa.min(fb);
     let expected_b = fa.max(fb);
     assert_eq!(stored_a, expected_a);
@@ -624,11 +733,17 @@ async fn merge_subjects_preserves_and_unifies_tags() {
     let pool = init_test_pool().await;
 
     let target: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Target', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Target', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let source: i64 = sqlx::query_scalar(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Source', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Source', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     sqlx::query(
         "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, ?, 0,0,1,1,0)"
@@ -647,22 +762,36 @@ async fn merge_subjects_preserves_and_unifies_tags() {
     let surviving_tags = get_subject_tags(&pool, target).await.unwrap();
     let tag_names: Vec<String> = surviving_tags.iter().map(|t| t.name.clone()).collect();
     assert!(tag_names.contains(&"target-only".to_string()));
-    assert!(tag_names.contains(&"source-only".to_string()), "source-only tag must be transferred to target");
+    assert!(
+        tag_names.contains(&"source-only".to_string()),
+        "source-only tag must be transferred to target"
+    );
     assert!(tag_names.contains(&"shared".to_string()));
     assert_eq!(surviving_tags.len(), 3, "shared tag must not be duplicated");
 
     let source_tags = get_subject_tags(&pool, source).await.unwrap();
-    assert!(source_tags.is_empty(), "source subject tags should be gone after merge");
+    assert!(
+        source_tags.is_empty(),
+        "source subject tags should be gone after merge"
+    );
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
-        .fetch_one(&pool).await.unwrap();
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 
     let list = list_tags_with_counts(&pool).await.unwrap();
     assert_eq!(list.len(), 3);
     for t in [&target_only, &source_only, &shared] {
-        let found = list.iter().find(|lt| lt.id == t.id).expect("tag still exists");
-        assert_eq!(found.subject_count, 1, "each surviving tag should be attached exactly once");
+        let found = list
+            .iter()
+            .find(|lt| lt.id == t.id)
+            .expect("tag still exists");
+        assert_eq!(
+            found.subject_count, 1,
+            "each surviving tag should be attached exactly once"
+        );
     }
 }
 
@@ -692,23 +821,49 @@ async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let low = insert_face(&pool, 1, Some(sid), (0.0, 0.0, 0.2, 0.2), Some(0.5), Some(0.2))
-        .await
-        .unwrap();
+    let low = insert_face(
+        &pool,
+        1,
+        Some(sid),
+        (0.0, 0.0, 0.2, 0.2),
+        Some(0.5),
+        Some(0.2),
+    )
+    .await
+    .unwrap();
 
     let changed = upgrade_subject_thumbnails(&pool).await.unwrap();
     assert_eq!(changed, vec![(sid, low)]);
-    let thumb: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
-        .bind(sid).fetch_one(&pool).await.unwrap();
+    let thumb: Option<i64> =
+        sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(thumb, Some(low));
 
-    let high = insert_face(&pool, 2, Some(sid), (0.0, 0.0, 0.3, 0.3), Some(0.9), Some(0.9))
-        .await
-        .unwrap();
+    let high = insert_face(
+        &pool,
+        2,
+        Some(sid),
+        (0.0, 0.0, 0.3, 0.3),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
     let changed2 = upgrade_subject_thumbnails(&pool).await.unwrap();
-    assert_eq!(changed2, vec![(sid, high)], "upgrade must report the change");
-    let thumb2: Option<i64> = sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
-        .bind(sid).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        changed2,
+        vec![(sid, high)],
+        "upgrade must report the change"
+    );
+    let thumb2: Option<i64> =
+        sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(thumb2, Some(high), "must upgrade to higher quality face");
 
     let changed3 = upgrade_subject_thumbnails(&pool).await.unwrap();
@@ -718,12 +873,11 @@ async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
 #[tokio::test]
 async fn get_face_with_image_returns_bbox_and_path() {
     let pool = init_test_pool().await;
-    let folder_id: i64 = sqlx::query_scalar(
-        "INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let folder_id: i64 =
+        sqlx::query_scalar("INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let img_id: i64 = sqlx::query_scalar(
         "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at)
          VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0) RETURNING id",
@@ -732,9 +886,16 @@ async fn get_face_with_image_returns_bbox_and_path() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let fid = insert_face(&pool, img_id, None, (0.1, 0.2, 0.3, 0.4), Some(0.8), Some(0.7))
-        .await
-        .unwrap();
+    let fid = insert_face(
+        &pool,
+        img_id,
+        None,
+        (0.1, 0.2, 0.3, 0.4),
+        Some(0.8),
+        Some(0.7),
+    )
+    .await
+    .unwrap();
 
     let (path, bbox) = get_face_with_image(&pool, fid).await.unwrap().unwrap();
     assert_eq!(path, "/tmp/x.jpg");
@@ -748,14 +909,36 @@ async fn test_tag_image_ids_ordered_by_subject_count() {
     let pool = init_db(&dir).await.unwrap();
 
     let folder_id = insert_folder(&pool, "/tmp/tag_test").await.unwrap();
-    let img_a = insert_image(&pool, folder_id, "/tmp/tag_test/a.jpg", "ha", 1, 1).await.unwrap();
-    let img_b = insert_image(&pool, folder_id, "/tmp/tag_test/b.jpg", "hb", 1, 1).await.unwrap();
-    let img_c = insert_image(&pool, folder_id, "/tmp/tag_test/c.jpg", "hc", 1, 1).await.unwrap();
-    let img_d = insert_image(&pool, folder_id, "/tmp/tag_test/d.jpg", "hd", 1, 1).await.unwrap();
-    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?").bind(img_d).execute(&pool).await.unwrap();
+    let img_a = insert_image(&pool, folder_id, "/tmp/tag_test/a.jpg", "ha", 1, 1)
+        .await
+        .unwrap();
+    let img_b = insert_image(&pool, folder_id, "/tmp/tag_test/b.jpg", "hb", 1, 1)
+        .await
+        .unwrap();
+    let img_c = insert_image(&pool, folder_id, "/tmp/tag_test/c.jpg", "hc", 1, 1)
+        .await
+        .unwrap();
+    let img_d = insert_image(&pool, folder_id, "/tmp/tag_test/d.jpg", "hd", 1, 1)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?")
+        .bind(img_d)
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let s1: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Sub1', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
-    let s2: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Sub2', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+    let s1: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Sub1', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let s2: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Sub2', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_a).bind(s1).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (?, ?, 0,0,1,1,0)").bind(img_a).bind(s2).execute(&pool).await.unwrap();
@@ -795,7 +978,12 @@ async fn test_search_subjects_matching_multiword_and_wildcards() {
     std::fs::create_dir_all(&dir).unwrap();
     let pool = init_db(&dir).await.unwrap();
 
-    let s: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Ana', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+    let s: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Ana', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     add_subject_tag(&pool, s, "Cabin-9").await.unwrap();
 
     let hits = search_subjects_matching(&pool, "cabin 9").await.unwrap();
@@ -803,7 +991,10 @@ async fn test_search_subjects_matching_multiword_and_wildcards() {
     let imgs_query = like_pattern("cabin 9");
     assert_eq!(imgs_query.as_deref(), Some("%cabin%9%"));
 
-    assert!(search_subjects_matching(&pool, "ca%n").await.unwrap().is_empty());
+    assert!(search_subjects_matching(&pool, "ca%n")
+        .await
+        .unwrap()
+        .is_empty());
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -814,8 +1005,18 @@ async fn test_search_subjects_matching() {
     std::fs::create_dir_all(&dir).unwrap();
     let pool = init_db(&dir).await.unwrap();
 
-    let jose: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('José', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
-    let maria: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Maria', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+    let jose: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('José', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let maria: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Maria', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     add_subject_tag(&pool, maria, "Cabaña-21").await.unwrap();
 
     let hits = search_subjects_matching(&pool, "jose").await.unwrap();
@@ -830,7 +1031,10 @@ async fn test_search_subjects_matching() {
     let hits = search_subjects_matching(&pool, "maria").await.unwrap();
     assert_eq!(hits.len(), 1);
 
-    assert!(search_subjects_matching(&pool, "zzz").await.unwrap().is_empty());
+    assert!(search_subjects_matching(&pool, "zzz")
+        .await
+        .unwrap()
+        .is_empty());
 
     let _ = jose;
     std::fs::remove_dir_all(&dir).ok();
@@ -842,8 +1046,18 @@ async fn test_tag_crud() {
     std::fs::create_dir_all(&dir).unwrap();
     let pool = init_db(&dir).await.unwrap();
 
-    let s1: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
-    let s2: i64 = sqlx::query_scalar("INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id").fetch_one(&pool).await.unwrap();
+    let s1: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let s2: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     let t1 = add_subject_tag(&pool, s1, "Cabaña-21").await.unwrap();
     let t2 = add_subject_tag(&pool, s2, "cabana-21").await.unwrap();
@@ -865,9 +1079,22 @@ async fn test_tag_crud() {
     rename_tag(&pool, other.id, "cabin-4").await.unwrap();
 
     remove_subject_tag(&pool, s2, t1.id).await.unwrap();
-    assert_eq!(list_tags_with_counts(&pool).await.unwrap().iter().find(|t| t.id == t1.id).unwrap().subject_count, 1);
+    assert_eq!(
+        list_tags_with_counts(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .find(|t| t.id == t1.id)
+            .unwrap()
+            .subject_count,
+        1
+    );
     delete_tag(&pool, t1.id).await.unwrap();
-    assert!(get_subject_tags(&pool, s1).await.unwrap().iter().all(|t| t.id != t1.id));
+    assert!(get_subject_tags(&pool, s1)
+        .await
+        .unwrap()
+        .iter()
+        .all(|t| t.id != t1.id));
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -879,32 +1106,99 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
 
     // img_a: most recent by date_taken; img_b: no date_taken, ordered by mtime;
     // img_c: soft-deleted and must be excluded.
-    let img_a = insert_image(&pool, folder_id, "/tmp/sf/a.jpg", "ha", 1, 100).await.unwrap();
-    let img_b = insert_image(&pool, folder_id, "/tmp/sf/b.jpg", "hb", 1, 200).await.unwrap();
-    let img_c = insert_image(&pool, folder_id, "/tmp/sf/c.jpg", "hc", 1, 999).await.unwrap();
+    let img_a = insert_image(&pool, folder_id, "/tmp/sf/a.jpg", "ha", 1, 100)
+        .await
+        .unwrap();
+    let img_b = insert_image(&pool, folder_id, "/tmp/sf/b.jpg", "hb", 1, 200)
+        .await
+        .unwrap();
+    let img_c = insert_image(&pool, folder_id, "/tmp/sf/c.jpg", "hc", 1, 999)
+        .await
+        .unwrap();
     sqlx::query("UPDATE images SET date_taken = 300, thumbnail_path = '/t/a.jpg', preview_path = '/p/a.jpg' WHERE id = ?")
         .bind(img_a).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?").bind(img_c).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?")
+        .bind(img_c)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let subject = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let other = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id"
-    ).fetch_one(&pool).await.unwrap();
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     // Two faces of the subject in img_a -> two grid cells for the same image.
-    insert_face(&pool, img_a, Some(subject), (0.1, 0.1, 0.2, 0.2), Some(0.9), Some(0.9)).await.unwrap();
-    insert_face(&pool, img_a, Some(subject), (0.5, 0.5, 0.3, 0.3), Some(0.9), Some(0.9)).await.unwrap();
-    insert_face(&pool, img_b, Some(subject), (0.4, 0.6, 0.1, 0.1), Some(0.9), Some(0.9)).await.unwrap();
+    insert_face(
+        &pool,
+        img_a,
+        Some(subject),
+        (0.1, 0.1, 0.2, 0.2),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    insert_face(
+        &pool,
+        img_a,
+        Some(subject),
+        (0.5, 0.5, 0.3, 0.3),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    insert_face(
+        &pool,
+        img_b,
+        Some(subject),
+        (0.4, 0.6, 0.1, 0.1),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
     // Excluded: face on a soft-deleted image, and a face belonging to another subject.
-    insert_face(&pool, img_c, Some(subject), (0.0, 0.0, 0.1, 0.1), Some(0.9), Some(0.9)).await.unwrap();
-    insert_face(&pool, img_b, Some(other), (0.0, 0.0, 0.1, 0.1), Some(0.9), Some(0.9)).await.unwrap();
+    insert_face(
+        &pool,
+        img_c,
+        Some(subject),
+        (0.0, 0.0, 0.1, 0.1),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    insert_face(
+        &pool,
+        img_b,
+        Some(other),
+        (0.0, 0.0, 0.1, 0.1),
+        Some(0.9),
+        Some(0.9),
+    )
+    .await
+    .unwrap();
 
-    let rows = list_faces_for_subject_with_images(&pool, subject).await.unwrap();
+    let rows = list_faces_for_subject_with_images(&pool, subject)
+        .await
+        .unwrap();
 
     // One row per face: 2 (img_a) + 1 (img_b); deleted image and other subject excluded.
-    assert_eq!(rows.len(), 3, "one row per face occurrence, filtering deleted/other-subject");
+    assert_eq!(
+        rows.len(),
+        3,
+        "one row per face occurrence, filtering deleted/other-subject"
+    );
     // Ordered by COALESCE(date_taken, mtime) DESC: img_a (date_taken 300) before img_b (mtime 200).
     assert_eq!(rows[0].image_id, img_a);
     assert_eq!(rows[1].image_id, img_a);
@@ -913,7 +1207,11 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
     assert_eq!(rows[0].preview_path.as_deref(), Some("/p/a.jpg"));
     assert_eq!(rows[0].date_taken, Some(300));
     // The two img_a faces carry their distinct bboxes.
-    let mut a_x: Vec<f64> = rows.iter().filter(|r| r.image_id == img_a).map(|r| r.face_bbox.x).collect();
+    let mut a_x: Vec<f64> = rows
+        .iter()
+        .filter(|r| r.image_id == img_a)
+        .map(|r| r.face_bbox.x)
+        .collect();
     a_x.sort_by(|p, q| p.partial_cmp(q).unwrap());
     assert!((a_x[0] - 0.1).abs() < 1e-9 && (a_x[1] - 0.5).abs() < 1e-9);
     // img_b face has no date_taken; ordering used mtime fallback.
