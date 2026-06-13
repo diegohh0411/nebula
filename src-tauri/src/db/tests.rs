@@ -980,3 +980,34 @@ async fn count_pending_inference_counts_distinct_images() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn unchanged_pending_file_is_not_treated_as_changed() {
+    // Mirrors the indexer modify-path decision: a freshly imported (PENDING,
+    // empty-hash) row whose (size, mtime) is unchanged must be left alone — not
+    // re-enqueued — even though its hash_status is not yet 'DONE'.
+    use crate::pipeline::queue::{enqueue_image, count_pending_inference};
+
+    let dir = std::env::temp_dir().join(format!("nebula_unchanged_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 1000, 50).await.unwrap();
+    enqueue_image(&pool, a).await.unwrap();
+
+    // Drain inference as if the pipeline already processed it.
+    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ?").bind(a).execute(&pool).await.unwrap();
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 0);
+
+    // Re-observe the file with identical (size, mtime). It is still PENDING
+    // (hash worker hasn't run). The authoritative check is (size, mtime) only:
+    let img = get_image_by_id(&pool, a).await.unwrap().unwrap();
+    let unchanged = img.mtime == 50 && img.file_size == 1000;
+    assert!(unchanged, "the (size, mtime) signal reports the file as unchanged");
+    assert_eq!(img.hash_status, "PENDING", "still PENDING — yet must NOT be re-enqueued");
+
+    // Nothing re-enqueued.
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 0);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
