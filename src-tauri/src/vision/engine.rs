@@ -1,14 +1,14 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use face_id::analyzer::FaceAnalyzer;
 use ndarray::Array2;
-use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
+use ort::session::Session;
 use ort::value::TensorRef;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::models::manager::ModelManager;
-use crate::models::registry::{ModelSpec, FaceIdPreset};
+use crate::models::registry::{FaceIdPreset, ModelSpec};
 use crate::pipeline::ComputePlacement;
 
 pub struct VisionEngine {
@@ -35,10 +35,13 @@ impl VisionEngine {
     pub async fn get_face_analyzer(
         &self,
         manager: &ModelManager,
-        preset: &FaceIdPreset
+        preset: &FaceIdPreset,
     ) -> Result<Arc<FaceAnalyzer>> {
         {
-            let guard = self.face_analyzer.lock().map_err(|e| anyhow!("face analyzer mutex poisoned: {e}"))?;
+            let guard = self
+                .face_analyzer
+                .lock()
+                .map_err(|e| anyhow!("face analyzer mutex poisoned: {e}"))?;
             if let Some((current_id, analyzer)) = guard.as_ref() {
                 if current_id == preset.id {
                     return Ok(Arc::clone(analyzer));
@@ -50,11 +53,12 @@ impl VisionEngine {
         let rec_path = manager.onnx_path(preset.embedder);
         let gender_age_path = manager.onnx_path(preset.gender_age);
 
-        let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> = if self.placement == ComputePlacement::Gpu {
-            vec![ort::ep::DirectML::default().build()]
-        } else {
-            vec![]
-        };
+        let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> =
+            if self.placement == ComputePlacement::Gpu {
+                vec![ort::ep::DirectML::default().build()]
+            } else {
+                vec![]
+            };
 
         let analyzer = FaceAnalyzer::builder(det_path, rec_path, gender_age_path)
             .detector_input_size(preset.detector_input_size)
@@ -64,7 +68,10 @@ impl VisionEngine {
 
         let analyzer = Arc::new(analyzer);
         {
-            let mut guard = self.face_analyzer.lock().map_err(|e| anyhow!("face analyzer mutex poisoned: {e}"))?;
+            let mut guard = self
+                .face_analyzer
+                .lock()
+                .map_err(|e| anyhow!("face analyzer mutex poisoned: {e}"))?;
             *guard = Some((preset.id.to_string(), Arc::clone(&analyzer)));
         }
         Ok(analyzer)
@@ -82,12 +89,19 @@ impl VisionEngine {
         analyzer: &face_id::analyzer::FaceAnalyzer,
         img: &image::DynamicImage,
     ) -> Result<Vec<(face_id::detector::BoundingBox, Vec<f32>)>> {
-        let faces = analyzer.analyze(img)
+        let faces = analyzer
+            .analyze(img)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        Ok(faces.into_iter().map(|f| (f.detection.bbox, f.embedding)).collect())
+        Ok(faces
+            .into_iter()
+            .map(|f| (f.detection.bbox, f.embedding))
+            .collect())
     }
 
-    fn load_session(path: &std::path::Path, placement: ComputePlacement) -> anyhow::Result<Session> {
+    fn load_session(
+        path: &std::path::Path,
+        placement: ComputePlacement,
+    ) -> anyhow::Result<Session> {
         let mut builder = Session::builder()
             .map_err(|e| anyhow!("failed to create session builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
@@ -122,14 +136,25 @@ impl VisionEngine {
             crate::vision::preprocess::fill_pixel_values(&mut pixel_values, b, img, size);
         }
 
-        let vision_file = spec.vision_file.as_ref()
+        let vision_file = spec
+            .vision_file
+            .as_ref()
             .ok_or_else(|| anyhow!("model '{}' has no vision tower configured", spec.id))?;
         let path = manager.model_file_path(spec, vision_file);
 
-        let mut lock = self.vision_session.lock().map_err(|e| anyhow!("mutex poisoned: {e}"))?;
-        let needs_load = match &*lock { Some((id, _)) => id != spec.id, None => true };
+        let mut lock = self
+            .vision_session
+            .lock()
+            .map_err(|e| anyhow!("mutex poisoned: {e}"))?;
+        let needs_load = match &*lock {
+            Some((id, _)) => id != spec.id,
+            None => true,
+        };
         if needs_load {
-            *lock = Some((spec.id.to_string(), Self::load_session(&path, self.placement)?));
+            *lock = Some((
+                spec.id.to_string(),
+                Self::load_session(&path, self.placement)?,
+            ));
         }
         let (_, session) = lock.as_mut().unwrap();
 
@@ -145,21 +170,37 @@ impl VisionEngine {
         let dim = data.len() / n;
         anyhow::ensure!(
             shape.first().copied() == Some(n as i64) && data.len() % n == 0,
-            "unexpected batch output shape {:?} for n={}", shape, n
+            "unexpected batch output shape {:?} for n={}",
+            shape,
+            n
         );
-        Ok((0..n).map(|i| data[i * dim..(i + 1) * dim].to_vec()).collect())
+        Ok((0..n)
+            .map(|i| data[i * dim..(i + 1) * dim].to_vec())
+            .collect())
     }
 
-    pub fn embed_image(&self, manager: &ModelManager, img: &image::DynamicImage, spec: &ModelSpec) -> Result<Vec<f32>> {
+    pub fn embed_image(
+        &self,
+        manager: &ModelManager,
+        img: &image::DynamicImage,
+        spec: &ModelSpec,
+    ) -> Result<Vec<f32>> {
         let mut out = self.embed_images_batch(manager, &[img], spec)?;
         out.pop().ok_or_else(|| anyhow!("empty batch result"))
     }
 
-    pub fn embed_text(&self, manager: &ModelManager, text: &str, spec: &ModelSpec) -> Result<Vec<f32>> {
+    pub fn embed_text(
+        &self,
+        manager: &ModelManager,
+        text: &str,
+        spec: &ModelSpec,
+    ) -> Result<Vec<f32>> {
         const MAX_SEQ_LEN: usize = 64;
 
         let encoding = {
-            let mut tok_lock = self.tokenizer.lock()
+            let mut tok_lock = self
+                .tokenizer
+                .lock()
                 .map_err(|e| anyhow!("mutex poisoned: {e}"))?;
 
             let needs_load = match &*tok_lock {
@@ -168,12 +209,12 @@ impl VisionEngine {
             };
 
             if needs_load {
-                let tok_path = manager.tokenizer_path(spec)
+                let tok_path = manager
+                    .tokenizer_path(spec)
                     .ok_or_else(|| anyhow!("Model has no tokenizer"))?;
                 *tok_lock = Some((
                     spec.id.to_string(),
-                    tokenizers::Tokenizer::from_file(tok_path)
-                        .map_err(|e| anyhow!("{e}"))?,
+                    tokenizers::Tokenizer::from_file(tok_path).map_err(|e| anyhow!("{e}"))?,
                 ));
             }
             // Clone the tokenizer out of the lock before encoding (encoding is CPU-bound)
@@ -182,21 +223,34 @@ impl VisionEngine {
             tokenizer.encode(text, true).map_err(|e| anyhow!("{e}"))?
         };
 
-        let input_ids: Vec<i64> = encoding.get_ids().iter()
+        let input_ids: Vec<i64> = encoding
+            .get_ids()
+            .iter()
             .take(MAX_SEQ_LEN)
             .map(|&id| id as i64)
             .collect();
         let seq_len = input_ids.len();
         let input_ids_arr = Array2::from_shape_vec((1, seq_len), input_ids)?;
 
-        let text_file = spec.text_file.as_ref()
+        let text_file = spec
+            .text_file
+            .as_ref()
             .ok_or_else(|| anyhow!("model '{}' has no text tower configured", spec.id))?;
         let path = manager.model_file_path(spec, text_file);
 
-        let mut lock = self.text_session.lock().map_err(|e| anyhow!("mutex poisoned: {e}"))?;
-        let needs_load = match &*lock { Some((id, _)) => id != spec.id, None => true };
+        let mut lock = self
+            .text_session
+            .lock()
+            .map_err(|e| anyhow!("mutex poisoned: {e}"))?;
+        let needs_load = match &*lock {
+            Some((id, _)) => id != spec.id,
+            None => true,
+        };
         if needs_load {
-            *lock = Some((spec.id.to_string(), Self::load_session(&path, self.placement)?));
+            *lock = Some((
+                spec.id.to_string(),
+                Self::load_session(&path, self.placement)?,
+            ));
         }
         let (_, session) = lock.as_mut().unwrap();
 
@@ -220,7 +274,10 @@ mod tests {
     fn embed_image_returns_expected_dim_when_model_present() {
         let data_dir = match std::env::var("NEBULA_TEST_DATA_DIR") {
             Ok(d) => std::path::PathBuf::from(d),
-            Err(_) => { eprintln!("skipping: NEBULA_TEST_DATA_DIR not set"); return; }
+            Err(_) => {
+                eprintln!("skipping: NEBULA_TEST_DATA_DIR not set");
+                return;
+            }
         };
         let manager = crate::models::ModelManager::new(data_dir.clone());
         let spec = &crate::models::registry::SIGLIP_BASE;
@@ -239,21 +296,40 @@ mod tests {
     fn batched_embeddings_match_single_when_model_present() {
         let data_dir = match std::env::var("NEBULA_TEST_DATA_DIR") {
             Ok(d) => std::path::PathBuf::from(d),
-            Err(_) => { eprintln!("skipping"); return; }
+            Err(_) => {
+                eprintln!("skipping");
+                return;
+            }
         };
         let manager = crate::models::ModelManager::new(data_dir.clone());
         let spec = &crate::models::registry::SIGLIP_BASE;
         let vf = spec.vision_file.as_ref().unwrap();
-        if !manager.model_file_path(spec, vf).exists() { eprintln!("skipping"); return; }
+        if !manager.model_file_path(spec, vf).exists() {
+            eprintln!("skipping");
+            return;
+        }
         let engine = VisionEngine::new(data_dir, crate::pipeline::ComputePlacement::Cpu);
 
-        let a = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([200,40,40])));
-        let b = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 64, image::Rgb([40,40,200])));
+        let a = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            64,
+            image::Rgb([200, 40, 40]),
+        ));
+        let b = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            64,
+            image::Rgb([40, 40, 200]),
+        ));
         let single_a = engine.embed_image(&manager, &a, spec).unwrap();
-        let batch = engine.embed_images_batch(&manager, &[&a, &b], spec).unwrap();
+        let batch = engine
+            .embed_images_batch(&manager, &[&a, &b], spec)
+            .unwrap();
         assert_eq!(batch.len(), 2);
         for (x, y) in single_a.iter().zip(batch[0].iter()) {
-            assert!((x - y).abs() < 1e-3, "batched vs single mismatch: {x} vs {y}");
+            assert!(
+                (x - y).abs() < 1e-3,
+                "batched vs single mismatch: {x} vs {y}"
+            );
         }
     }
 
@@ -261,24 +337,33 @@ mod tests {
     fn text_and_image_embeddings_are_cross_modal_compatible() {
         let data_dir = match std::env::var("NEBULA_TEST_DATA_DIR") {
             Ok(d) => std::path::PathBuf::from(d),
-            Err(_) => { eprintln!("skipping: NEBULA_TEST_DATA_DIR not set"); return; }
+            Err(_) => {
+                eprintln!("skipping: NEBULA_TEST_DATA_DIR not set");
+                return;
+            }
         };
         let manager = crate::models::ModelManager::new(data_dir.clone());
         let spec = &crate::models::registry::SIGLIP_BASE;
         let vf = spec.vision_file.as_ref().unwrap();
         let tf = spec.text_file.as_ref().unwrap();
-        if !manager.model_file_path(spec, vf).exists() || !manager.model_file_path(spec, tf).exists() {
+        if !manager.model_file_path(spec, vf).exists()
+            || !manager.model_file_path(spec, tf).exists()
+        {
             eprintln!("skipping: split towers not downloaded");
             return;
         }
         let engine = VisionEngine::new(data_dir, crate::pipeline::ComputePlacement::Cpu);
 
-        let red = image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_pixel(224, 224, image::Rgb([220, 30, 30]))
-        );
-        let blue = image::DynamicImage::ImageRgb8(
-            image::RgbImage::from_pixel(224, 224, image::Rgb([30, 30, 220]))
-        );
+        let red = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            224,
+            224,
+            image::Rgb([220, 30, 30]),
+        ));
+        let blue = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            224,
+            224,
+            image::Rgb([30, 30, 220]),
+        ));
         let img_red = engine.embed_image(&manager, &red, spec).unwrap();
         let img_blue = engine.embed_image(&manager, &blue, spec).unwrap();
         let txt_red = engine.embed_text(&manager, "a red square", spec).unwrap();
@@ -291,12 +376,14 @@ mod tests {
             dot / (na * nb + 1e-8)
         }
 
-        let sim_red_red   = cosine(&img_red,  &txt_red);
-        let sim_red_blue  = cosine(&img_red,  &txt_blue);
+        let sim_red_red = cosine(&img_red, &txt_red);
+        let sim_red_blue = cosine(&img_red, &txt_blue);
         let sim_blue_blue = cosine(&img_blue, &txt_blue);
 
-        assert!(sim_red_red > 0.0,
-            "red image vs 'red square' text: expected positive cosine, got {sim_red_red}");
+        assert!(
+            sim_red_red > 0.0,
+            "red image vs 'red square' text: expected positive cosine, got {sim_red_red}"
+        );
         assert!(sim_red_red > sim_red_blue,
             "red image should rank higher for 'red square' ({sim_red_red:.3}) than 'blue square' ({sim_red_blue:.3})");
         assert!(sim_blue_blue > sim_red_blue,
