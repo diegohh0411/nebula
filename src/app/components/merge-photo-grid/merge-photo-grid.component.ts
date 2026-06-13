@@ -6,6 +6,8 @@ import {
   ElementRef,
   AfterViewInit,
   OnDestroy,
+  OnChanges,
+  SimpleChanges,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { LucideAngularModule } from 'lucide-angular';
@@ -29,7 +31,7 @@ function focusPercent(bbox: { x: number; y: number; w: number; h: number }): { x
   templateUrl: './merge-photo-grid.component.html',
   styleUrl: './merge-photo-grid.component.css',
 })
-export class MergePhotoGridComponent implements AfterViewInit, OnDestroy {
+export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChanges {
   private photos = inject(PhotoService);
   private host = inject(ElementRef<HTMLElement>);
 
@@ -38,6 +40,14 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   @Input() images: SubjectPhotoFace[] = [];
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['images'] && !changes['images'].firstChange) {
+      this.visible.clear();
+      this.observer?.disconnect();
+      queueMicrotask(() => this.observeCells());
+    }
+  }
 
   ngAfterViewInit(): void {
     this.observer = new IntersectionObserver(
