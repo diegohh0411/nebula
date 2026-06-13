@@ -38,17 +38,6 @@ export class SearchBarComponent implements OnDestroy {
   private typeaheadTimer: ReturnType<typeof setTimeout> | null = null;
   private typeaheadSeq = 0;
 
-  protected readonly etaLabel = computed<string | null>(() => {
-    const { total_pending, images_per_sec } = this.photos.pipelineStats();
-    if (total_pending <= 0 || images_per_sec < 0.1) return null;
-    const seconds = Math.ceil(total_pending / images_per_sec);
-    if (seconds < 60) return `~${seconds}s left`;
-    const minutes = Math.ceil(seconds / 60);
-    if (minutes < 60) return `~${minutes} min left`;
-    const hours = Math.ceil(minutes / 60);
-    return `~${hours} h left`;
-  });
-
   constructor() {
     effect(() => {
       const stats = this.photos.pipelineStats();

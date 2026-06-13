@@ -71,9 +71,8 @@
           @if (formatEta(photos.etaSeconds())) {
             · {{ formatEta(photos.etaSeconds()) }}
           }
-        }
-        @if (etaLabel(); as eta) {
-          · {{ eta }}
+        } @else {
+          · Calculating ETA…
         }
       } @else {
         Library up to date

@@ -164,7 +164,7 @@ pub async fn get_subject_detail_with_counts(pool: &SqlitePool, id: i64) -> Resul
 
 pub async fn list_images_for_subject(pool: &SqlitePool, subject_id: i64) -> Result<Vec<Image>> {
     let rows = sqlx::query(
-        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.file_size, i.date_taken, i.mtime, i.thumbnail_path, i.preview_path,
+        r#"SELECT DISTINCT i.id, i.folder_id, i.path, i.file_hash, i.hash_status, i.file_size, i.date_taken, i.mtime, i.thumbnail_path, i.preview_path,
                            i.semantic_analysis_done, i.subject_analysis_done, i.added_at, i.updated_at, i.deleted_at
            FROM images i
            JOIN faces f ON f.image_id = i.id

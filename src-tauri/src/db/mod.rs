@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS images (
     folder_id              INTEGER NOT NULL REFERENCES folders(id),
     path                   TEXT UNIQUE NOT NULL,
     file_hash              TEXT NOT NULL,
+    hash_status            TEXT NOT NULL DEFAULT 'PENDING',
     file_size              INTEGER NOT NULL DEFAULT 0,
     date_taken             INTEGER,
     mtime                  INTEGER NOT NULL,
@@ -92,15 +93,15 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_y      REAL NOT NULL,
     bbox_w      REAL NOT NULL,
     bbox_h      REAL NOT NULL,
-    embedding   BLOB,
     added_at    INTEGER NOT NULL,
-    is_manual   INTEGER NOT NULL DEFAULT 0,
     det_score      REAL,
     quality_score  REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
 CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS face_vectors USING vec0(embedding float[512]);
 
 CREATE TABLE IF NOT EXISTS tags (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,16 +117,6 @@ CREATE TABLE IF NOT EXISTS subject_tags (
     PRIMARY KEY (subject_id, tag_id)
 );
 CREATE INDEX IF NOT EXISTS idx_subject_tags_tag ON subject_tags(tag_id);
-
-CREATE TABLE IF NOT EXISTS face_corrections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-    old_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-    new_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
-    created_at INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_corrections_face ON face_corrections(face_id);
 
 CREATE TABLE IF NOT EXISTS embedding_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,59 +140,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
     CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
     CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
 );
+
+CREATE TABLE IF NOT EXISTS dismissed_pairs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    dismissed_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b);
+
+CREATE TABLE IF NOT EXISTS constraints (
+    face_a      INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    face_b      INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL CHECK(kind IN ('must_link', 'cannot_link')),
+    source      TEXT NOT NULL CHECK(source IN ('merge', 'manual_assign', 'removal', 'dismiss')),
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (face_a, face_b, kind)
+);
+
+CREATE TABLE IF NOT EXISTS face_edges (
+    face_a  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    face_b  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+    weight  REAL NOT NULL,
+    PRIMARY KEY (face_a, face_b)
+);
 "#;
 
-const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
-    (1, "
-        DROP TABLE IF EXISTS merge_suggestions;
-        CREATE TABLE merge_suggestions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-            subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-            score REAL NOT NULL,
-            created_at INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_merge_pair ON merge_suggestions(
-            CASE WHEN subject_id_a < subject_id_b THEN subject_id_a ELSE subject_id_b END,
-            CASE WHEN subject_id_a < subject_id_b THEN subject_id_b ELSE subject_id_a END
-        );
-    "),
-    (2, "
-        CREATE TABLE IF NOT EXISTS dismissed_pairs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            subject_id_a INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-            subject_id_b INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-            dismissed_at INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_dismissed_pair ON dismissed_pairs(subject_id_a, subject_id_b);
-    "),
-    (3, "CREATE VIRTUAL TABLE IF NOT EXISTS face_vectors USING vec0(embedding float[512])"),
-    (4, "
-        CREATE TABLE IF NOT EXISTS constraints (
-            face_a      INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-            face_b      INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-            kind        TEXT NOT NULL CHECK(kind IN ('must_link', 'cannot_link')),
-            source      TEXT NOT NULL CHECK(source IN ('merge', 'manual_assign', 'removal', 'dismiss')),
-            created_at  INTEGER NOT NULL,
-            PRIMARY KEY (face_a, face_b, kind)
-        )
-    "),
-    (5, "
-        INSERT OR REPLACE INTO face_vectors(rowid, embedding)
-            SELECT id, embedding FROM faces WHERE embedding IS NOT NULL;
-        ALTER TABLE faces DROP COLUMN embedding;
-        ALTER TABLE faces DROP COLUMN is_manual;
-        DROP TABLE IF EXISTS face_corrections
-    "),
-    (6, "
-    CREATE TABLE IF NOT EXISTS face_edges (
-        face_a  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-        face_b  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-        weight  REAL NOT NULL,
-        PRIMARY KEY (face_a, face_b)
-    )
-"),
-];
+const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     ensure_sqlite_vec_registered();

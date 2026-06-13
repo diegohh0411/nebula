@@ -153,6 +153,7 @@ async fn make_images_pool() -> SqlitePool {
             folder_id              INTEGER NOT NULL REFERENCES folders(id),
             path                   TEXT UNIQUE NOT NULL,
             file_hash              TEXT NOT NULL,
+            hash_status            TEXT NOT NULL DEFAULT 'PENDING',
             file_size              INTEGER NOT NULL DEFAULT 0,
             date_taken             INTEGER,
             mtime                  INTEGER NOT NULL,
@@ -424,27 +425,6 @@ async fn merge_unnamed_into_unnamed_stays_unnamed() {
     assert_eq!(count, 1);
 }
 
-#[tokio::test]
-async fn migration_6_creates_face_edges_table() {
-    let pool = init_test_pool().await;
-    let tables: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-    assert!(
-        tables.contains(&"face_edges".to_string()),
-        "face_edges table must exist after migration 6"
-    );
-    let cols: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('face_edges')")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-    assert!(cols.contains(&"face_a".to_string()));
-    assert!(cols.contains(&"face_b".to_string()));
-    assert!(cols.contains(&"weight".to_string()));
-}
 
 #[tokio::test]
 async fn upsert_face_edge_normalizes_order_and_deduplicates() {
@@ -538,59 +518,6 @@ async fn faces_table_has_quality_columns() {
         .unwrap();
     assert!(cols.contains(&"det_score".to_string()), "faces must have det_score; got {cols:?}");
     assert!(cols.contains(&"quality_score".to_string()), "faces must have quality_score; got {cols:?}");
-}
-
-#[tokio::test]
-async fn migration_5_drops_embedding_and_is_manual_columns() {
-    let pool = init_test_pool().await;
-
-    let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-
-    assert!(
-        !cols.contains(&"embedding".to_string()),
-        "faces.embedding must be dropped by migration 5"
-    );
-    assert!(
-        !cols.contains(&"is_manual".to_string()),
-        "faces.is_manual must be dropped by migration 5"
-    );
-}
-
-#[tokio::test]
-async fn migration_5_face_corrections_table_dropped() {
-    let pool = init_test_pool().await;
-
-    let tables: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table'")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-
-    assert!(
-        !tables.contains(&"face_corrections".to_string()),
-        "face_corrections table must be dropped by migration 5"
-    );
-}
-
-#[tokio::test]
-async fn migration_5_preserves_existing_vectors_in_face_vectors() {
-    let pool = init_test_pool().await;
-
-    sqlx::query("INSERT INTO faces (image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 0,0,1,1,0)")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let face_id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()").fetch_one(&pool).await.unwrap();
-
-    let mut vec512 = vec![0.0f32; 512];
-    vec512[0] = 1.0;
-    crate::people::face_store::upsert_vector(&pool, face_id, &vec512).await.unwrap();
-
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors").fetch_one(&pool).await.unwrap();
-    assert_eq!(count, 1, "face_vectors should store the upserted vector");
 }
 
 #[tokio::test]

@@ -13,6 +13,7 @@ pub struct Image {
     pub folder_id: i64,
     pub path: String,
     pub file_hash: String,
+    pub hash_status: String,
     pub file_size: i64,
     pub date_taken: Option<i64>,
     pub mtime: i64,
