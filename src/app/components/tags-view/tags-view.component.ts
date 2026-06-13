@@ -5,12 +5,13 @@ import { TagWithCount, SubjectMatch } from '../../models/models';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
 import { HlmInput } from '@spartan-ng/helm/input';
+import { PageHeaderComponent } from '../page-header/page-header.component';
 
 @Component({
   selector: 'app-tags-view',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, EditableTextComponent, SubjectPersonCardComponent, HlmInput],
+  imports: [CommonModule, EditableTextComponent, SubjectPersonCardComponent, HlmInput, PageHeaderComponent],
   templateUrl: './tags-view.component.html',
   styleUrl: './tags-view.component.css',
 })
