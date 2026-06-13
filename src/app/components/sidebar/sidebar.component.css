@@ -54,7 +54,7 @@
          border-0 bg-transparent cursor-pointer;
 }
 
-.folder-item:hover .folder-remove {
+.app-sidebar-item:hover .folder-remove {
   @apply opacity-100;
 }
 
