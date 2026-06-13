@@ -3,7 +3,7 @@ import { By } from '@angular/platform-browser';
 import { MergeReviewComponent } from './merge-review.component';
 import { PhotoService } from '../../services/photo.service';
 import { TauriEventsService } from '../../services/tauri-events.service';
-import { MergeSuggestion, SearchResult, Subject } from '../../models/models';
+import { MergeSuggestion, SubjectPhotoFace, Subject } from '../../models/models';
 import { Subject as RxSubject } from 'rxjs';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -19,9 +19,14 @@ const makeSuggestion = (a: Subject, b: Subject): MergeSuggestion => ({
   id: 1, subject_a: a, subject_b: b, score: 0.92,
 });
 
-const makePhoto = (id: number): SearchResult => ({
-  image_id: id, path: `/img/${id}.jpg`, thumbnail_path: `/thumb/${id}.jpg`,
-  preview_path: null, score: 0,
+const makePhoto = (id: number, x = 0.5, y = 0.5, w = 0.3, h = 0.3): SubjectPhotoFace => ({
+  image_id: id,
+  path: `/img/${id}.jpg`,
+  thumbnail_path: `/thumb/${id}.jpg`,
+  preview_path: null,
+  date_taken: null,
+  mtime: 0,
+  face_bbox: { x, y, w, h },
 });
 
 describe('MergeReviewComponent', () => {
@@ -62,7 +67,7 @@ describe('MergeReviewComponent', () => {
     const suggestion = makeSuggestion(subA, subB);
 
     // Set spy BEFORE assigning suggestion so the setter's loadPhotos() call uses the mock
-    vi.spyOn(photoService, 'getSubjectPhotos')
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces')
       .mockImplementation(async (id: number) =>
         id === 1 ? [makePhoto(10)] : [makePhoto(20)]
       );
@@ -71,8 +76,8 @@ describe('MergeReviewComponent', () => {
     // Flush microtasks: loadPhotos() uses Promise.all with mocked async fns
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(photoService.getSubjectPhotos).toHaveBeenCalledWith(1);
-    expect(photoService.getSubjectPhotos).toHaveBeenCalledWith(2);
+    expect(photoService.getSubjectPhotosWithFaces).toHaveBeenCalledWith(1);
+    expect(photoService.getSubjectPhotosWithFaces).toHaveBeenCalledWith(2);
     expect(component.photosA().length).toBe(1);
     expect(component.photosB().length).toBe(1);
   });
@@ -94,7 +99,7 @@ describe('MergeReviewComponent', () => {
   it('confirm calls mergeSubjects with correct target/source then emits confirmed', async () => {
     const subA = makeSubject(1, 'Alice');
     const subB = makeSubject(2, null);
-    vi.spyOn(photoService, 'getSubjectPhotos').mockResolvedValue([]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
     vi.spyOn(photoService, 'mergeSubjects').mockResolvedValue(undefined);
     const confirmedSpy = vi.fn();
     component.confirmed.subscribe(confirmedSpy);
@@ -109,7 +114,7 @@ describe('MergeReviewComponent', () => {
   it('dismiss calls dismissMergeSuggestion then emits dismissed', async () => {
     const subA = makeSubject(1, 'Alice');
     const subB = makeSubject(2, 'Bob');
-    vi.spyOn(photoService, 'getSubjectPhotos').mockResolvedValue([]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
     vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
     const dismissedSpy = vi.fn();
     component.dismissed.subscribe(dismissedSpy);
@@ -124,7 +129,7 @@ describe('MergeReviewComponent', () => {
   it('with canDismiss=false, dismiss() emits dismissed without calling dismissMergeSuggestion', async () => {
     const subA = makeSubject(1, 'Alice');
     const subB = makeSubject(2, null);
-    vi.spyOn(photoService, 'getSubjectPhotos').mockResolvedValue([]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
     vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
     const dismissedSpy = vi.fn();
     component.dismissed.subscribe(dismissedSpy);
