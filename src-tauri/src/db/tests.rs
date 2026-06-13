@@ -958,3 +958,25 @@ async fn apply_hash_results_is_guarded_by_mtime() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn count_pending_inference_counts_distinct_images() {
+    use crate::pipeline::queue::{enqueue_image, count_pending_inference};
+
+    let dir = std::env::temp_dir().join(format!("nebula_inferdepth_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 1, 1).await.unwrap();
+    let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "", 1, 1).await.unwrap();
+
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 0);
+
+    // Each enqueue inserts BOTH a 'semantic' and 'subject' row for one image;
+    // the count is by DISTINCT image_id, so two images → 2 (not 4).
+    enqueue_image(&pool, a).await.unwrap();
+    enqueue_image(&pool, b).await.unwrap();
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 2);
+
+    std::fs::remove_dir_all(&dir).ok();
+}

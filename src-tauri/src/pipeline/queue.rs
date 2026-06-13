@@ -100,3 +100,12 @@ pub async fn get_processing_counts(pool: &SqlitePool) -> Result<ProcessingStatus
         done: row.get("done"),
     })
 }
+
+/// Number of distinct images still awaiting inference. Used by the hash worker
+/// as a backpressure signal: while this is deep, hashing yields to the pipeline.
+pub async fn count_pending_inference(pool: &SqlitePool) -> Result<i64> {
+    let row = sqlx::query("SELECT COUNT(DISTINCT image_id) AS n FROM embedding_queue")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.get::<i64, _>("n"))
+}
