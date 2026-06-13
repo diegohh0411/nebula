@@ -1,14 +1,15 @@
 <div class="merge-photo-grid">
   @for (img of images; track img.image_id + '-' + img.face_bbox.x + '-' + img.face_bbox.y) {
+    @let thumb = thumbUrl(img);
     <div
       class="merge-photo-cell group"
       [attr.data-id]="img.image_id"
       (click)="onClick(img)"
     >
-      @if (thumbUrl(img)) {
+      @if (thumb) {
         <img
           class="merge-photo-thumb"
-          [src]="thumbUrl(img)!"
+          [src]="thumb"
           [alt]="img.path"
           loading="lazy"
           decoding="async"

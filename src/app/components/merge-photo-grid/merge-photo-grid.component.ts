@@ -14,12 +14,20 @@ import { LucideAngularModule } from 'lucide-angular';
 import { SubjectPhotoFace } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 
+const PADDING = 0.2;
+
 function focusPercent(bbox: { x: number; y: number; w: number; h: number }): { x: string; y: string } {
-  const cx = bbox.x + bbox.w / 2;
-  const cy = bbox.y + bbox.h / 2;
+  const padW = bbox.w * PADDING;
+  const padH = bbox.h * PADDING;
+  const x0 = Math.max(0, bbox.x - padW);
+  const y0 = Math.max(0, bbox.y - padH);
+  const x1 = Math.min(1, bbox.x + bbox.w + padW);
+  const y1 = Math.min(1, bbox.y + bbox.h + padH);
+  const cx = Math.round(Math.max(0, Math.min(100, (x0 + x1) * 50)) * 10) / 10;
+  const cy = Math.round(Math.max(0, Math.min(100, (y0 + y1) * 50)) * 10) / 10;
   return {
-    x: `${Math.max(0, Math.min(100, cx * 100))}%`,
-    y: `${Math.max(0, Math.min(100, cy * 100))}%`,
+    x: `${cx}%`,
+    y: `${cy}%`,
   };
 }
 

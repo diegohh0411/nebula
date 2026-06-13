@@ -2,7 +2,6 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { MergePhotoGridComponent } from './merge-photo-grid.component';
 import { PhotoService } from '../../services/photo.service';
 import { SubjectPhotoFace } from '../../models/models';
-import { Subject as RxSubject } from 'rxjs';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue([]),
@@ -60,6 +59,21 @@ describe('MergePhotoGridComponent', () => {
 
   it('clamps object-position to 0..100', () => {
     const img = makePhoto(2, -0.1, 1.2, 0.5, 0.5);
-    expect(component.focus(img)).toEqual({ x: '15%', y: '100%' });
+    // x: bbox -0.1..0.4, padded 0..0.5, center 25%
+    // y: bbox 1.2..1.7, padH=0.1; y0=max(0,1.1)=1.1, y1=min(1,1.8)=1; both clamped to 1, center 100%
+    expect(component.focus(img)).toEqual({ x: '25%', y: '100%' });
+  });
+
+  it('adds 20% context padding around the face bbox', () => {
+    const img = makePhoto(3, 0.3, 0.3, 0.2, 0.2);
+    // padded box 0.26..0.54, center 0.40 -> 40%
+    expect(component.focus(img)).toEqual({ x: '40%', y: '40%' });
+  });
+
+  it('clamps padded bbox to image bounds', () => {
+    const img = makePhoto(4, 0.05, 0.95, 0.1, 0.05);
+    // padded x: max(0,0.03)=0.03 -> min(1,0.17)=0.17, center 10%
+    // padded y: max(0,0.94)=0.94 -> min(1,1.0)=1.0, center 97%
+    expect(component.focus(img)).toEqual({ x: '10%', y: '97%' });
   });
 });
