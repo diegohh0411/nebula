@@ -58,6 +58,11 @@ impl UnionFind {
         }
     }
 
+    #[allow(dead_code)]
+    fn connected(&mut self, a: i64, b: i64) -> bool {
+        self.find(a) == self.find(b)
+    }
+
     fn components(&mut self, nodes: &[i64]) -> HashMap<i64, Vec<i64>> {
         let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
         for &node in nodes {
