@@ -893,3 +893,68 @@ async fn test_tag_crud() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn pending_hash_batch_and_apply_results_round_trip() {
+    use crate::library::repo::{get_pending_hash_batch, apply_hash_results};
+
+    let dir = std::env::temp_dir().join(format!("nebula_hashbatch_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+
+    // Three PENDING images (insert_image leaves hash_status at its 'PENDING' default).
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 10, 100).await.unwrap();
+    let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "", 20, 200).await.unwrap();
+    let c = insert_image(&pool, fid, "/tmp/f/c.jpg", "", 30, 300).await.unwrap();
+
+    // Soft-delete c: it must NOT appear in the pending batch.
+    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?").bind(c).execute(&pool).await.unwrap();
+
+    let batch = get_pending_hash_batch(&pool, 10).await.unwrap();
+    let ids: Vec<i64> = batch.iter().map(|(id, _, _)| *id).collect();
+    assert!(ids.contains(&a) && ids.contains(&b), "live PENDING rows must be returned");
+    assert!(!ids.contains(&c), "soft-deleted rows must be excluded");
+    // mtime is carried so writes can be guarded against concurrent modification.
+    assert!(batch.iter().any(|(id, _, m)| *id == a && *m == 100));
+
+    // Apply: a succeeds with a hash, b fails (None).
+    apply_hash_results(&pool, &[(a, 100, Some("deadbeef".to_string())), (b, 200, None)])
+        .await
+        .unwrap();
+
+    let img_a = get_image_by_id(&pool, a).await.unwrap().unwrap();
+    let img_b = get_image_by_id(&pool, b).await.unwrap().unwrap();
+    assert_eq!(img_a.file_hash, "deadbeef");
+    assert_eq!(img_a.hash_status, "DONE");
+    assert_eq!(img_b.hash_status, "FAILED");
+
+    // a is no longer PENDING, so a re-read returns only nothing new.
+    let after = get_pending_hash_batch(&pool, 10).await.unwrap();
+    assert!(after.iter().all(|(id, _, _)| *id != a && *id != b));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn apply_hash_results_is_guarded_by_mtime() {
+    use crate::library::repo::apply_hash_results;
+
+    let dir = std::env::temp_dir().join(format!("nebula_hashguard_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 10, 100).await.unwrap();
+
+    // The file was re-touched while hashing was in flight: mtime is now 999.
+    sqlx::query("UPDATE images SET mtime = 999 WHERE id = ?").bind(a).execute(&pool).await.unwrap();
+
+    // Applying a result computed against the OLD mtime (100) must be a no-op.
+    apply_hash_results(&pool, &[(a, 100, Some("stale".to_string()))]).await.unwrap();
+
+    let img = get_image_by_id(&pool, a).await.unwrap().unwrap();
+    assert_ne!(img.file_hash, "stale", "stale-mtime write must not clobber a re-touched file");
+    assert_eq!(img.hash_status, "PENDING", "row stays PENDING so the worker re-hashes it");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

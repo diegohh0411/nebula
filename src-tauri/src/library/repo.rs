@@ -194,6 +194,58 @@ pub async fn get_all_images_for_rescan(pool: &SqlitePool) -> Result<Vec<DbImage>
         .collect())
 }
 
+/// A batch of images still awaiting a content hash. Returns `(id, path, mtime)`.
+/// Excludes soft-deleted rows; ordered by id so progress is FIFO and stable.
+pub async fn get_pending_hash_batch(pool: &SqlitePool, limit: i64) -> Result<Vec<(i64, String, i64)>> {
+    let rows = sqlx::query(
+        "SELECT id, path, mtime FROM images
+         WHERE hash_status = 'PENDING' AND deleted_at IS NULL
+         ORDER BY id ASC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>("id"), r.get::<String, _>("path"), r.get::<i64, _>("mtime")))
+        .collect())
+}
+
+/// Write a batch of hash results in a single transaction (one writer burst per
+/// batch instead of one UPDATE per file). Each entry is `(id, mtime, hash)`:
+/// `Some(hash)` → DONE, `None` → FAILED. Every UPDATE is guarded by `mtime` so a
+/// result computed against a now-stale file is dropped (the row stays PENDING and
+/// is re-hashed on the next pass).
+pub async fn apply_hash_results(
+    pool: &SqlitePool,
+    results: &[(i64, i64, Option<String>)],
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    for (id, mtime, hash) in results {
+        match hash {
+            Some(h) => {
+                sqlx::query(
+                    "UPDATE images SET file_hash = ?, hash_status = 'DONE' WHERE id = ? AND mtime = ?",
+                )
+                .bind(h)
+                .bind(id)
+                .bind(mtime)
+                .execute(&mut *tx)
+                .await?;
+            }
+            None => {
+                sqlx::query("UPDATE images SET hash_status = 'FAILED' WHERE id = ? AND mtime = ?")
+                    .bind(id)
+                    .bind(mtime)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn get_image_metadata_by_path(pool: &SqlitePool, path: &str) -> Result<Option<DbImage>> {
     let row = sqlx::query(
         "SELECT id, path, mtime, file_size, file_hash, hash_status, deleted_at FROM images WHERE path = ?",
