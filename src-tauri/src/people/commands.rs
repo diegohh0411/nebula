@@ -101,6 +101,16 @@ pub async fn get_subject_photos(subject_id: i64, state: tauri::State<'_, AppStat
 }
 
 #[tauri::command]
+pub async fn get_subject_photos_with_faces(
+    subject_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<crate::models::SubjectPhotoFace>, String> {
+    repo::list_faces_for_subject_with_images(&state.pool, subject_id)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
 pub async fn get_subject_detail(subject_id: i64, state: tauri::State<'_, AppState>) -> Result<crate::models::SubjectDetail, String> {
     let mut detail = repo::get_subject_detail_with_counts(&state.pool, subject_id).await.map_err(map_err)?
         .ok_or_else(|| "Subject not found".to_string())?;
