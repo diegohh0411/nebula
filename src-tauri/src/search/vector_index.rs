@@ -1,4 +1,4 @@
-use log::{debug, error, info, warn};
+use log::{error, info};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;

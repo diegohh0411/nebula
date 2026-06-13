@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{debug, error, info, warn};
+use log::warn;
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 
@@ -58,12 +58,6 @@ impl UnionFind {
         }
     }
 
-    fn connected(&mut self, a: i64, b: i64) -> bool {
-        self.add(a);
-        self.add(b);
-        self.find(a) == self.find(b)
-    }
-
     fn components(&mut self, nodes: &[i64]) -> HashMap<i64, Vec<i64>> {
         let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
         for &node in nodes {
@@ -90,7 +84,7 @@ fn compute_mutual_sim_edges(
               // Check mutuality: face_a must appear in face_b's knn
             let is_mutual = all_knn
                 .get(&face_b)
-                .map_or(false, |nb| nb.iter().any(|(id, _)| *id == face_a));
+                .is_some_and(|nb| nb.iter().any(|(id, _)| *id == face_a));
             if is_mutual {
                 edges.push((face_a, face_b, sim));
             }
@@ -158,10 +152,20 @@ async fn build_subject_aware_knn(
 
 #[derive(Debug)]
 enum LabelAction {
-    AssignAll { faces: Vec<i64>, subject_id: i64 },
-    NewSubject { faces: Vec<i64> },
-    Noise { faces: Vec<i64> },
-    SuggestMerge { subject_ids: Vec<i64> },
+    AssignAll {
+        faces: Vec<i64>,
+        subject_id: i64,
+    },
+    NewSubject {
+        faces: Vec<i64>,
+    },
+    Noise {
+        faces: Vec<i64>,
+    },
+    SuggestMerge {
+        #[allow(dead_code)]
+        subject_ids: Vec<i64>,
+    },
 }
 
 fn compute_label_actions(
@@ -422,10 +426,6 @@ pub struct ReclusterResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn emb(vals: &[f32]) -> Vec<f32> {
-        vals.to_vec()
-    }
 
     #[test]
     fn union_find_transitive_chain() {

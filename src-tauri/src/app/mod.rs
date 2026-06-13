@@ -1,7 +1,6 @@
 //! Tauri application wiring: Builder, setup, command registry.
 pub mod state;
 pub use state::AppState;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
 

@@ -6,6 +6,9 @@ pub mod throughput;
 
 pub use decoded_image::DecodedImage;
 
+/// Queue slot for a single pipeline operation: (queue_id, attempt_count).
+type WorkSlot = Option<(i64, i32)>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComputePlacement {
     /// SigLIP runs on CPU (default, always available).
@@ -205,17 +208,15 @@ pub async fn run_pipeline(
         );
 
         // Merge by image_id, tracking separate queue_ids for each operation
-        let mut image_work: std::collections::HashMap<
-            i64,
-            (Option<(i64, i32)>, Option<(i64, i32)>),
-        > = std::collections::HashMap::new();
+        let mut image_work: std::collections::HashMap<i64, (WorkSlot, WorkSlot)> =
+            std::collections::HashMap::new();
         for (qid, image_id, attempts) in sem_batch {
             image_work.entry(image_id).or_default().0 = Some((qid, attempts));
         }
         for (qid, image_id, attempts) in sub_batch {
             image_work.entry(image_id).or_default().1 = Some((qid, attempts));
         }
-        let batch: Vec<(i64, Option<(i64, i32)>, Option<(i64, i32)>)> = image_work
+        let batch: Vec<(i64, WorkSlot, WorkSlot)> = image_work
             .into_iter()
             .map(|(image_id, (sem, sub))| (image_id, sem, sub))
             .collect();

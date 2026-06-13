@@ -25,7 +25,7 @@ impl ThroughputWindow {
     pub fn record(&mut self, count: usize, now_secs: f32) {
         self.entries.push_back((now_secs, count));
         let cutoff = now_secs - self.window_secs;
-        while self.entries.front().map_or(false, |(t, _)| *t < cutoff) {
+        while self.entries.front().is_some_and(|(t, _)| *t < cutoff) {
             self.entries.pop_front();
         }
     }

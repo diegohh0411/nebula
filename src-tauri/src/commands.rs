@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 use crate::{
-    models::{SearchQuery, SearchResult, SubjectMatch},
+    models::{SearchQuery, SearchResult},
     search, AppState,
 };
 
@@ -37,7 +37,7 @@ pub async fn search(
 
             let mut pinned_ids: Vec<i64> = Vec::new();
             let mut pinned_set: HashSet<i64> = HashSet::new();
-            for id in tag_image_ids.into_iter().chain(name_image_ids.into_iter()) {
+            for id in tag_image_ids.into_iter().chain(name_image_ids) {
                 if pinned_set.insert(id) {
                     pinned_ids.push(id);
                 }

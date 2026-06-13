@@ -1,1 +1,1 @@
-pub use crate::models::{Face, MergeSuggestion, Subject, SubjectDetail};
+pub use crate::models::{Face, Subject};

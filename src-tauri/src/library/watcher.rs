@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{debug, error, info, warn};
+use log::error;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

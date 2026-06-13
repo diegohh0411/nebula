@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use image::DynamicImage;
-use log::{debug, error, info, warn};
+use log::error;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
