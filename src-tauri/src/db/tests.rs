@@ -837,6 +837,28 @@ async fn test_search_subjects_matching() {
 }
 
 #[tokio::test]
+async fn compute_blake3_is_deterministic_and_content_sensitive() {
+    use crate::library::hasher::compute_blake3;
+
+    let dir = std::env::temp_dir().join(format!("nebula_blake3_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.bin");
+    let b = dir.join("b.bin");
+    std::fs::write(&a, b"hello world").unwrap();
+    std::fs::write(&b, b"hello worlD").unwrap();
+
+    let h1 = compute_blake3(&a).await.unwrap();
+    let h2 = compute_blake3(&a).await.unwrap();
+    let h3 = compute_blake3(&b).await.unwrap();
+
+    assert_eq!(h1, h2, "same content must hash identically");
+    assert_ne!(h1, h3, "different content must hash differently");
+    assert_eq!(h1.len(), 64, "BLAKE3 hex digest is 64 chars");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn test_tag_crud() {
     let dir = std::env::temp_dir().join(format!("nebula_tagcrud_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
