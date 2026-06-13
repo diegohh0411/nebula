@@ -1,0 +1,24 @@
+<div class="merge-photo-grid">
+  @for (img of images; track img.image_id + '-' + img.face_bbox.x + '-' + img.face_bbox.y) {
+    <div
+      class="merge-photo-cell group"
+      [attr.data-id]="img.image_id"
+      (click)="onClick(img)"
+    >
+      @if (thumbUrl(img)) {
+        <img
+          class="merge-photo-thumb"
+          [src]="thumbUrl(img)!"
+          [alt]="img.path"
+          loading="lazy"
+          decoding="async"
+          [style.object-position]="focus(img).x + ' ' + focus(img).y"
+        />
+      } @else {
+        <div class="merge-photo-placeholder">
+          <lucide-icon name="image" size="24" class="merge-photo-placeholder-icon"></lucide-icon>
+        </div>
+      }
+    </div>
+  }
+</div>
