@@ -14,17 +14,6 @@
   @apply flex flex-col gap-10;
 }
 
-.settings-header {
-  @apply flex items-center gap-3 mb-8 pb-4 border-b border-border;
-}
-
-.settings-header h1 {
-  @apply text-xl font-semibold m-0;
-}
-
-.header-icon {
-  @apply text-muted-foreground;
-}
 
 .section-title {
   @apply flex items-center gap-2 mb-1;

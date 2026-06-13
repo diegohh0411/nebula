@@ -5,13 +5,14 @@ import { MergeSuggestion, Subject } from '../../models/models';
 import { RouterLink } from '@angular/router';
 import { MergeReviewComponent } from '../merge-review/merge-review.component';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+import { PageHeaderComponent } from '../page-header/page-header.component';
 
 const FACE_CROP_CACHE_CAP = 200;
 
 @Component({
   selector: 'app-people-view',
   standalone: true,
-  imports: [CommonModule, RouterLink, MergeReviewComponent, EditableTextComponent],
+  imports: [CommonModule, RouterLink, MergeReviewComponent, EditableTextComponent, PageHeaderComponent],
   templateUrl: './people-view.component.html',
   styleUrl: './people-view.component.css'
 })
