@@ -1,7 +1,6 @@
 use anyhow::Result;
 use log::{debug, error};
 use rayon::prelude::*;
-use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,18 +45,6 @@ fn stat_file(path: &Path) -> Option<(i64, i64)> {
         .map(|d| d.as_secs() as i64)?;
     let file_size = meta.len() as i64;
     Some((mtime, file_size))
-}
-
-async fn compute_sha256(path: &Path) -> Result<String> {
-    let path = path.to_path_buf();
-    let hash = tokio::task::spawn_blocking(move || -> Result<String> {
-        let mut file = std::fs::File::open(&path)?;
-        let mut hasher = Sha256::new();
-        std::io::copy(&mut file, &mut hasher)?;
-        Ok(format!("{:x}", hasher.finalize()))
-    })
-    .await??;
-    Ok(hash)
 }
 
 fn find_folder_id(folder_map: &[(PathBuf, i64)], path: &Path) -> Option<i64> {
@@ -180,8 +167,9 @@ impl Indexer {
             None => {
                 debug!("process_file: found new file: {}", path_str);
 
-                // TT-BUGFIX: Defer SHA256 computation to make discovery "blitz-fast"
-                // Insert with a placeholder hash to get it queued instantly.
+                // Change-detection authority is (file_size, mtime); the content
+                // hash is computed lazily off the critical path by the hash worker
+                // (TT-75). Insert with an empty hash + PENDING status, enqueue, emit.
                 let image_id = match repo::insert_image(
                     &self.pool, folder_id, &path_str, "", file_size, mtime,
                 )
@@ -206,38 +194,12 @@ impl Indexer {
                         path: path_str,
                     },
                 );
-
-                // Spawn a background task to compute and update the real hash
-                let pool = self.pool.clone();
-                let semaphore = self.hash_semaphore.clone();
-                let path_buf = path.to_path_buf();
-                tokio::spawn(async move {
-                    if let Ok(_permit) = semaphore.acquire().await {
-                        match compute_sha256(&path_buf).await {
-                            Ok(hash) => {
-                                let _ = sqlx::query("UPDATE images SET file_hash = ?, hash_status = 'DONE' WHERE id = ? AND mtime = ?")
-                                    .bind(&hash)
-                                    .bind(image_id)
-                                    .bind(mtime)
-                                    .execute(&pool)
-                                    .await;
-                            }
-                            Err(_) => {
-                                let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED' WHERE id = ? AND mtime = ?")
-                                    .bind(image_id)
-                                    .bind(mtime)
-                                    .execute(&pool)
-                                    .await;
-                            }
-                        }
-                    }
-                });
             }
             Some(existing) => {
-                if mtime == existing.mtime
-                    && file_size == existing.file_size
-                    && existing.hash_status == "DONE"
-                {
+                // (size, mtime) is the authoritative change signal. A PENDING file
+                // whose (size, mtime) is unchanged is NOT changed — the worker will
+                // still compute its hash; do not re-hash or re-enqueue here (TT-75).
+                if mtime == existing.mtime && file_size == existing.file_size {
                     if existing.deleted_at.is_some() {
                         let _ = repo::clear_image_deleted(&self.pool, existing.id).await;
                         let _ = self.app.emit(
@@ -265,14 +227,14 @@ impl Indexer {
                             return;
                         }
                     };
-
-                    let hash = match compute_sha256(&path_buf).await {
+                    let hash = match crate::library::hasher::compute_blake3(&path_buf).await {
                         Ok(h) => h,
                         Err(e) => {
                             error!("Failed to hash {}: {}", path_str, e);
-                            let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED' WHERE id = ? AND mtime = ?")
-                                .bind(existing.id)
+                            let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED', mtime = ?, file_size = ? WHERE id = ?")
                                 .bind(mtime)
+                                .bind(file_size)
+                                .bind(existing.id)
                                 .execute(&pool)
                                 .await;
                             return;

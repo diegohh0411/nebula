@@ -7,6 +7,7 @@ pub struct DbImage {
     pub mtime: i64,
     pub file_size: i64,
     pub file_hash: String,
+    #[allow(dead_code)]
     pub hash_status: String,
     pub deleted_at: Option<i64>,
 }

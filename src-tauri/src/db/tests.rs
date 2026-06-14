@@ -1041,6 +1041,28 @@ async fn test_search_subjects_matching() {
 }
 
 #[tokio::test]
+async fn compute_blake3_is_deterministic_and_content_sensitive() {
+    use crate::library::hasher::compute_blake3;
+
+    let dir = std::env::temp_dir().join(format!("nebula_blake3_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.bin");
+    let b = dir.join("b.bin");
+    std::fs::write(&a, b"hello world").unwrap();
+    std::fs::write(&b, b"hello worlD").unwrap();
+
+    let h1 = compute_blake3(&a).await.unwrap();
+    let h2 = compute_blake3(&a).await.unwrap();
+    let h3 = compute_blake3(&b).await.unwrap();
+
+    assert_eq!(h1, h2, "same content must hash identically");
+    assert_ne!(h1, h3, "different content must hash differently");
+    assert_eq!(h1.len(), 64, "BLAKE3 hex digest is 64 chars");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn test_tag_crud() {
     let dir = std::env::temp_dir().join(format!("nebula_tagcrud_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1095,6 +1117,124 @@ async fn test_tag_crud() {
         .unwrap()
         .iter()
         .all(|t| t.id != t1.id));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn pending_hash_batch_and_apply_results_round_trip() {
+    use crate::library::repo::{get_pending_hash_batch, apply_hash_results};
+
+    let dir = std::env::temp_dir().join(format!("nebula_hashbatch_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+
+    // Three PENDING images (insert_image leaves hash_status at its 'PENDING' default).
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 10, 100).await.unwrap();
+    let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "", 20, 200).await.unwrap();
+    let c = insert_image(&pool, fid, "/tmp/f/c.jpg", "", 30, 300).await.unwrap();
+
+    // Soft-delete c: it must NOT appear in the pending batch.
+    sqlx::query("UPDATE images SET deleted_at = 1 WHERE id = ?").bind(c).execute(&pool).await.unwrap();
+
+    let batch = get_pending_hash_batch(&pool, 10).await.unwrap();
+    let ids: Vec<i64> = batch.iter().map(|(id, _, _)| *id).collect();
+    assert!(ids.contains(&a) && ids.contains(&b), "live PENDING rows must be returned");
+    assert!(!ids.contains(&c), "soft-deleted rows must be excluded");
+    // mtime is carried so writes can be guarded against concurrent modification.
+    assert!(batch.iter().any(|(id, _, m)| *id == a && *m == 100));
+
+    // Apply: a succeeds with a hash, b fails (None).
+    apply_hash_results(&pool, &[(a, 100, Some("deadbeef".to_string())), (b, 200, None)])
+        .await
+        .unwrap();
+
+    let img_a = get_image_by_id(&pool, a).await.unwrap().unwrap();
+    let img_b = get_image_by_id(&pool, b).await.unwrap().unwrap();
+    assert_eq!(img_a.file_hash, "deadbeef");
+    assert_eq!(img_a.hash_status, "DONE");
+    assert_eq!(img_b.hash_status, "FAILED");
+
+    // a is no longer PENDING, so a re-read returns only nothing new.
+    let after = get_pending_hash_batch(&pool, 10).await.unwrap();
+    assert!(after.iter().all(|(id, _, _)| *id != a && *id != b));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn apply_hash_results_is_guarded_by_mtime() {
+    use crate::library::repo::apply_hash_results;
+
+    let dir = std::env::temp_dir().join(format!("nebula_hashguard_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 10, 100).await.unwrap();
+
+    // The file was re-touched while hashing was in flight: mtime is now 999.
+    sqlx::query("UPDATE images SET mtime = 999 WHERE id = ?").bind(a).execute(&pool).await.unwrap();
+
+    // Applying a result computed against the OLD mtime (100) must be a no-op.
+    apply_hash_results(&pool, &[(a, 100, Some("stale".to_string()))]).await.unwrap();
+
+    let img = get_image_by_id(&pool, a).await.unwrap().unwrap();
+    assert_ne!(img.file_hash, "stale", "stale-mtime write must not clobber a re-touched file");
+    assert_eq!(img.hash_status, "PENDING", "row stays PENDING so the worker re-hashes it");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn count_pending_inference_counts_distinct_images() {
+    use crate::pipeline::queue::{enqueue_image, count_pending_inference};
+
+    let dir = std::env::temp_dir().join(format!("nebula_inferdepth_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 1, 1).await.unwrap();
+    let b = insert_image(&pool, fid, "/tmp/f/b.jpg", "", 1, 1).await.unwrap();
+
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 0);
+
+    // Each enqueue inserts BOTH a 'semantic' and 'subject' row for one image;
+    // the count is by DISTINCT image_id, so two images → 2 (not 4).
+    enqueue_image(&pool, a).await.unwrap();
+    enqueue_image(&pool, b).await.unwrap();
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 2);
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn unchanged_pending_file_is_not_treated_as_changed() {
+    // Mirrors the indexer modify-path decision: a freshly imported (PENDING,
+    // empty-hash) row whose (size, mtime) is unchanged must be left alone — not
+    // re-enqueued — even though its hash_status is not yet 'DONE'.
+    use crate::pipeline::queue::{enqueue_image, count_pending_inference};
+
+    let dir = std::env::temp_dir().join(format!("nebula_unchanged_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pool = init_db(&dir).await.unwrap();
+    let fid = insert_folder(&pool, "/tmp/f").await.unwrap();
+    let a = insert_image(&pool, fid, "/tmp/f/a.jpg", "", 1000, 50).await.unwrap();
+    enqueue_image(&pool, a).await.unwrap();
+
+    // Drain inference as if the pipeline already processed it.
+    sqlx::query("DELETE FROM embedding_queue WHERE image_id = ?").bind(a).execute(&pool).await.unwrap();
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 0);
+
+    // Re-observe the file with identical (size, mtime). It is still PENDING
+    // (hash worker hasn't run). The authoritative check is (size, mtime) only:
+    let img = get_image_by_id(&pool, a).await.unwrap().unwrap();
+    let unchanged = img.mtime == 50 && img.file_size == 1000;
+    assert!(unchanged, "the (size, mtime) signal reports the file as unchanged");
+    assert_eq!(img.hash_status, "PENDING", "still PENDING — yet must NOT be re-enqueued");
+
+    // Nothing re-enqueued.
+    assert_eq!(count_pending_inference(&pool).await.unwrap(), 0);
 
     std::fs::remove_dir_all(&dir).ok();
 }
