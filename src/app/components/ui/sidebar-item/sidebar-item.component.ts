@@ -1,31 +1,35 @@
 import { Component, Input, HostBinding } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
-import { NgIf } from '@angular/common';
+import { NgTemplateOutlet } from '@angular/common';
 
 @Component({
   selector: 'app-sidebar-item',
   standalone: true,
-  imports: [RouterLink, RouterLinkActive, NgIf],
+  imports: [RouterLink, RouterLinkActive, NgTemplateOutlet],
+  // A single <ng-content> lives in #inner and is rendered into whichever host
+  // element is active. Two separate <ng-content> slots (one per branch) would
+  // leave the inactive branch's slot empty — Angular only projects into one —
+  // which previously blanked out the routerLink (anchor) items.
   template: `
-    <ng-container *ngIf="routerLink; else buttonTpl">
+    @if (routerLink) {
       <a
         [routerLink]="routerLink"
         routerLinkActive="folder-item--active"
         class="folder-item"
         [class.folder-item--active]="isActive"
       >
-        <ng-content></ng-content>
+        <ng-container [ngTemplateOutlet]="inner"></ng-container>
       </a>
-    </ng-container>
-    <ng-template #buttonTpl>
+    } @else {
       <button
         type="button"
         class="folder-item"
         [class.folder-item--active]="isActive"
       >
-        <ng-content></ng-content>
+        <ng-container [ngTemplateOutlet]="inner"></ng-container>
       </button>
-    </ng-template>
+    }
+    <ng-template #inner><ng-content></ng-content></ng-template>
   `,
   styleUrl: './sidebar-item.component.css'
 })
