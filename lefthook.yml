@@ -2,6 +2,9 @@
 post-checkout:
   commands:
     sync-claude-dir:
+      # Lower priority runs first: link-agy's skills symlink targets the
+      # .claude/ copy this command places in the worktree.
+      priority: 1
       run: |
         WORKTREE_ROOT=$(git rev-parse --show-toplevel)
         MAIN_REPO_ROOT=$(git rev-parse --git-common-dir | sed 's/\/.git$//')
@@ -15,6 +18,8 @@ post-checkout:
       # newly-created worktrees via symlinks: AGENTS.md -> CLAUDE.md and
       # .agents/skills -> .claude/skills. Unix-only (Windows lacks reliable
       # symlinks); runs only inside worktrees so the main repo stays clean.
+      # priority 2: runs after sync-claude-dir has populated .claude/.
+      priority: 2
       run: |
         case "$(uname -s)" in
           Linux|Darwin|*BSD*) ;;
