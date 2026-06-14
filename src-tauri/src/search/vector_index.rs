@@ -1,7 +1,7 @@
+use log::{error, info};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
-use log::{info, warn, error, debug};
 
 const MAGIC: &[u8; 8] = b"NEBULAVX";
 const VERSION: u8 = 1;
@@ -34,7 +34,11 @@ pub struct FlatIndex {
 impl FlatIndex {
     pub fn new(dim: usize) -> Self {
         assert!(dim > 0, "FlatIndex dim must be positive");
-        Self { dim, ids: Vec::new(), vecs: Vec::new() }
+        Self {
+            dim,
+            ids: Vec::new(),
+            vecs: Vec::new(),
+        }
     }
 
     pub fn tombstone_count(&self) -> usize {
@@ -47,7 +51,9 @@ impl FlatIndex {
             if id != -1 {
                 let start = i * self.dim;
                 new_idx.ids.push(id);
-                new_idx.vecs.extend_from_slice(&self.vecs[start..start + self.dim]);
+                new_idx
+                    .vecs
+                    .extend_from_slice(&self.vecs[start..start + self.dim]);
             }
         }
         new_idx
@@ -79,7 +85,11 @@ impl FlatIndex {
 
         let mut version = [0u8; 1];
         f.read_exact(&mut version)?;
-        anyhow::ensure!(version[0] == VERSION, "unsupported .idx version {}", version[0]);
+        anyhow::ensure!(
+            version[0] == VERSION,
+            "unsupported .idx version {}",
+            version[0]
+        );
 
         let mut dim_bytes = [0u8; 4];
         f.read_exact(&mut dim_bytes)?;
@@ -113,10 +123,7 @@ impl FlatIndex {
         Ok(Self { dim, ids, vecs })
     }
 
-    pub async fn load_or_rebuild(
-        data_dir: &Path,
-        pool: &sqlx::SqlitePool,
-    ) -> anyhow::Result<Self> {
+    pub async fn load_or_rebuild(data_dir: &Path, pool: &sqlx::SqlitePool) -> anyhow::Result<Self> {
         let idx_path = data_dir.join("nebula.idx");
 
         if idx_path.exists() {
@@ -143,10 +150,7 @@ impl FlatIndex {
         info!("[vector-index] Rebuilding index from SQLite…");
         let all = crate::search::repo::get_all_embeddings(pool).await?;
 
-        let dim = all
-            .first()
-            .map(|(_, blob)| blob.len() / 4)
-            .unwrap_or(768);
+        let dim = all.first().map(|(_, blob)| blob.len() / 4).unwrap_or(768);
 
         let mut index = Self::new(dim);
         for (id, blob) in all {
@@ -245,9 +249,7 @@ impl VectorIndex for FlatIndex {
                 (id, dot)
             })
             .collect();
-        scored.sort_unstable_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
         scored
     }
@@ -283,9 +285,17 @@ mod tests {
         let results = idx.search(&[1.0, 0.0, 0.0], 2);
         assert_eq!(results.len(), 2, "expected 2 results");
         assert_eq!(results[0].0, 1);
-        assert!(results[0].1 > 0.99, "expected cosine ~1.0, got {}", results[0].1);
+        assert!(
+            results[0].1 > 0.99,
+            "expected cosine ~1.0, got {}",
+            results[0].1
+        );
         assert_eq!(results[1].0, 2);
-        assert!((results[1].1).abs() < 0.01, "expected cosine ~0.0, got {}", results[1].1);
+        assert!(
+            (results[1].1).abs() < 0.01,
+            "expected cosine ~0.0, got {}",
+            results[1].1
+        );
     }
 
     #[test]

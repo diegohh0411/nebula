@@ -13,8 +13,8 @@ import {
 import { CommonModule } from '@angular/common';
 import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { PhotoService } from '../../services/photo.service';
-import { MergeSuggestion, SearchResult, Subject } from '../../models/models';
-import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
+import { MergeSuggestion, SubjectPhotoFace, Subject } from '../../models/models';
+import { MergePhotoGridComponent } from '../merge-photo-grid/merge-photo-grid.component';
 
 interface MergeTarget {
   target: Subject;
@@ -25,7 +25,7 @@ interface MergeTarget {
   selector: 'app-merge-review',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, PhotoGridComponent, CdkTrapFocus],
+  imports: [CommonModule, MergePhotoGridComponent, CdkTrapFocus],
   templateUrl: './merge-review.component.html',
   styleUrl: './merge-review.component.css',
 })
@@ -51,8 +51,8 @@ export class MergeReviewComponent {
 
   private photoService = inject(PhotoService);
 
-  photosA = signal<SearchResult[]>([]);
-  photosB = signal<SearchResult[]>([]);
+  photosA = signal<SubjectPhotoFace[]>([]);
+  photosB = signal<SubjectPhotoFace[]>([]);
   protected loading = signal(false);
   protected submitting = signal(false);
 
@@ -80,8 +80,8 @@ export class MergeReviewComponent {
     this.loading.set(true);
     try {
       const [photosA, photosB] = await Promise.all([
-        this.photoService.getSubjectPhotos(value.subject_a.id),
-        this.photoService.getSubjectPhotos(value.subject_b.id),
+        this.photoService.getSubjectPhotosWithFaces(value.subject_a.id),
+        this.photoService.getSubjectPhotosWithFaces(value.subject_b.id),
       ]);
       if (gen !== this._loadGen) return; // stale, discard
       this.photosA.set(photosA);

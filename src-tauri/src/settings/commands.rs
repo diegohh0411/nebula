@@ -1,8 +1,8 @@
-use tauri::{command, State};
-use sqlx::Row;
-use serde::Serialize;
+use crate::models::registry::{FaceIdPreset, ModelSpec, ModelType};
 use crate::AppState;
-use crate::models::registry::{ModelSpec, FaceIdPreset, ModelType};
+use serde::Serialize;
+use sqlx::Row;
+use tauri::{command, State};
 
 #[derive(Serialize)]
 pub struct ModelInfo {
@@ -15,7 +15,9 @@ pub struct ModelInfo {
 
 fn spec_downloaded(state: &AppState, spec: &ModelSpec) -> bool {
     let dir = state.model_manager.model_dir(spec);
-    spec.all_files().iter().all(|f| dir.join(f.filename).exists())
+    spec.all_files()
+        .iter()
+        .all(|f| dir.join(f.filename).exists())
 }
 
 fn preset_downloaded(state: &AppState, preset: &FaceIdPreset) -> bool {
@@ -94,12 +96,20 @@ pub async fn update_setting(
     let pool = &state.pool;
 
     if key == "embedding_model" {
-        let current = crate::settings::repo::get_setting(pool, &key).await.unwrap_or(None);
+        let current = crate::settings::repo::get_setting(pool, &key)
+            .await
+            .unwrap_or(None);
         if current.as_ref() != Some(&value) {
             let spec = crate::models::registry::ModelSpec::find_by_id(&value)
                 .ok_or_else(|| format!("Unknown model: {}", value))?;
-            state.model_manager.ensure_ready(&app, spec).await.map_err(|e| e.to_string())?;
-            crate::search::repo::reset_all_embeddings(pool).await.map_err(|e| e.to_string())?;
+            state
+                .model_manager
+                .ensure_ready(&app, spec)
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::search::repo::reset_all_embeddings(pool)
+                .await
+                .map_err(|e| e.to_string())?;
             if let Ok(mut idx) = state.index.write() {
                 *idx = Box::new(crate::search::vector_index::FlatIndex::new(768));
             }
@@ -109,14 +119,30 @@ pub async fn update_setting(
     }
 
     if key == "subject_model" {
-        let current = crate::settings::repo::get_setting(pool, &key).await.unwrap_or(None);
+        let current = crate::settings::repo::get_setting(pool, &key)
+            .await
+            .unwrap_or(None);
         if current.as_ref() != Some(&value) {
             let preset = crate::models::registry::FaceIdPreset::find_by_id(&value)
                 .ok_or_else(|| format!("Unknown preset: {}", value))?;
-            state.model_manager.ensure_ready(&app, preset.detector).await.map_err(|e| e.to_string())?;
-            state.model_manager.ensure_ready(&app, preset.embedder).await.map_err(|e| e.to_string())?;
-            state.model_manager.ensure_ready(&app, preset.gender_age).await.map_err(|e| e.to_string())?;
-            crate::people::repo::reset_all_subject_data(pool).await.map_err(|e| e.to_string())?;
+            state
+                .model_manager
+                .ensure_ready(&app, preset.detector)
+                .await
+                .map_err(|e| e.to_string())?;
+            state
+                .model_manager
+                .ensure_ready(&app, preset.embedder)
+                .await
+                .map_err(|e| e.to_string())?;
+            state
+                .model_manager
+                .ensure_ready(&app, preset.gender_age)
+                .await
+                .map_err(|e| e.to_string())?;
+            crate::people::repo::reset_all_subject_data(pool)
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
 
@@ -136,7 +162,12 @@ mod tests {
     fn default_embedding_model_matches_first_text_image_model() {
         let first = crate::models::registry::ALL_MODELS
             .iter()
-            .find(|m| matches!(m.model_type, crate::models::registry::ModelType::TextImageEmbedding))
+            .find(|m| {
+                matches!(
+                    m.model_type,
+                    crate::models::registry::ModelType::TextImageEmbedding
+                )
+            })
             .map(|m| m.id);
         assert_eq!(first, Some("onnx-community/siglip2-base-patch32-256-ONNX"));
     }

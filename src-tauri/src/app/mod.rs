@@ -13,16 +13,20 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             crate::platform::logger::init(&data_dir);
-            log::info!("Nebula backend initializing. Data directory: {:?}", data_dir);
+            log::info!(
+                "Nebula backend initializing. Data directory: {:?}",
+                data_dir
+            );
             std::fs::create_dir_all(crate::media::thumbnail::thumbnail_cache_dir(&data_dir))?;
             std::fs::create_dir_all(crate::media::thumbnail::face_crop_cache_dir(&data_dir))?;
 
             let pool = tauri::async_runtime::block_on(crate::db::init_db(&data_dir))?;
 
             let flat_index = tauri::async_runtime::block_on(
-                crate::search::vector_index::FlatIndex::load_or_rebuild(&data_dir, &pool)
+                crate::search::vector_index::FlatIndex::load_or_rebuild(&data_dir, &pool),
             )?;
-            let index: crate::search::vector_index::IndexStore = Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
+            let index: crate::search::vector_index::IndexStore =
+                Arc::new(std::sync::RwLock::new(Box::new(flat_index)));
 
             let pipeline_config = crate::pipeline::PipelineConfig::default();
             let vision_engine = Arc::new(crate::vision::engine::VisionEngine::new(
@@ -37,9 +41,12 @@ pub fn run() {
                 data_dir.clone(),
             );
 
-            let indexer = tauri::async_runtime::block_on(
-                crate::library::indexer::Indexer::init(pool.clone(), data_dir.clone(), app.handle().clone(), preview_handle.clone())
-            )?;
+            let indexer = tauri::async_runtime::block_on(crate::library::indexer::Indexer::init(
+                pool.clone(),
+                data_dir.clone(),
+                app.handle().clone(),
+                preview_handle.clone(),
+            ))?;
 
             app.manage(AppState {
                 pool: pool.clone(),
@@ -81,10 +88,16 @@ pub fn run() {
                 }
 
                 crate::pipeline::run_pipeline(
-                    pool_pipe, app_pipe, ve_pipe, mm_pipe, index_pipe, data_dir_pipe,
+                    pool_pipe,
+                    app_pipe,
+                    ve_pipe,
+                    mm_pipe,
+                    index_pipe,
+                    data_dir_pipe,
                     pipeline_config,
                     spec,
-                ).await;
+                )
+                .await;
             });
 
             Ok(())
@@ -104,6 +117,7 @@ pub fn run() {
             crate::people::commands::get_face_crop,
             crate::people::commands::set_subject_thumbnail,
             crate::people::commands::get_subject_photos,
+            crate::people::commands::get_subject_photos_with_faces,
             crate::people::commands::get_subject_detail,
             crate::people::commands::get_merge_suggestions,
             crate::people::commands::merge_subjects,

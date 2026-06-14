@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{error, debug};
+use log::{debug, error};
 use rayon::prelude::*;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -9,9 +9,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::{
-    library::{repo, models::DbImage},
-    models::{DebouncedEvent, DebouncedEventKind, SyncProgressPayload, SyncCompletePayload},
     library::watcher::FolderWatcher,
+    library::{models::DbImage, repo},
+    models::{DebouncedEvent, DebouncedEventKind, SyncCompletePayload, SyncProgressPayload},
 };
 
 pub struct Indexer {
@@ -56,7 +56,9 @@ fn find_folder_id(folder_map: &[(PathBuf, i64)], path: &Path) -> Option<i64> {
 }
 
 fn walk_dir(dir: &Path, results: &mut Vec<(PathBuf, i64, i64, i64)>, folder_id: i64) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -70,7 +72,9 @@ fn walk_dir(dir: &Path, results: &mut Vec<(PathBuf, i64, i64, i64)>, folder_id: 
 }
 
 fn walk_dir_for_scan(dir: &Path, results: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -82,7 +86,12 @@ fn walk_dir_for_scan(dir: &Path, results: &mut Vec<PathBuf>) {
 }
 
 impl Indexer {
-    pub async fn init(pool: SqlitePool, data_dir: PathBuf, app: AppHandle, preview: crate::media::preview::PreviewHandle) -> Result<Arc<Self>> {
+    pub async fn init(
+        pool: SqlitePool,
+        data_dir: PathBuf,
+        app: AppHandle,
+        preview: crate::media::preview::PreviewHandle,
+    ) -> Result<Arc<Self>> {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let watcher = Arc::new(Mutex::new(FolderWatcher::new(event_tx)?));
 
@@ -94,13 +103,13 @@ impl Indexer {
                 let path = PathBuf::from(&folder.path);
                 if path.exists() {
                     if let Err(e) = w.watch(path.clone(), folder.id) {
-                    error!("Failed to watch folder {}: {}", folder.path, e);
-                }
+                        error!("Failed to watch folder {}: {}", folder.path, e);
+                    }
                 }
                 folder_map.push((path, folder.id));
             }
         }
-        folder_map.sort_by_key(|b| std::cmp::Reverse(b.0.as_os_str().len()));
+        folder_map.sort_by_key(|a| std::cmp::Reverse(a.0.as_os_str().len()));
 
         let indexer = Arc::new(Self {
             pool,
@@ -127,17 +136,12 @@ impl Indexer {
                 .into_iter()
                 .map(|f| (PathBuf::from(f.path), f.id))
                 .collect();
-            map.sort_by_key(|b| std::cmp::Reverse(b.0.as_os_str().len()));
+            map.sort_by_key(|a| std::cmp::Reverse(a.0.as_os_str().len()));
             *self.folder_map.write().await = map;
         }
     }
 
-    async fn process_file(
-        &self,
-        path: &Path,
-        folder_id: i64,
-        known: Option<DbImage>,
-    ) {
+    async fn process_file(&self, path: &Path, folder_id: i64, known: Option<DbImage>) {
         if !is_image(path) {
             return;
         }
@@ -167,12 +171,7 @@ impl Indexer {
                 // hash is computed lazily off the critical path by the hash worker
                 // (TT-75). Insert with an empty hash + PENDING status, enqueue, emit.
                 let image_id = match repo::insert_image(
-                    &self.pool,
-                    folder_id,
-                    &path_str,
-                    "",
-                    file_size,
-                    mtime,
+                    &self.pool, folder_id, &path_str, "", file_size, mtime,
                 )
                 .await
                 {
@@ -228,14 +227,14 @@ impl Indexer {
                             return;
                         }
                     };
-                    
                     let hash = match crate::library::hasher::compute_blake3(&path_buf).await {
                         Ok(h) => h,
                         Err(e) => {
                             error!("Failed to hash {}: {}", path_str, e);
-                            let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED' WHERE id = ? AND mtime = ?")
-                                .bind(existing.id)
+                            let _ = sqlx::query("UPDATE images SET hash_status = 'FAILED', mtime = ?, file_size = ? WHERE id = ?")
                                 .bind(mtime)
+                                .bind(file_size)
+                                .bind(existing.id)
                                 .execute(&pool)
                                 .await;
                             return;
@@ -243,7 +242,8 @@ impl Indexer {
                     };
 
                     if hash == existing.file_hash {
-                        let _ = repo::update_image_metadata(&pool, existing.id, file_size, mtime).await;
+                        let _ =
+                            repo::update_image_metadata(&pool, existing.id, file_size, mtime).await;
                         if existing.deleted_at.is_some() {
                             let _ = app.emit(
                                 "image_added",
@@ -262,7 +262,9 @@ impl Indexer {
                             mtime,
                         )
                         .await;
-                        if let Err(e) = crate::pipeline::queue::enqueue_image(&pool, existing.id).await {
+                        if let Err(e) =
+                            crate::pipeline::queue::enqueue_image(&pool, existing.id).await
+                        {
                             error!("Failed to enqueue image {}: {}", existing.id, e);
                         }
                         preview.enqueue_low(existing.id);
@@ -333,10 +335,9 @@ impl Indexer {
 
             done += 1;
             if done.is_multiple_of(100) || done == total {
-                let _ = self.app.emit(
-                    "sync_progress",
-                    SyncProgressPayload { done, total },
-                );
+                let _ = self
+                    .app
+                    .emit("sync_progress", SyncProgressPayload { done, total });
             }
         }
 

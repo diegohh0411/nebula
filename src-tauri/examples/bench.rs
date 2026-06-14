@@ -15,7 +15,10 @@ fn list_images(dir: &std::path::Path) -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
             let p = e.path();
-            let ext = p.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase());
+            let ext = p
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase());
             if matches!(ext.as_deref(), Some("jpg" | "jpeg" | "png")) {
                 out.push(p);
             }
@@ -35,17 +38,25 @@ impl Stage {
         self.total_ms += ms;
     }
     fn avg(&self) -> f64 {
-        if self.count == 0 { 0.0 } else { self.total_ms / self.count as f64 }
+        if self.count == 0 {
+            0.0
+        } else {
+            self.total_ms / self.count as f64
+        }
     }
 }
 
 fn main() {
-    let dir = std::env::var("NEBULA_BENCH_DIR")
-        .expect("set NEBULA_BENCH_DIR to a folder of images");
+    let dir =
+        std::env::var("NEBULA_BENCH_DIR").expect("set NEBULA_BENCH_DIR to a folder of images");
     let dir = PathBuf::from(dir);
     let images = list_images(&dir);
     assert!(!images.is_empty(), "no images found in {}", dir.display());
-    eprintln!("benchmarking {} images from {}", images.len(), dir.display());
+    eprintln!(
+        "benchmarking {} images from {}",
+        images.len(),
+        dir.display()
+    );
 
     // Embed stage is optional — enabled when NEBULA_DATA_DIR is set to the
     // directory that contains the `models/` subdirectory (the app's data dir).
@@ -73,7 +84,10 @@ fn main() {
             let t = Instant::now();
             match engine.embed_image(manager, &img, spec) {
                 Ok(_) => embed.add(t.elapsed().as_secs_f64() * 1000.0),
-                Err(e) => { eprintln!("embed failed (stopping embed stage): {e}"); break; }
+                Err(e) => {
+                    eprintln!("embed failed (stopping embed stage): {e}");
+                    break;
+                }
             }
         }
     }

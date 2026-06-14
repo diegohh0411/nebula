@@ -1,0 +1,13 @@
+:host {
+  @apply block w-full;
+}
+
+.folder-item {
+  @apply flex items-center w-full gap-2 px-4 py-2 text-sm rounded-md
+         text-foreground hover:bg-accent hover:text-accent-foreground
+         transition-colors cursor-pointer border-0 bg-transparent text-left;
+}
+
+.folder-item--active {
+  @apply bg-accent text-accent-foreground font-medium;
+}

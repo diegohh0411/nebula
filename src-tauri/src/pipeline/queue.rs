@@ -22,7 +22,11 @@ pub async fn enqueue_image(pool: &SqlitePool, image_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_queue_batch(pool: &SqlitePool, pipeline: &str, limit: i64) -> Result<Vec<(i64, i64, i32)>> {
+pub async fn get_queue_batch(
+    pool: &SqlitePool,
+    pipeline: &str,
+    limit: i64,
+) -> Result<Vec<(i64, i64, i32)>> {
     let now = chrono::Utc::now().timestamp();
     let rows = sqlx::query(
         "SELECT id, image_id, attempts FROM embedding_queue
@@ -35,11 +39,22 @@ pub async fn get_queue_batch(pool: &SqlitePool, pipeline: &str, limit: i64) -> R
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| (r.get::<i64, _>("id"), r.get::<i64, _>("image_id"), r.get::<i32, _>("attempts")))
+        .map(|r| {
+            (
+                r.get::<i64, _>("id"),
+                r.get::<i64, _>("image_id"),
+                r.get::<i32, _>("attempts"),
+            )
+        })
         .collect())
 }
 
-pub async fn mark_semantic_analysis_done(pool: &SqlitePool, queue_id: i64, image_id: i64, embedding: &[u8]) -> Result<()> {
+pub async fn mark_semantic_analysis_done(
+    pool: &SqlitePool,
+    queue_id: i64,
+    image_id: i64,
+    embedding: &[u8],
+) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
         "UPDATE images SET embedding = ?, semantic_analysis_done = 1, updated_at = ? WHERE id = ?",
@@ -56,7 +71,11 @@ pub async fn mark_semantic_analysis_done(pool: &SqlitePool, queue_id: i64, image
     Ok(())
 }
 
-pub async fn mark_subject_analysis_done(pool: &SqlitePool, queue_id: i64, image_id: i64) -> Result<()> {
+pub async fn mark_subject_analysis_done(
+    pool: &SqlitePool,
+    queue_id: i64,
+    image_id: i64,
+) -> Result<()> {
     let now = chrono::Utc::now().timestamp();
     sqlx::query("UPDATE images SET subject_analysis_done = 1, updated_at = ? WHERE id = ?")
         .bind(now)
@@ -70,7 +89,12 @@ pub async fn mark_subject_analysis_done(pool: &SqlitePool, queue_id: i64, image_
     Ok(())
 }
 
-pub async fn mark_failed(pool: &SqlitePool, queue_id: i64, attempts: i32, error: &str) -> Result<()> {
+pub async fn mark_failed(
+    pool: &SqlitePool,
+    queue_id: i64,
+    attempts: i32,
+    error: &str,
+) -> Result<()> {
     let new_attempts = attempts + 1;
     let backoff_exponent = std::cmp::min(new_attempts.max(0) as u32, 10);
     let backoff = std::cmp::min(2_i64.pow(backoff_exponent) * 30, 28800);

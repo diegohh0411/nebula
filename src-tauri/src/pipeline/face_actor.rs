@@ -13,7 +13,10 @@ pub struct FaceRequest {
     pub reply: oneshot::Sender<anyhow::Result<Vec<FaceResult>>>,
 }
 
-pub fn spawn_face_actor(analyzer: Arc<FaceAnalyzer>, channel_depth: usize) -> mpsc::Sender<FaceRequest> {
+pub fn spawn_face_actor(
+    analyzer: Arc<FaceAnalyzer>,
+    channel_depth: usize,
+) -> mpsc::Sender<FaceRequest> {
     let (tx, mut rx) = mpsc::channel::<FaceRequest>(channel_depth);
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
@@ -30,8 +33,10 @@ pub fn spawn_face_actor(analyzer: Arc<FaceAnalyzer>, channel_depth: usize) -> mp
                                 let (iw, ih) = (img.width() as f32, img.height() as f32);
                                 let x = (f.detection.bbox.x1 * iw).max(0.0) as u32;
                                 let y = (f.detection.bbox.y1 * ih).max(0.0) as u32;
-                                let w = ((f.detection.bbox.x2 - f.detection.bbox.x1) * iw).max(1.0) as u32;
-                                let h = ((f.detection.bbox.y2 - f.detection.bbox.y1) * ih).max(1.0) as u32;
+                                let w = ((f.detection.bbox.x2 - f.detection.bbox.x1) * iw).max(1.0)
+                                    as u32;
+                                let h = ((f.detection.bbox.y2 - f.detection.bbox.y1) * ih).max(1.0)
+                                    as u32;
                                 let region = img.crop_imm(x, y, w, h);
                                 let sharp = crate::people::face_quality::sharpness(&region);
                                 (f.detection, f.embedding, sharp)

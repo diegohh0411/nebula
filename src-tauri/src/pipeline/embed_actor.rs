@@ -1,5 +1,5 @@
+use crate::models::{registry::ModelSpec, ModelManager};
 use crate::pipeline::DecodedImage;
-use crate::models::{ModelManager, registry::ModelSpec};
 use crate::vision::engine::VisionEngine;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -19,7 +19,10 @@ pub fn spawn_embed_actor(
     let (tx, mut rx) = mpsc::channel::<EmbedRequest>(channel_depth);
     tokio::spawn(async move {
         loop {
-            let first = match rx.recv().await { Some(r) => r, None => break };
+            let first = match rx.recv().await {
+                Some(r) => r,
+                None => break,
+            };
             let mut batch = vec![first];
             while batch.len() < batch_size {
                 match rx.try_recv() {

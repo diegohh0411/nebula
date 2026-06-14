@@ -1,0 +1,33 @@
+.merge-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 25vw, 220px), 1fr));
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.merge-photo-cell {
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background: hsl(var(--muted));
+  cursor: pointer;
+  position: relative;
+}
+
+.merge-photo-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.merge-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.merge-photo-placeholder-icon {
+  color: hsl(var(--muted-foreground));
+}

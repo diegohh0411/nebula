@@ -7,12 +7,13 @@ import { Router, RouterLink } from '@angular/router';
 import { open } from '@tauri-apps/plugin-dialog';
 import { LucideAngularModule } from 'lucide-angular';
 import { PhotoService } from '../../services/photo.service';
+import { SidebarItemComponent } from '../ui/sidebar-item/sidebar-item.component';
 
 @Component({
   selector: 'app-sidebar',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, LucideAngularModule],
+  imports: [RouterLink, LucideAngularModule, SidebarItemComponent],
   templateUrl: './sidebar.component.html',
   styleUrl: './sidebar.component.css',
 })

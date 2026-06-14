@@ -13,6 +13,7 @@ import {
 } from '../../libs/ui/card/src';
 import { HlmButton } from '../../libs/ui/button/src';
 import { PageHeaderComponent } from '../page-header/page-header.component';
+import { PageContainerComponent } from '../../libs/ui/layout/page-container/page-container.component';
 import { TauriEventsService } from '../../services/tauri-events.service';
 import { ModelDownloadEvent } from '../../models/models';
 
@@ -38,6 +39,7 @@ interface ModelInfo {
     HlmCardFooter,
     HlmButton,
     PageHeaderComponent,
+    PageContainerComponent,
   ],
   templateUrl: './settings.component.html',
   styleUrl: './settings.component.css'

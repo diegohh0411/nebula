@@ -181,9 +181,15 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         .connect_with(opts)
         .await?;
 
-    sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await?;
-    sqlx::query("PRAGMA synchronous=NORMAL;").execute(&pool).await?;
-    sqlx::query("PRAGMA foreign_keys=ON;").execute(&pool).await?;
+    sqlx::query("PRAGMA journal_mode=WAL;")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA synchronous=NORMAL;")
+        .execute(&pool)
+        .await?;
+    sqlx::query("PRAGMA foreign_keys=ON;")
+        .execute(&pool)
+        .await?;
 
     for stmt in BASE_SCHEMA.split(';') {
         let s = stmt.trim();

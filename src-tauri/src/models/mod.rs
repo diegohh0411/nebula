@@ -1,6 +1,6 @@
-pub mod registry;
-pub mod manager;
 pub mod entities;
+pub mod manager;
+pub mod registry;
 
-pub use manager::ModelManager;
 pub use entities::*;
+pub use manager::ModelManager;

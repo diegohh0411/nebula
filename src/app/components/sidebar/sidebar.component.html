@@ -7,9 +7,8 @@
   <!-- Folder list -->
   <nav class="sidebar-nav">
     <!-- "All Photos" entry -->
-    <button
-      class="folder-item"
-      [class.folder-item--active]="photos.selectedFolderId() === null && isGalleryActive()"
+    <app-sidebar-item
+      [isActive]="photos.selectedFolderId() === null && isGalleryActive()"
       (click)="selectFolder(null)"
     >
       <span class="folder-icon">
@@ -19,29 +18,27 @@
       <span class="folder-count">
         {{ photos.totalPhotoCount() }}
       </span>
-    </button>
+    </app-sidebar-item>
 
-    <a
-      class="folder-item"
-      [class.folder-item--active]="isPeopleActive()"
+    <app-sidebar-item
+      [isActive]="isPeopleActive()"
       routerLink="/people"
     >
       <span class="folder-icon">
         <lucide-icon name="users" size="14"></lucide-icon>
       </span>
       <span class="folder-name">People</span>
-    </a>
+    </app-sidebar-item>
 
-    <a
-      class="folder-item"
-      [class.folder-item--active]="isTagsActive()"
+    <app-sidebar-item
+      [isActive]="isTagsActive()"
       routerLink="/tags"
     >
       <span class="folder-icon">
         <lucide-icon name="tag" size="14"></lucide-icon>
       </span>
       <span class="folder-name">Tags</span>
-    </a>
+    </app-sidebar-item>
 
     <div class="sidebar-divider"></div>
 
@@ -49,15 +46,9 @@
 
     <!-- Per-folder entries -->
     @for (folder of photos.folders(); track folder.id) {
-      <div
-        class="folder-item"
-        [class.folder-item--active]="photos.selectedFolderId() === folder.id"
+      <app-sidebar-item
+        [isActive]="photos.selectedFolderId() === folder.id"
         (click)="selectFolder(folder.id)"
-        (keydown.enter)="selectFolder(folder.id)"
-        (keydown.space)="selectFolder(folder.id)"
-        tabindex="0"
-        role="button"
-        [attr.aria-pressed]="photos.selectedFolderId() === folder.id"
         [title]="folder.path"
       >
         <span class="folder-icon">
@@ -72,7 +63,7 @@
         >
           <lucide-icon name="x" size="12"></lucide-icon>
         </button>
-      </div>
+      </app-sidebar-item>
     }
 
     @if (photos.folders().length === 0) {
@@ -87,15 +78,14 @@
       Add Folder
     </button>
 
-    <a
-      class="folder-item !rounded-md"
+    <app-sidebar-item
       routerLink="/settings"
-      [class.folder-item--active]="isSettingsActive()"
+      [isActive]="isSettingsActive()"
     >
       <span class="folder-icon">
         <lucide-icon name="settings" size="14"></lucide-icon>
       </span>
       <span class="folder-name">Settings</span>
-    </a>
+    </app-sidebar-item>
   </div>
 </aside>
