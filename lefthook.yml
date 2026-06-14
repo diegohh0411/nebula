@@ -10,3 +10,46 @@ post-checkout:
           mkdir -p "$WORKTREE_ROOT/.claude"
           cp -r "$MAIN_REPO_ROOT/.claude/." "$WORKTREE_ROOT/.claude/"
         fi
+    link-agy:
+      # Expose Claude's context/skills to Google's Antigravity CLI (`agy`) in
+      # newly-created worktrees via symlinks: AGENTS.md -> CLAUDE.md and
+      # .agents/skills -> .claude/skills. Unix-only (Windows lacks reliable
+      # symlinks); runs only inside worktrees so the main repo stays clean.
+      run: |
+        case "$(uname -s)" in
+          Linux|Darwin|*BSD*) ;;
+          *) exit 0 ;;
+        esac
+
+        WORKTREE_ROOT=$(git rev-parse --show-toplevel)
+        MAIN_REPO_ROOT=$(git rev-parse --git-common-dir | sed 's/\/.git$//')
+        [[ "$WORKTREE_ROOT" == "$MAIN_REPO_ROOT" ]] && exit 0
+
+        # link <absolute target path> <symlink contents> <human label>
+        link() {
+          target="$1"; want="$2"; label="$3"
+          if [[ -L "$target" ]]; then
+            [[ "$(readlink "$target")" == "$want" ]] && return 0
+            echo "link-agy: skipping $label — '$target' is a symlink to '$(readlink "$target")', not '$want'."
+            return 0
+          fi
+          if [[ -e "$target" ]]; then
+            echo "link-agy: skipping $label — '$target' already exists and is not a symlink."
+            return 0
+          fi
+          ln -s "$want" "$target"
+          echo "link-agy: linked $label ($target -> $want)"
+        }
+
+        # Context file: AGENTS.md -> CLAUDE.md (both at the worktree root)
+        if [[ -f "$WORKTREE_ROOT/CLAUDE.md" ]]; then
+          link "$WORKTREE_ROOT/AGENTS.md" "CLAUDE.md" "AGENTS.md"
+        fi
+
+        # Skills: .agents/skills -> .claude/skills (relative to .agents/)
+        if [[ -d "$WORKTREE_ROOT/.claude/skills" ]]; then
+          mkdir -p "$WORKTREE_ROOT/.agents"
+          link "$WORKTREE_ROOT/.agents/skills" "../.claude/skills" ".agents/skills"
+        else
+          echo "link-agy: skipping .agents/skills — '$WORKTREE_ROOT/.claude/skills' not found."
+        fi
