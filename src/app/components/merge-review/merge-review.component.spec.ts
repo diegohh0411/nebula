@@ -20,6 +20,7 @@ const makeSuggestion = (a: Subject, b: Subject): MergeSuggestion => ({
 });
 
 const makePhoto = (id: number, x = 0.5, y = 0.5, w = 0.3, h = 0.3): SubjectPhotoFace => ({
+  face_id: id,
   image_id: id,
   path: `/img/${id}.jpg`,
   thumbnail_path: `/thumb/${id}.jpg`,

@@ -136,6 +136,7 @@ export interface FaceBBox {
 }
 
 export interface SubjectPhotoFace {
+  face_id: number;
   image_id: number;
   path: string;
   thumbnail_path: string | null;

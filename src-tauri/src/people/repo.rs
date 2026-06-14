@@ -193,7 +193,7 @@ pub async fn list_faces_for_subject_with_images(
     subject_id: i64,
 ) -> Result<Vec<crate::models::SubjectPhotoFace>> {
     let rows = sqlx::query(
-        r#"SELECT i.id AS image_id, i.path, i.thumbnail_path, i.preview_path,
+        r#"SELECT f.id AS face_id, i.id AS image_id, i.path, i.thumbnail_path, i.preview_path,
                   i.date_taken, i.mtime,
                   f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h
            FROM faces f
@@ -208,6 +208,7 @@ pub async fn list_faces_for_subject_with_images(
     Ok(rows
         .into_iter()
         .map(|r| crate::models::SubjectPhotoFace {
+            face_id: r.get("face_id"),
             image_id: r.get("image_id"),
             path: r.get("path"),
             thumbnail_path: r.get("thumbnail_path"),

@@ -1137,7 +1137,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
     .unwrap();
 
     // Two faces of the subject in img_a -> two grid cells for the same image.
-    insert_face(
+    let face_a1 = insert_face(
         &pool,
         img_a,
         Some(subject),
@@ -1147,7 +1147,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
     )
     .await
     .unwrap();
-    insert_face(
+    let face_a2 = insert_face(
         &pool,
         img_a,
         Some(subject),
@@ -1157,7 +1157,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
     )
     .await
     .unwrap();
-    insert_face(
+    let face_b = insert_face(
         &pool,
         img_b,
         Some(subject),
@@ -1217,4 +1217,16 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
     // img_b face has no date_taken; ordering used mtime fallback.
     assert_eq!(rows[2].date_taken, None);
     assert!((rows[2].face_bbox.w - 0.1).abs() < 1e-9);
+
+    // Each row carries the distinct face id it was flattened from — the merge
+    // grid relies on this to fetch the real face crop via get_face_crop(face_id).
+    let face_id_for = |bx: f64| {
+        rows.iter()
+            .find(|r| (r.face_bbox.x - bx).abs() < 1e-9)
+            .map(|r| r.face_id)
+            .unwrap()
+    };
+    assert_eq!(face_id_for(0.1), face_a1);
+    assert_eq!(face_id_for(0.5), face_a2);
+    assert_eq!(rows[2].face_id, face_b);
 }

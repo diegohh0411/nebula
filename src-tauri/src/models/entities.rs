@@ -188,6 +188,7 @@ pub struct FaceBBox {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SubjectPhotoFace {
+    pub face_id: i64,
     pub image_id: i64,
     pub path: String,
     pub thumbnail_path: Option<String>,
