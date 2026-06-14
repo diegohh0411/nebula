@@ -41,6 +41,11 @@ pub async fn name_subject(
         .await
         .map_err(map_err)?;
 
+    // Recalculate merge suggestions immediately after renaming
+    crate::people::clustering::find_merge_suggestions(pool)
+        .await
+        .map_err(map_err)?;
+
     Ok(NameSubjectResult {
         duplicate_subject_id,
     })
@@ -180,9 +185,17 @@ pub async fn merge_subjects(
     source_id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    repo::merge_subjects(&state.pool, target_id, source_id)
+    let pool = &state.pool;
+    repo::merge_subjects(pool, target_id, source_id)
         .await
-        .map_err(map_err)
+        .map_err(map_err)?;
+
+    // Recalculate merge suggestions immediately after merging
+    crate::people::clustering::find_merge_suggestions(pool)
+        .await
+        .map_err(map_err)?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -209,7 +222,14 @@ pub async fn assign_face_to_subject(
     }
     repo::assign_face_to_subject(pool, face_id, subject_id)
         .await
-        .map_err(map_err)
+        .map_err(map_err)?;
+
+    // Recalculate merge suggestions immediately after face assignment changes
+    crate::people::clustering::find_merge_suggestions(pool)
+        .await
+        .map_err(map_err)?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -218,9 +238,17 @@ pub async fn create_subject_for_face(
     name: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::models::Subject, String> {
-    repo::create_subject_for_face(&state.pool, face_id, name.as_deref())
+    let pool = &state.pool;
+    let subject = repo::create_subject_for_face(pool, face_id, name.as_deref())
         .await
-        .map_err(map_err)
+        .map_err(map_err)?;
+
+    // Recalculate merge suggestions immediately after creating a new subject from a face
+    crate::people::clustering::find_merge_suggestions(pool)
+        .await
+        .map_err(map_err)?;
+
+    Ok(subject)
 }
 
 #[tauri::command]
@@ -240,6 +268,12 @@ pub async fn unassign_face(face_id: i64, state: tauri::State<'_, AppState>) -> R
     repo::unassign_face(pool, face_id).await.map_err(map_err)?;
     let _ = repo::auto_assign_missing_thumbnails(pool).await;
     let _ = repo::delete_subjects_with_no_faces(pool).await;
+
+    // Recalculate merge suggestions immediately after unassigning a face
+    crate::people::clustering::find_merge_suggestions(pool)
+        .await
+        .map_err(map_err)?;
+
     Ok(())
 }
 
