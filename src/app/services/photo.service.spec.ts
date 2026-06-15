@@ -113,11 +113,9 @@ describe('PhotoService — subjectMatches signal', () => {
     });
 
     await service.searchByText('cabana');
-    // flush microtasks for the fire-and-forget subjectMatches promise chain
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(service.subjectMatches()).toEqual([fakeMatch]);
+    // subjectMatches is populated by a fire-and-forget promise chain inside
+    // searchByText, so poll until it settles instead of guessing microtask ticks.
+    await vi.waitFor(() => expect(service.subjectMatches()).toEqual([fakeMatch]));
   });
 
   it('clearSearch empties subjectMatches', async () => {
@@ -127,10 +125,8 @@ describe('PhotoService — subjectMatches signal', () => {
       return Promise.resolve([]);
     });
     await service.searchByText('jose');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(service.subjectMatches().length).toBe(1);
+    // Wait for the fire-and-forget subjectMatches chain to settle before clearing.
+    await vi.waitFor(() => expect(service.subjectMatches().length).toBe(1));
 
     service.clearSearch();
     expect(service.subjectMatches()).toEqual([]);
