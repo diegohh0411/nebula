@@ -4,6 +4,20 @@ import { PhotoService } from './photo.service';
 import { TauriEventsService } from './tauri-events.service';
 import { ImageUpdatedEvent, PipelineStats } from '../models/models';
 
+/**
+ * Yield to the microtask queue repeatedly until `predicate` holds (or `max`
+ * ticks elapse). subjectMatches is populated by a fire-and-forget promise chain
+ * inside searchByText, which needs an unpredictable number of microtask turns to
+ * settle (search → search_subjects → signal set). Draining microtasks until the
+ * value lands is deterministic and avoids the wall-clock races that made these
+ * tests flaky in CI.
+ */
+async function flushUntil(predicate: () => boolean, max = 50): Promise<void> {
+  for (let i = 0; i < max && !predicate(); i++) {
+    await Promise.resolve();
+  }
+}
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue([]),
   convertFileSrc: vi.fn((path: string) => path),
@@ -113,9 +127,8 @@ describe('PhotoService — subjectMatches signal', () => {
     });
 
     await service.searchByText('cabana');
-    // subjectMatches is populated by a fire-and-forget promise chain inside
-    // searchByText, so poll until it settles instead of guessing microtask ticks.
-    await vi.waitFor(() => expect(service.subjectMatches()).toEqual([fakeMatch]));
+    await flushUntil(() => service.subjectMatches().length > 0);
+    expect(service.subjectMatches()).toEqual([fakeMatch]);
   });
 
   it('clearSearch empties subjectMatches', async () => {
@@ -125,8 +138,8 @@ describe('PhotoService — subjectMatches signal', () => {
       return Promise.resolve([]);
     });
     await service.searchByText('jose');
-    // Wait for the fire-and-forget subjectMatches chain to settle before clearing.
-    await vi.waitFor(() => expect(service.subjectMatches().length).toBe(1));
+    await flushUntil(() => service.subjectMatches().length > 0);
+    expect(service.subjectMatches().length).toBe(1);
 
     service.clearSearch();
     expect(service.subjectMatches()).toEqual([]);
