@@ -196,7 +196,10 @@ pub async fn get_all_images_for_rescan(pool: &SqlitePool) -> Result<Vec<DbImage>
 
 /// A batch of images still awaiting a content hash. Returns `(id, path, mtime)`.
 /// Excludes soft-deleted rows; ordered by id so progress is FIFO and stable.
-pub async fn get_pending_hash_batch(pool: &SqlitePool, limit: i64) -> Result<Vec<(i64, String, i64)>> {
+pub async fn get_pending_hash_batch(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<(i64, String, i64)>> {
     let rows = sqlx::query(
         "SELECT id, path, mtime FROM images
          WHERE hash_status = 'PENDING' AND deleted_at IS NULL
@@ -207,7 +210,13 @@ pub async fn get_pending_hash_batch(pool: &SqlitePool, limit: i64) -> Result<Vec
     .await?;
     Ok(rows
         .into_iter()
-        .map(|r| (r.get::<i64, _>("id"), r.get::<String, _>("path"), r.get::<i64, _>("mtime")))
+        .map(|r| {
+            (
+                r.get::<i64, _>("id"),
+                r.get::<String, _>("path"),
+                r.get::<i64, _>("mtime"),
+            )
+        })
         .collect())
 }
 
