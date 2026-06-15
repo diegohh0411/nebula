@@ -37,12 +37,7 @@ const IDLE_SLEEP: Duration = Duration::from_secs(2);
 /// Brief yield after each write burst so the worker never monopolizes the DB writer.
 const POST_BATCH_YIELD: Duration = Duration::from_millis(50);
 
-/// Spawn the single background hash worker. Call once at startup.
-pub fn spawn_hash_worker(pool: SqlitePool) {
-    tokio::spawn(async move { run_hash_worker(pool).await });
-}
-
-async fn run_hash_worker(pool: SqlitePool) {
+pub async fn run_hash_worker(pool: SqlitePool) {
     loop {
         // Backpressure: yield to inference while its queue is deep.
         match crate::pipeline::queue::count_pending_inference(&pool).await {
@@ -75,7 +70,11 @@ async fn run_hash_worker(pool: SqlitePool) {
         let sem = Arc::new(Semaphore::new(HASH_CONCURRENCY));
         let mut handles = Vec::with_capacity(batch.len());
         for (id, path, mtime) in batch {
-            let permit = sem.clone().acquire_owned().await.expect("hash semaphore closed");
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("hash semaphore closed");
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 let hash = compute_blake3(std::path::Path::new(&path)).await.ok();
