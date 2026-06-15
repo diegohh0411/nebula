@@ -121,10 +121,12 @@ describe('PhotoService — subjectMatches signal', () => {
 
   it('searchByText sets subjectMatches from search_subjects response', async () => {
     const fakeMatch = { subject: { id: 1, name: 'Maria', thumbnail_face_id: null, type: 'person', added_at: 0 }, tags: [{ id: 1, name: 'Cabaña-21', added_at: 0 }] };
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === 'search_subjects') return Promise.resolve([fakeMatch]);
-      return Promise.resolve([]);
-    });
+    // Stub the service method directly rather than discriminating on the invoke
+    // mock by command name. The module-level invoke mock's per-call
+    // implementation is not reliably the same instance the service imported in
+    // every environment (a vitest module-mock identity quirk that made this
+    // green locally but red in CI); spying the instance method is deterministic.
+    vi.spyOn(service as any, 'searchSubjects').mockResolvedValue([fakeMatch]);
 
     await service.searchByText('cabana');
     await flushUntil(() => service.subjectMatches().length > 0);
@@ -133,10 +135,8 @@ describe('PhotoService — subjectMatches signal', () => {
 
   it('clearSearch empties subjectMatches', async () => {
     const fakeMatch = { subject: { id: 1, name: 'Jose', thumbnail_face_id: null, type: 'person', added_at: 0 }, tags: [] };
-    invoke.mockImplementation((cmd: string) => {
-      if (cmd === 'search_subjects') return Promise.resolve([fakeMatch]);
-      return Promise.resolve([]);
-    });
+    vi.spyOn(service as any, 'searchSubjects').mockResolvedValue([fakeMatch]);
+
     await service.searchByText('jose');
     await flushUntil(() => service.subjectMatches().length > 0);
     expect(service.subjectMatches().length).toBe(1);
