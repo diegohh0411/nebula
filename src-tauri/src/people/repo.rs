@@ -451,33 +451,39 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
         }
     }
 
+    // Read all face ids up front so the transaction below spans only writes.
+    let target_faces = get_face_ids_for_subject(pool, target_id).await?;
+    let source_faces = get_face_ids_for_subject(pool, source_id).await?;
+
+    // Wrap all mutations in a single transaction so the merge is atomic: if any step
+    // fails, the dropped transaction rolls back, leaving no partially-merged subject.
+    let mut tx = pool.begin().await?;
+
     // Rule: named subject's name always survives.
     // If target is unnamed and source is named, copy the source name to target.
     if target_name.is_none() && source_name.is_some() {
         sqlx::query("UPDATE subjects SET name = ? WHERE id = ? AND name IS NULL")
             .bind(&source_name)
             .bind(target_id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
 
     // Write must_link between all faces of target and all faces of source (durable merge)
-    let target_faces = get_face_ids_for_subject(pool, target_id).await?;
-    let source_faces = get_face_ids_for_subject(pool, source_id).await?;
     let now_c = chrono::Utc::now().timestamp();
     for &tf in &target_faces {
         for &sf in &source_faces {
             let (a, b) = if tf < sf { (tf, sf) } else { (sf, tf) };
             sqlx::query(
                 "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) VALUES (?, ?, 'must_link', 'merge', ?)"
-            ).bind(a).bind(b).bind(now_c).execute(pool).await?;
+            ).bind(a).bind(b).bind(now_c).execute(&mut *tx).await?;
         }
     }
 
     sqlx::query("UPDATE faces SET subject_id = ? WHERE subject_id = ?")
         .bind(target_id)
         .bind(source_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query(
@@ -486,7 +492,7 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
     )
     .bind(target_id)
     .bind(source_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("DELETE FROM merge_suggestions WHERE subject_id_a = ? OR subject_id_b = ? OR subject_id_a = ? OR subject_id_b = ?")
@@ -494,13 +500,15 @@ pub async fn merge_subjects(pool: &SqlitePool, target_id: i64, source_id: i64) -
         .bind(target_id)
         .bind(source_id)
         .bind(source_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("DELETE FROM subjects WHERE id = ?")
         .bind(source_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     let _ = auto_assign_missing_thumbnails(pool).await;
     Ok(())
