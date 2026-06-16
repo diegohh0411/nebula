@@ -2,7 +2,7 @@ import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { Subject } from 'rxjs';
 import { PhotoService } from './photo.service';
 import { TauriEventsService } from './tauri-events.service';
-import { ImageUpdatedEvent, PipelineStats } from '../models/models';
+import { ImageUpdatedEvent, PipelineStats, Image, SearchResult } from '../models/models';
 
 /**
  * Yield to the microtask queue repeatedly until `predicate` holds (or `max`
@@ -194,5 +194,103 @@ describe('PhotoService — processing speed resilience & ETA', () => {
   it('returns 0 etaSeconds when speed is zero', () => {
     pipelineStats$.next({ total_pending: 0, images_per_sec: 0 });
     expect(service.etaSeconds()).toBe(0);
+  });
+});
+
+describe('PhotoService — lightbox navigation', () => {
+  let service: PhotoService;
+
+  const img = (id: number): Image => ({
+    id,
+    folder_id: 1,
+    path: `/img/${id}.jpg`,
+    file_hash: '',
+    hash_status: 'ok',
+    date_taken: null,
+    mtime: 0,
+    thumbnail_path: null,
+    preview_path: null,
+    semantic_analysis_done: true,
+    subject_analysis_done: true,
+    added_at: 0,
+    updated_at: 0,
+    deleted_at: null,
+  });
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        PhotoService,
+        {
+          provide: TauriEventsService,
+          useValue: {
+            pipelineStats$: new Subject(),
+            imageAdded$: new Subject(),
+            imageUpdated$: new Subject(),
+            imageRemoved$: new Subject(),
+            modelDownloadProgress$: new Subject(),
+          },
+        },
+      ],
+    });
+    service = TestBed.inject(PhotoService);
+  });
+
+  it('openLightbox stores the image and its source list', () => {
+    const items = [img(1), img(2), img(3)];
+    service.openLightbox(items[1], items);
+    expect(service.selectedImage()).toBe(items[1]);
+    expect(service.lightboxItems()).toBe(items);
+  });
+
+  it('navigateLightbox moves forward within the supplied list', () => {
+    const items = [img(1), img(2), img(3)];
+    service.openLightbox(items[0], items);
+    service.navigateLightbox(1);
+    expect((service.selectedImage() as Image).id).toBe(2);
+  });
+
+  it('navigateLightbox wraps from last to first', () => {
+    const items = [img(1), img(2), img(3)];
+    service.openLightbox(items[2], items);
+    service.navigateLightbox(1);
+    expect((service.selectedImage() as Image).id).toBe(1);
+  });
+
+  it('navigateLightbox wraps from first to last going backward', () => {
+    const items = [img(1), img(2), img(3)];
+    service.openLightbox(items[0], items);
+    service.navigateLightbox(-1);
+    expect((service.selectedImage() as Image).id).toBe(3);
+  });
+
+  it('navigateLightbox is a no-op when the source list is empty', () => {
+    service.openLightbox(img(1), []);
+    service.navigateLightbox(1);
+    expect((service.selectedImage() as Image).id).toBe(1);
+  });
+
+  it('navigateLightbox is a no-op when the current image is not in the list', () => {
+    const items = [img(1), img(2)];
+    service.openLightbox(img(99), items);
+    service.navigateLightbox(1);
+    expect((service.selectedImage() as Image).id).toBe(99);
+  });
+
+  it('closeLightbox clears the source list', () => {
+    const items = [img(1), img(2)];
+    service.openLightbox(items[0], items);
+    service.closeLightbox();
+    expect(service.selectedImage()).toBeNull();
+    expect(service.lightboxItems()).toEqual([]);
+  });
+
+  it('galleryImages flattens dayGroups in visual order (search results)', () => {
+    const results: SearchResult[] = [
+      { image_id: 10, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: null, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 11, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: null, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+    ];
+    service.searchResults.set(results);
+    expect(service.galleryImages().map((i) => ('id' in i ? i.id : i.image_id))).toEqual([10, 11]);
   });
 });

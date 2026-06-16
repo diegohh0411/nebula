@@ -137,7 +137,7 @@
       <div class="flex flex-col gap-1 max-w-[1600px] mx-auto">
         @for (row of virtualRows(); track $index) {
           @if (row.type === 'row') {
-            <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />
+            <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" [navigationItems]="subjectPhotos()" />
           }
         }
       </div>
