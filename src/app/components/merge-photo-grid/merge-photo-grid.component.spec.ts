@@ -67,4 +67,17 @@ describe('MergePhotoGridComponent', () => {
     await component['loadCrop'](7);
     expect(getFaceCrop).toHaveBeenCalledTimes(1);
   });
+
+  it('opens the lightbox with the full mapped list when a cell is clicked', () => {
+    const openLightbox = TestBed.inject(PhotoService).openLightbox as ReturnType<typeof vi.fn>;
+    component.images = [makePhoto(1, 100), makePhoto(2, 200), makePhoto(3, 300)];
+
+    // Click the middle cell.
+    (component as unknown as { onClick: (p: SubjectPhotoFace) => void }).onClick(component.images[1]);
+
+    expect(openLightbox).toHaveBeenCalledTimes(1);
+    const [clicked, list] = openLightbox.mock.calls[0];
+    expect(clicked.image_id).toBe(200);
+    expect(list.map((i: { image_id: number }) => i.image_id)).toEqual([100, 200, 300]);
+  });
 });
