@@ -43,6 +43,11 @@ impl ThroughputWindow {
         let span = (now_secs - oldest).max(1e-3);
         total as f32 / span
     }
+
+    /// Clear all entries from the window.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 /// Returns `raw` when it is a usable (> 0) rate, else falls back to the last
@@ -54,6 +59,12 @@ pub fn effective_rate(raw: f32, prev: f32) -> f32 {
     } else {
         prev
     }
+}
+
+/// Completions since the previous sample. Clamps to 0 so deletions
+/// (which lower the done count) never produce a negative throughput sample.
+pub fn done_delta(prev_done: i64, now_done: i64) -> usize {
+    (now_done - prev_done).max(0) as usize
 }
 
 #[cfg(test)]
@@ -124,5 +135,31 @@ mod tests {
     #[test]
     fn effective_rate_returns_zero_when_both_zero() {
         assert_eq!(super::effective_rate(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn done_delta_returns_completions_since_last_sample() {
+        assert_eq!(super::done_delta(100, 112), 12);
+    }
+
+    #[test]
+    fn done_delta_zero_when_no_progress() {
+        assert_eq!(super::done_delta(100, 100), 0);
+    }
+
+    #[test]
+    fn done_delta_clamps_negative_from_deletions() {
+        // A deletion lowers the done count; must never yield a negative sample.
+        assert_eq!(super::done_delta(100, 95), 0);
+    }
+
+    #[test]
+    fn clear_empties_the_window_so_rate_returns_zero() {
+        let mut w = ThroughputWindow::new(10.0);
+        w.record(12, 1.0);
+        w.record(12, 2.0);
+        assert!(w.rate(2.0) > 0.0);
+        w.clear();
+        assert_eq!(w.rate(2.0), 0.0);
     }
 }
