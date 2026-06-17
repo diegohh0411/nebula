@@ -28,6 +28,8 @@ export class PhotoGridComponent implements AfterViewInit, OnDestroy {
   }
   get images() { return this._images; }
 
+  @Input({ required: true }) navigationItems: (Image | SearchResult)[] = [];
+
   @Input() rowHeight: number = 220;
 
   /** 'row' = single justified row (Flickr-style); 'grid' = wrapping multi-row grid. */
@@ -97,7 +99,7 @@ export class PhotoGridComponent implements AfterViewInit, OnDestroy {
     await new Promise(resolve => requestAnimationFrame(resolve));
 
     await startViewTransition(() => {
-      this.photos.openLightbox(img);
+      this.photos.openLightbox(img, this.navigationItems);
     });
   }
 
