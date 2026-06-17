@@ -56,6 +56,7 @@ export class PhotoService {
 
   // ---- Lightbox state ----
   readonly selectedImage = signal<Image | SearchResult | null>(null);
+  readonly lightboxItems = signal<(Image | SearchResult)[]>([]);
   readonly transitioningImageId = signal<number | null>(null);
   readonly selectedImageIds = signal<Set<number>>(new Set());
 
@@ -74,13 +75,15 @@ export class PhotoService {
     this.selectedImageIds.set(new Set());
   }
 
-  openLightbox(img: Image | SearchResult): void {
+  openLightbox(img: Image | SearchResult, items: (Image | SearchResult)[]): void {
     this.transitioningImageId.set('id' in img ? img.id : img.image_id);
+    this.lightboxItems.set(items);
     this.selectedImage.set(img);
   }
 
   closeLightbox(): void {
     this.selectedImage.set(null);
+    this.lightboxItems.set([]);
     // Note: transitioningImageId stays set during the transition back, then cleared in the component.
   }
 
@@ -88,14 +91,15 @@ export class PhotoService {
     const current = this.selectedImage();
     if (!current) return;
 
-    // Use search results if available, otherwise full gallery
-    const allImages: (Image | SearchResult)[] = this.searchResults() ?? this.images();
+    const items = this.lightboxItems();
+    if (items.length === 0) return;
+
     const currentId = 'id' in current ? current.id : current.image_id;
-    const idx = allImages.findIndex((i) => ('id' in i ? i.id : i.image_id) === currentId);
+    const idx = items.findIndex((i) => ('id' in i ? i.id : i.image_id) === currentId);
     if (idx === -1) return;
 
-    const nextIdx = (idx + direction + allImages.length) % allImages.length;
-    const nextImg = allImages[nextIdx];
+    const nextIdx = (idx + direction + items.length) % items.length;
+    const nextImg = items[nextIdx];
     this.selectedImage.set(nextImg);
     this.transitioningImageId.set('id' in nextImg ? nextImg.id : nextImg.image_id);
   }
@@ -115,6 +119,11 @@ export class PhotoService {
     }
     return groupByDay(this.images());
   });
+
+  /** Full visual-ordered list backing the main gallery / search lightbox. */
+  readonly galleryImages = computed<(Image | SearchResult)[]>(() =>
+    this.dayGroups().flatMap((g) => g.images)
+  );
 
   /** Flat virtual scroll rows: interleaved headers + justified rows */
   readonly virtualRows = computed<VirtualRow[]>(() => {

@@ -12,7 +12,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { LucideAngularModule } from 'lucide-angular';
-import { SubjectPhotoFace } from '../../models/models';
+import { SubjectPhotoFace, SearchResult } from '../../models/models';
 import { PhotoService } from '../../services/photo.service';
 
 @Component({
@@ -90,7 +90,13 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
   }
 
   protected onClick(img: SubjectPhotoFace): void {
-    this.photos.openLightbox({
+    const list = this.images.map((i) => this.toLightboxImage(i));
+    const clicked = list.find((i) => i.image_id === img.image_id) ?? this.toLightboxImage(img);
+    this.photos.openLightbox(clicked, list);
+  }
+
+  private toLightboxImage(img: SubjectPhotoFace): SearchResult {
+    return {
       image_id: img.image_id,
       path: img.path,
       thumbnail_path: img.thumbnail_path,
@@ -100,6 +106,6 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
       mtime: img.mtime,
       semantic_analysis_done: true,
       subject_analysis_done: true,
-    });
+    };
   }
 }

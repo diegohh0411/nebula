@@ -47,7 +47,7 @@
           <span class="day-header-count">{{ row.count }}</span>
         </button>
       } @else {
-        <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" />
+        <app-photo-grid [images]="row.images" [rowHeight]="row.rowHeight" [navigationItems]="photos.galleryImages()" />
       }
     </div>
   </cdk-virtual-scroll-viewport>
