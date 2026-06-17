@@ -8,3 +8,6 @@
 
 # VC++ redistributable downloaded during CI (shipped in the NSIS installer)
 /redist/
+
+# Stray compiled artifacts from cargo check/clippy runs outside target/
+*.rlib
