@@ -50,17 +50,6 @@ impl ThroughputWindow {
     }
 }
 
-/// Returns `raw` when it is a usable (> 0) rate, else falls back to the last
-/// published value (`prev`). A transient "not enough samples" 0 from the sliding
-/// window must never blank the displayed speed while processing is active.
-pub fn effective_rate(raw: f32, prev: f32) -> f32 {
-    if raw > 0.0 {
-        raw
-    } else {
-        prev
-    }
-}
-
 /// Completions since the previous sample. Clamps to 0 so deletions
 /// (which lower the done count) never produce a negative throughput sample.
 pub fn done_delta(prev_done: i64, now_done: i64) -> usize {
@@ -119,22 +108,6 @@ mod tests {
             rate >= 20.0,
             "stale entries must be excluded, got {rate:.1}"
         );
-    }
-
-    #[test]
-    fn effective_rate_uses_raw_when_positive() {
-        assert_eq!(super::effective_rate(12.5, 3.0), 12.5);
-    }
-
-    #[test]
-    fn effective_rate_holds_prev_when_raw_is_zero() {
-        // Window momentarily has <2 samples → raw 0; must hold the last value.
-        assert_eq!(super::effective_rate(0.0, 9.0), 9.0);
-    }
-
-    #[test]
-    fn effective_rate_returns_zero_when_both_zero() {
-        assert_eq!(super::effective_rate(0.0, 0.0), 0.0);
     }
 
     #[test]

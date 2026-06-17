@@ -39,7 +39,7 @@ impl Default for PipelineConfig {
 
 use log::{debug, error, info, warn};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::Manager;
 
 async fn save_faces(
@@ -157,9 +157,6 @@ pub async fn run_pipeline(
     );
     let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
-    let mut throughput_window = throughput::ThroughputWindow::new(15.0);
-    let pipeline_start = Instant::now();
-
     info!("[pipeline] Pipeline background loop started, awaiting tasks...");
 
     loop {
@@ -192,12 +189,6 @@ pub async fn run_pipeline(
         };
 
         if sem_batch.is_empty() && sub_batch.is_empty() {
-            // Nothing pending: clear the held speed so a finished run does not
-            // leak a stale rate into the next import (TT-64).
-            let app_state: tauri::State<crate::AppState> = app.state();
-            app_state
-                .throughput_ema
-                .store(0.0f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
@@ -542,24 +533,6 @@ pub async fn run_pipeline(
                 crate::models::ImageUpdatedPayload { image_id },
             );
         }
-
-        let now_secs = pipeline_start.elapsed().as_secs_f32();
-        throughput_window.record(images_processed_this_iter, now_secs);
-        let raw_rate = throughput_window.rate(now_secs);
-
-        // Single source of truth for speed (TT-7/TT-64): hold the last-known rate
-        // when the window momentarily lacks samples, so the speed never blanks
-        // mid-processing.
-        let app_state: tauri::State<crate::AppState> = app.state();
-        let prev = f32::from_bits(
-            app_state
-                .throughput_ema
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let effective = crate::pipeline::throughput::effective_rate(raw_rate, prev);
-        app_state
-            .throughput_ema
-            .store(effective.to_bits(), std::sync::atomic::Ordering::Relaxed);
 
         crate::search::math::emit_progress(&pool, &app).await;
 
