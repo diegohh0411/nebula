@@ -153,14 +153,9 @@ export class PhotoService {
 
   constructor() {
     this.events.pipelineStats$.subscribe((e) => {
-      // Hold-last-known speed: a 0 while work remains is a heartbeat without a
-      // fresh sample, not a real stop — keep the prior speed (TT-64).
-      const prev = this.pipelineStats();
-      const images_per_sec =
-        e.images_per_sec > 0 || e.total_pending === 0
-          ? e.images_per_sec
-          : prev.images_per_sec;
-      this.pipelineStats.set({ ...e, images_per_sec });
+      // The backend sampler refreshes the rate every second, so 0 means
+      // "no samples yet", not a missed heartbeat — pass it straight through.
+      this.pipelineStats.set(e);
     });
 
     // TT-7/TT-14: Freshness & Granularity Poll

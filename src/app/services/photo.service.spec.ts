@@ -170,14 +170,14 @@ describe('PhotoService — processing speed resilience & ETA', () => {
     service = TestBed.inject(PhotoService);
   });
 
-  it('holds the last non-zero speed when a zero-speed stat arrives mid-processing', () => {
+  it('passes through a zero speed mid-processing (no samples yet)', () => {
     pipelineStats$.next({ total_pending: 100, images_per_sec: 8 });
     expect(service.pipelineStats().images_per_sec).toBe(8);
 
-    // Scanner heartbeat: refreshes the count but carries a 0 speed.
+    // Backend sampler refreshes every second; 0 means "no samples yet", not a missed heartbeat.
     pipelineStats$.next({ total_pending: 120, images_per_sec: 0 });
-    expect(service.pipelineStats().images_per_sec).toBe(8); // held
-    expect(service.pipelineStats().total_pending).toBe(120); // count still updates
+    expect(service.pipelineStats().images_per_sec).toBe(0); // passed through
+    expect(service.pipelineStats().total_pending).toBe(120); // count updates
   });
 
   it('clears the speed once processing finishes (pending 0)', () => {
