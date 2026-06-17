@@ -2,6 +2,7 @@ pub mod decoded_image;
 pub mod embed_actor;
 pub mod face_actor;
 pub mod queue;
+pub mod sampler;
 pub mod throughput;
 
 pub use decoded_image::DecodedImage;
