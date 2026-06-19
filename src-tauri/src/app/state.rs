@@ -10,4 +10,6 @@ pub struct AppState {
     pub index: crate::search::vector_index::IndexStore,
     pub preview: crate::media::preview::PreviewHandle,
     pub throughput_ema: std::sync::atomic::AtomicU32,
+    /// Signals background tasks (e.g. throughput sampler) to shut down cleanly.
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
 }

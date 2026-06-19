@@ -1,9 +1,10 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use log::{debug, warn};
+use log::{debug, info, warn};
 use sqlx::SqlitePool;
 use tauri::Manager;
+use tokio::sync::watch;
 
 use crate::pipeline::queue::get_processing_counts;
 use crate::pipeline::throughput::{done_delta, ThroughputWindow};
@@ -40,7 +41,15 @@ pub fn sample_once(
 /// progress (images moving into the `done` state) instead of from pipeline
 /// internals, so the displayed speed/ETA never gets stuck on warmup or batch
 /// cadence. Owns `AppState.throughput_ema`; the pipeline loop no longer writes it.
-pub async fn run_throughput_sampler(pool: SqlitePool, app: tauri::AppHandle) {
+///
+/// `shutdown_rx`: a `watch` receiver that turns `true` when the app is exiting.
+/// The sampler observes this signal during every sleep so it exits promptly
+/// instead of waiting out the full interval.
+pub async fn run_throughput_sampler(
+    pool: SqlitePool,
+    app: tauri::AppHandle,
+    shutdown_rx: watch::Receiver<bool>,
+) {
     let mut window = ThroughputWindow::new(WINDOW_SECS);
     let start = Instant::now();
 
@@ -54,12 +63,26 @@ pub async fn run_throughput_sampler(pool: SqlitePool, app: tauri::AppHandle) {
         }
     };
 
+    /// Sleeps for `duration` but returns early (as `true`) if the shutdown
+    /// signal fires, or returns `false` after the full sleep.
+    macro_rules! interruptible_sleep {
+        ($dur:expr, $rx:expr) => {{
+            let mut rx = $rx.clone();
+            tokio::select! {
+                _ = tokio::time::sleep($dur) => false,
+                _ = rx.wait_for(|v| *v) => true,
+            }
+        }};
+    }
+
     loop {
         let counts = match get_processing_counts(&pool).await {
             Ok(c) => c,
             Err(e) => {
                 warn!("[sampler] count query failed: {e}");
-                tokio::time::sleep(IDLE_SLEEP).await;
+                if interruptible_sleep!(IDLE_SLEEP, shutdown_rx) {
+                    break;
+                }
                 continue;
             }
         };
@@ -74,13 +97,19 @@ pub async fn run_throughput_sampler(pool: SqlitePool, app: tauri::AppHandle) {
             .throughput_ema
             .store(rate.to_bits(), Ordering::Relaxed);
 
-        if counts.total_pending == 0 {
-            tokio::time::sleep(IDLE_SLEEP).await;
+        let sleep_dur = if counts.total_pending == 0 {
+            IDLE_SLEEP
         } else {
             debug!("[sampler] {:.1} img/s ({} pending)", rate, counts.total_pending);
-            tokio::time::sleep(SAMPLE_INTERVAL).await;
+            SAMPLE_INTERVAL
+        };
+
+        if interruptible_sleep!(sleep_dur, shutdown_rx) {
+            break;
         }
     }
+
+    info!("[sampler] shutting down");
 }
 
 #[cfg(test)]

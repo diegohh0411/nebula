@@ -3,6 +3,7 @@ pub mod state;
 pub use state::AppState;
 use std::sync::Arc;
 use tauri::Manager;
+use tauri::RunEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -48,6 +49,8 @@ pub fn run() {
                 preview_handle.clone(),
             ))?;
 
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
             app.manage(AppState {
                 pool: pool.clone(),
                 data_dir: data_dir.clone(),
@@ -57,6 +60,7 @@ pub fn run() {
                 index: index.clone(),
                 preview: preview_handle.clone(),
                 throughput_ema: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+                shutdown_tx,
             });
 
             let indexer_rescan = app.state::<AppState>().indexer.clone();
@@ -70,6 +74,7 @@ pub fn run() {
             tauri::async_runtime::spawn(crate::pipeline::sampler::run_throughput_sampler(
                 pool.clone(),
                 app.handle().clone(),
+                shutdown_rx,
             ));
 
             let pool_pipe = pool.clone();
@@ -143,6 +148,14 @@ pub fn run() {
             crate::settings::commands::get_setting,
             crate::settings::commands::update_setting,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::Exit = event {
+                let state = app_handle.state::<AppState>();
+                // Signal the throughput sampler (and any future subscribers) to
+                // shut down cleanly before the process exits.
+                let _ = state.shutdown_tx.send(true);
+            }
+        });
 }
