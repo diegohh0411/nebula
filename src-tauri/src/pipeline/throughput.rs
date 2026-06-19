@@ -135,4 +135,22 @@ mod tests {
         w.clear();
         assert_eq!(w.rate(2.0), 0.0);
     }
+
+    #[test]
+    fn multiple_ticks_accumulate_expected_steady_state_rate() {
+        // Four ticks one second apart, each completing 10 images.
+        // Window spans t=1..4 (oldest entry at t=1, query at t=4).
+        // Total in window = 40 images, span = 4 - 1 = 3s → rate ≈ 13.3 img/s.
+        let mut w = ThroughputWindow::new(15.0);
+        w.record(10, 1.0);
+        w.record(10, 2.0);
+        w.record(10, 3.0);
+        w.record(10, 4.0);
+        let rate = w.rate(4.0);
+        // Allow a small tolerance band around the expected 40/3 ≈ 13.3 img/s.
+        assert!(
+            rate >= 12.0 && rate <= 15.0,
+            "expected ~13.3 img/s for steady-state 10 img/s ticks, got {rate:.2}"
+        );
+    }
 }

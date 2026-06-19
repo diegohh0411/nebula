@@ -150,4 +150,47 @@ mod tests {
         assert_eq!(p2, 108);
         assert!(r >= 0.0 && r.is_finite());
     }
+
+    #[test]
+    fn first_sample_after_new_import_yields_zero_then_positive_rate() {
+        // Scenario: sampler was idle at prev_done=500 (baseline from a prior run).
+        // A new import arrives; the first tick sees total_pending > 0 but done is
+        // still 500 — nothing has finished in this batch yet.
+        // Expected: delta == 0, window gets a zero entry, rate == 0 ("Calculating ETA").
+        // The next tick with real progress must produce a positive rate.
+        let mut w = ThroughputWindow::new(10.0);
+        let prev_done = 500_i64;
+
+        // Tick 1: import active, no completions yet (done == prev_done).
+        let (rate1, p1) = sample_once(&mut w, prev_done, 10, 500, 1.0);
+        assert_eq!(rate1, 0.0, "first tick with no progress must report rate 0");
+        assert_eq!(p1, 500, "prev_done carried forward unchanged");
+
+        // Tick 2: 15 images complete (done = 515).
+        let (rate2, p2) = sample_once(&mut w, p1, 10, 515, 2.0);
+        assert_eq!(p2, 515);
+        assert!(
+            rate2 > 0.0,
+            "second tick with progress must produce a positive rate, got {rate2:.1}"
+        );
+    }
+
+    #[test]
+    fn transition_active_to_idle_clears_stale_rate() {
+        // After an active run produces a positive rate, switching to idle
+        // (total_pending == 0) must clear the window and report 0 so no stale
+        // rate leaks into the next import (TT-64).
+        let mut w = ThroughputWindow::new(10.0);
+
+        // Two active ticks to build up a non-zero rate.
+        let (_r1, p1) = sample_once(&mut w, 0, 5, 12, 10.0);
+        let (r_active, p2) = sample_once(&mut w, p1, 5, 24, 11.0);
+        assert!(r_active > 0.0, "expected positive rate during active phase, got {r_active:.1}");
+
+        // Queue drains: total_pending == 0.
+        let (r_idle, _p3) = sample_once(&mut w, p2, 0, 24, 12.0);
+        assert_eq!(r_idle, 0.0, "idle transition must report rate 0");
+        // Window must be cleared so a subsequent rate query also returns 0.
+        assert_eq!(w.rate(12.0), 0.0, "window must be cleared after idle transition");
+    }
 }
