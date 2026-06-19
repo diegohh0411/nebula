@@ -40,7 +40,6 @@ impl Default for PipelineConfig {
 use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::Manager;
 
 async fn save_faces(
     pool: &sqlx::SqlitePool,
