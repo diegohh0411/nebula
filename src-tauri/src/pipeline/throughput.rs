@@ -149,7 +149,7 @@ mod tests {
         let rate = w.rate(4.0);
         // Allow a small tolerance band around the expected 40/3 ≈ 13.3 img/s.
         assert!(
-            rate >= 12.0 && rate <= 15.0,
+            (12.0..=15.0).contains(&rate),
             "expected ~13.3 img/s for steady-state 10 img/s ticks, got {rate:.2}"
         );
     }

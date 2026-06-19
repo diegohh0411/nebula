@@ -88,8 +88,13 @@ pub async fn run_throughput_sampler(
         };
 
         let now_secs = start.elapsed().as_secs_f32();
-        let (rate, new_prev) =
-            sample_once(&mut window, prev_done, counts.total_pending, counts.done, now_secs);
+        let (rate, new_prev) = sample_once(
+            &mut window,
+            prev_done,
+            counts.total_pending,
+            counts.done,
+            now_secs,
+        );
         prev_done = new_prev;
 
         let state = app.state::<crate::AppState>();
@@ -100,7 +105,10 @@ pub async fn run_throughput_sampler(
         let sleep_dur = if counts.total_pending == 0 {
             IDLE_SLEEP
         } else {
-            debug!("[sampler] {:.1} img/s ({} pending)", rate, counts.total_pending);
+            debug!(
+                "[sampler] {:.1} img/s ({} pending)",
+                rate, counts.total_pending
+            );
             SAMPLE_INTERVAL
         };
 
@@ -185,12 +193,19 @@ mod tests {
         // Two active ticks to build up a non-zero rate.
         let (_r1, p1) = sample_once(&mut w, 0, 5, 12, 10.0);
         let (r_active, p2) = sample_once(&mut w, p1, 5, 24, 11.0);
-        assert!(r_active > 0.0, "expected positive rate during active phase, got {r_active:.1}");
+        assert!(
+            r_active > 0.0,
+            "expected positive rate during active phase, got {r_active:.1}"
+        );
 
         // Queue drains: total_pending == 0.
         let (r_idle, _p3) = sample_once(&mut w, p2, 0, 24, 12.0);
         assert_eq!(r_idle, 0.0, "idle transition must report rate 0");
         // Window must be cleared so a subsequent rate query also returns 0.
-        assert_eq!(w.rate(12.0), 0.0, "window must be cleared after idle transition");
+        assert_eq!(
+            w.rate(12.0),
+            0.0,
+            "window must be cleared after idle transition"
+        );
     }
 }
