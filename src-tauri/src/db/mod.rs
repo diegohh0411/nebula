@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS images (
 CREATE INDEX IF NOT EXISTS idx_images_folder   ON images(folder_id);
 CREATE INDEX IF NOT EXISTS idx_images_semantic ON images(semantic_analysis_done) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_images_subject  ON images(subject_analysis_done) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_images_done     ON images(semantic_analysis_done, subject_analysis_done) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS embedding_queue (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS embedding_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_queue_scheduled ON embedding_queue(scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_queue_image     ON embedding_queue(image_id);
 
 CREATE TABLE IF NOT EXISTS subjects (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,7 +169,16 @@ CREATE TABLE IF NOT EXISTS face_edges (
 );
 "#;
 
-const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[];
+const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
+    (
+        1,
+        "CREATE INDEX IF NOT EXISTS idx_images_done ON images(semantic_analysis_done, subject_analysis_done) WHERE deleted_at IS NULL",
+    ),
+    (
+        2,
+        "CREATE INDEX IF NOT EXISTS idx_queue_image ON embedding_queue(image_id)",
+    ),
+];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     ensure_sqlite_vec_registered();

@@ -43,17 +43,17 @@ impl ThroughputWindow {
         let span = (now_secs - oldest).max(1e-3);
         total as f32 / span
     }
+
+    /// Clear all entries from the window.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
-/// Returns `raw` when it is a usable (> 0) rate, else falls back to the last
-/// published value (`prev`). A transient "not enough samples" 0 from the sliding
-/// window must never blank the displayed speed while processing is active.
-pub fn effective_rate(raw: f32, prev: f32) -> f32 {
-    if raw > 0.0 {
-        raw
-    } else {
-        prev
-    }
+/// Completions since the previous sample. Clamps to 0 so deletions
+/// (which lower the done count) never produce a negative throughput sample.
+pub fn done_delta(prev_done: i64, now_done: i64) -> usize {
+    (now_done - prev_done).max(0) as usize
 }
 
 #[cfg(test)]
@@ -111,18 +111,46 @@ mod tests {
     }
 
     #[test]
-    fn effective_rate_uses_raw_when_positive() {
-        assert_eq!(super::effective_rate(12.5, 3.0), 12.5);
+    fn done_delta_returns_completions_since_last_sample() {
+        assert_eq!(super::done_delta(100, 112), 12);
     }
 
     #[test]
-    fn effective_rate_holds_prev_when_raw_is_zero() {
-        // Window momentarily has <2 samples → raw 0; must hold the last value.
-        assert_eq!(super::effective_rate(0.0, 9.0), 9.0);
+    fn done_delta_zero_when_no_progress() {
+        assert_eq!(super::done_delta(100, 100), 0);
     }
 
     #[test]
-    fn effective_rate_returns_zero_when_both_zero() {
-        assert_eq!(super::effective_rate(0.0, 0.0), 0.0);
+    fn done_delta_clamps_negative_from_deletions() {
+        // A deletion lowers the done count; must never yield a negative sample.
+        assert_eq!(super::done_delta(100, 95), 0);
+    }
+
+    #[test]
+    fn clear_empties_the_window_so_rate_returns_zero() {
+        let mut w = ThroughputWindow::new(10.0);
+        w.record(12, 1.0);
+        w.record(12, 2.0);
+        assert!(w.rate(2.0) > 0.0);
+        w.clear();
+        assert_eq!(w.rate(2.0), 0.0);
+    }
+
+    #[test]
+    fn multiple_ticks_accumulate_expected_steady_state_rate() {
+        // Four ticks one second apart, each completing 10 images.
+        // Window spans t=1..4 (oldest entry at t=1, query at t=4).
+        // Total in window = 40 images, span = 4 - 1 = 3s → rate ≈ 13.3 img/s.
+        let mut w = ThroughputWindow::new(15.0);
+        w.record(10, 1.0);
+        w.record(10, 2.0);
+        w.record(10, 3.0);
+        w.record(10, 4.0);
+        let rate = w.rate(4.0);
+        // Allow a small tolerance band around the expected 40/3 ≈ 13.3 img/s.
+        assert!(
+            (12.0..=15.0).contains(&rate),
+            "expected ~13.3 img/s for steady-state 10 img/s ticks, got {rate:.2}"
+        );
     }
 }
