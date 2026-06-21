@@ -550,7 +550,7 @@ pub async fn run_pipeline(
         // Auto-recluster only when subject work was done this iteration
         if processed_subject_work {
             info!("[pipeline] Auto-clustering unassigned faces...");
-            if let Ok(_result) = crate::people::clustering::cluster_unassigned_faces(&pool, None).await {
+            if let Ok(Some(_result)) = crate::people::clustering::cluster_unassigned_faces(&pool, None).await {
                 info!("[pipeline] Clustering complete. Upgrading subject thumbnails...");
                 // Upgrade each subject's profile crop to its best-quality face, then
                 // generate the crop file eagerly so the People grid has it before the
