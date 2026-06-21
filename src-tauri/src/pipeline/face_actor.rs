@@ -1,7 +1,9 @@
 use crate::pipeline::DecodedImage;
 use face_id::analyzer::FaceAnalyzer;
 use face_id::detector::DetectedFace;
+use log::{debug, warn};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 
 /// Per detected face: full detection (bbox + landmarks + score), its embedding,
@@ -22,6 +24,12 @@ pub fn spawn_face_actor(
         while let Some(req) = rx.recv().await {
             let analyzer_c = analyzer.clone();
             let img = req.decoded.full.clone();
+            // Heartbeat around the blocking ONNX call: a hung face-analysis run
+            // (DirectML stall) leaves "analyzing" as the last line, pinpointing
+            // the stall to face detection/recognition for this image.
+            let image_id = req.decoded.image_id;
+            debug!("[face] analyzing image {image_id}");
+            let started = Instant::now();
             let res = tokio::task::spawn_blocking(move || {
                 analyzer_c
                     .analyze(img.as_ref())
@@ -47,6 +55,17 @@ pub fn spawn_face_actor(
             })
             .await
             .unwrap_or_else(|e| Err(anyhow::anyhow!("face task panicked: {e}")));
+            match &res {
+                Ok(faces) => debug!(
+                    "[face] image {image_id} done in {:.2}s ({} faces)",
+                    started.elapsed().as_secs_f32(),
+                    faces.len()
+                ),
+                Err(e) => warn!(
+                    "[face] image {image_id} failed in {:.2}s: {e}",
+                    started.elapsed().as_secs_f32()
+                ),
+            }
             let _ = req.reply.send(res);
         }
     });

@@ -10,7 +10,6 @@ use std::sync::Arc;
 /// re-opened after Stage 1.
 #[derive(Clone)]
 pub struct DecodedImage {
-    #[allow(dead_code)]
     pub image_id: i64,
     pub full: Arc<DynamicImage>,
 }
