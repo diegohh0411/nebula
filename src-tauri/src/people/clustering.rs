@@ -366,6 +366,59 @@ pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
     })
 }
 
+/// Cheap per-batch edge update: compute mutual-kNN edges for the *new* faces and
+/// their immediate neighbors only, and upsert them. Does NOT clear edges and does
+/// NOT remove now-stale edges — the idle full sweep reconciles any drift.
+///
+/// The affected set `S = new_face_ids ∪ {candidate neighbors of each new face}`
+/// is queried so both endpoints of every candidate new edge have a neighbor list,
+/// which is what lets `compute_mutual_sim_edges` evaluate mutuality correctly.
+#[allow(dead_code)]
+pub async fn update_edges_incremental(pool: &SqlitePool, new_face_ids: &[i64]) -> Result<()> {
+    if new_face_ids.is_empty() {
+        return Ok(());
+    }
+
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
+
+    // Build the affected set S.
+    let mut affected: HashSet<i64> = new_face_ids.iter().copied().collect();
+    for &fid in new_face_ids {
+        // Over-fetch by one: knn excludes the query face itself.
+        let neighbors =
+            crate::people::face_store::knn_cosine_sim(pool, fid, K_NEAREST + 1).await?;
+        for (nid, _) in neighbors {
+            affected.insert(nid);
+        }
+    }
+    let faces_to_query: Vec<i64> = affected.into_iter().collect();
+
+    // Subject-aware KNN over S only (full id list still drives subject_sizes).
+    let local_knn = build_subject_aware_knn(
+        pool,
+        &all_face_ids,
+        &faces_to_query,
+        &face_subjects,
+        K_NEAREST,
+        None,
+    )
+    .await?
+    .expect("build_subject_aware_knn returns Some when cancel is None");
+
+    let edges = compute_mutual_sim_edges(&local_knn, TAU_SIM);
+    for &(fa, fb, weight) in &edges {
+        people_repo::upsert_face_edge(pool, fa, fb, weight).await?;
+    }
+    debug!(
+        "[clustering] incremental: {} new faces, {} queried, {} edges upserted",
+        new_face_ids.len(),
+        faces_to_query.len(),
+        edges.len()
+    );
+    Ok(())
+}
+
 /// Full authoritative sweep. Serves as the idle backstop. Runs the read-heavy
 /// KNN first (so `face_edges` stays populated during the entire multi-minute
 /// computation), checks `cancel` periodically, and only swaps the edge graph
@@ -1097,6 +1150,129 @@ mod tests {
     fn unit(v: &[f32]) -> Vec<f32> {
         let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         v.iter().map(|x| x / n).collect()
+    }
+
+    /// Group all vectorized faces by subject, returning sorted groups of face ids.
+    /// Subject *identity* is ignored — only the partition structure is compared,
+    /// which is the right equivalence for from-scratch unassigned imports.
+    async fn subject_partition(pool: &sqlx::SqlitePool) -> Vec<Vec<i64>> {
+        let rows: Vec<(i64, Option<i64>)> =
+            sqlx::query_as("SELECT id, subject_id FROM faces ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut singletons: Vec<Vec<i64>> = Vec::new();
+        for (fid, sid) in rows {
+            match sid {
+                Some(s) => groups.entry(s).or_default().push(fid),
+                None => singletons.push(vec![fid]),
+            }
+        }
+        let mut out: Vec<Vec<i64>> = groups.into_values().collect();
+        out.extend(singletons);
+        for g in &mut out {
+            g.sort_unstable();
+        }
+        out.sort();
+        out
+    }
+
+    async fn insert_face_with_vector(
+        pool: &sqlx::SqlitePool,
+        subject_id: Option<i64>,
+        v: &[f32],
+    ) -> i64 {
+        let fid: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
+        )
+        .bind(subject_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fid)
+            .bind(emb_bytes(&unit(v)))
+            .execute(pool)
+            .await
+            .unwrap();
+        fid
+    }
+
+    #[tokio::test]
+    async fn update_edges_incremental_links_new_face_into_existing_cluster() {
+        let pool = make_integration_pool().await;
+        let alex: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alex', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Two assigned Alex faces already vectorized.
+        let _a1 = insert_face_with_vector(&pool, Some(alex), &[1.0, 0.0, 0.0]).await;
+        let _a2 = insert_face_with_vector(&pool, Some(alex), &[1.0, 0.02, 0.0]).await;
+        // A new, unassigned face inside the cluster.
+        let new_face = insert_face_with_vector(&pool, None, &[1.0, 0.01, 0.0]).await;
+
+        update_edges_incremental(&pool, &[new_face]).await.unwrap();
+
+        // An edge between the new face and an Alex face must have been upserted.
+        let edge_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM face_edges WHERE face_a = ? OR face_b = ?",
+        )
+        .bind(new_face)
+        .bind(new_face)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(edge_count >= 1, "new face must gain at least one mutual edge");
+
+        // And relabel must then assign it to Alex.
+        relabel_from_edges(&pool).await.unwrap();
+        let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+            .bind(new_face)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(assigned, Some(alex));
+    }
+
+    #[tokio::test]
+    async fn incremental_then_idle_converges_to_full_sweep() {
+        // Two well-separated clusters: {A1,A2} near x-axis, {B1,B2} near y-axis.
+        let va1 = [1.0f32, 0.0, 0.0];
+        let va2 = [0.99f32, 0.14, 0.0];
+        let vb1 = [0.0f32, 1.0, 0.0];
+        let vb2 = [0.14f32, 0.99, 0.0];
+
+        // Pool 1: incremental in two batches, then a final full sweep.
+        let inc = make_integration_pool().await;
+        let f1 = insert_face_with_vector(&inc, None, &va1).await;
+        let f2 = insert_face_with_vector(&inc, None, &va2).await;
+        update_edges_incremental(&inc, &[f1, f2]).await.unwrap();
+        relabel_from_edges(&inc).await.unwrap();
+        let f3 = insert_face_with_vector(&inc, None, &vb1).await;
+        let f4 = insert_face_with_vector(&inc, None, &vb2).await;
+        update_edges_incremental(&inc, &[f3, f4]).await.unwrap();
+        relabel_from_edges(&inc).await.unwrap();
+        cluster_unassigned_faces(&inc, None).await.unwrap();
+        let inc_partition = subject_partition(&inc).await;
+
+        // Pool 2: single full sweep over all four faces.
+        let full = make_integration_pool().await;
+        insert_face_with_vector(&full, None, &va1).await;
+        insert_face_with_vector(&full, None, &va2).await;
+        insert_face_with_vector(&full, None, &vb1).await;
+        insert_face_with_vector(&full, None, &vb2).await;
+        cluster_unassigned_faces(&full, None).await.unwrap();
+        let full_partition = subject_partition(&full).await;
+
+        assert_eq!(
+            inc_partition, full_partition,
+            "idle backstop must reconcile incremental state to match a single full sweep"
+        );
+        // Sanity: the two clusters are distinct.
+        assert_eq!(full_partition.len(), 2, "expected two subjects");
     }
 
     #[tokio::test]
