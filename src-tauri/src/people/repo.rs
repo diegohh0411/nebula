@@ -730,7 +730,9 @@ pub async fn clear_all_face_edges(pool: &SqlitePool) -> Result<()> {
 /// transaction. Pairs are normalized to `face_a < face_b` (matching upsert_face_edge).
 pub async fn replace_all_face_edges(pool: &SqlitePool, edges: &[(i64, i64, f32)]) -> Result<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM face_edges").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM face_edges")
+        .execute(&mut *tx)
+        .await?;
     for &(fa, fb, weight) in edges {
         let (a, b) = if fa < fb { (fa, fb) } else { (fb, fa) };
         sqlx::query("INSERT OR REPLACE INTO face_edges (face_a, face_b, weight) VALUES (?, ?, ?)")
@@ -807,19 +809,6 @@ pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool) -> Result<Vec<i64>
     Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
 }
 
-/// Face rowids vectorized since `after_id`. Face IDs are autoincrement rowids,
-/// so `> after_id` reliably selects faces added after the last incremental pass.
-pub async fn get_face_ids_with_vectors_above(
-    pool: &SqlitePool,
-    after_id: i64,
-) -> Result<Vec<i64>> {
-    let rows = sqlx::query("SELECT rowid FROM face_vectors WHERE rowid > ? ORDER BY rowid")
-        .bind(after_id)
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
-}
-
 pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = NULL WHERE id = ?")
         .bind(face_id)
@@ -864,41 +853,4 @@ pub async fn reset_all_subject_data(pool: &SqlitePool) -> Result<()> {
 
     tx.commit().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod hwm_tests {
-    use super::*;
-
-    async fn vec_pool() -> SqlitePool {
-        crate::db::ensure_sqlite_vec_registered();
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query("CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])")
-            .execute(&pool)
-            .await
-            .unwrap();
-        for rowid in [1i64, 2, 5, 9] {
-            sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
-                .bind(rowid)
-                .bind(vec![0u8; 12]) // 3 × f32
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        pool
-    }
-
-    #[tokio::test]
-    async fn returns_only_strictly_greater_rowids_ordered() {
-        let pool = vec_pool().await;
-        let got = get_face_ids_with_vectors_above(&pool, 2).await.unwrap();
-        assert_eq!(got, vec![5, 9], "must exclude 2 and return ascending");
-    }
-
-    #[tokio::test]
-    async fn zero_cursor_returns_all() {
-        let pool = vec_pool().await;
-        let got = get_face_ids_with_vectors_above(&pool, 0).await.unwrap();
-        assert_eq!(got, vec![1, 2, 5, 9]);
-    }
 }

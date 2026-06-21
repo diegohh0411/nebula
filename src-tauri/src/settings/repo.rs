@@ -30,15 +30,25 @@ mod tests {
             .await
             .unwrap();
 
-        set_setting(&pool, "clustering_dirty", "true").await.unwrap();
+        set_setting(&pool, "clustering_dirty", "true")
+            .await
+            .unwrap();
         assert_eq!(
-            get_setting(&pool, "clustering_dirty").await.unwrap().as_deref(),
+            get_setting(&pool, "clustering_dirty")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("true")
         );
 
-        set_setting(&pool, "clustering_dirty", "false").await.unwrap();
+        set_setting(&pool, "clustering_dirty", "false")
+            .await
+            .unwrap();
         assert_eq!(
-            get_setting(&pool, "clustering_dirty").await.unwrap().as_deref(),
+            get_setting(&pool, "clustering_dirty")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("false"),
             "second write must overwrite"
         );

@@ -38,6 +38,7 @@ impl Default for PipelineConfig {
 }
 
 use log::{debug, error, info, warn};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,7 +51,10 @@ async fn upgrade_thumbnails_and_emit(
 ) {
     use tauri::Emitter;
     if let Ok(changed) = crate::people::repo::upgrade_subject_thumbnails(pool).await {
-        debug!("[pipeline] Upgraded thumbnails for {} subjects", changed.len());
+        debug!(
+            "[pipeline] Upgraded thumbnails for {} subjects",
+            changed.len()
+        );
         for (_subject_id, face_id) in changed {
             if let Ok(Some((path, bbox))) =
                 crate::people::repo::get_face_with_image(pool, face_id).await
@@ -71,30 +75,15 @@ async fn upgrade_thumbnails_and_emit(
     let _ = app.emit("subjects_updated", ());
 }
 
-/// Synchronous "is there pending inference work" probe for the full-sweep cancel
-/// closure. Bridges the async queue query from the sync `Fn() -> bool` the
-/// clustering API expects. Requires a multi-thread runtime (tauri::async_runtime).
-/// On error we report "no work" so an idle sweep is allowed to finish rather than
-/// aborting spuriously.
-fn queue_has_work(pool: &sqlx::SqlitePool) -> bool {
-    tokio::task::block_in_place(|| {
-        tauri::async_runtime::block_on(async {
-            crate::pipeline::queue::count_pending_inference(pool)
-                .await
-                .unwrap_or(0)
-                > 0
-        })
-    })
-}
-
 async fn save_faces(
     pool: &sqlx::SqlitePool,
     image_id: i64,
     sub_qid: i64,
     sub_attempts: i32,
     faces: Vec<face_actor::FaceResult>,
-) {
+) -> Vec<i64> {
     let mut all_ok = true;
+    let mut vectorized: Vec<i64> = Vec::new();
     for (detection, face_emb, sharp) in faces {
         let bbox = detection.bbox;
         let rel_x = bbox.x1 as f64;
@@ -121,6 +110,8 @@ async fn save_faces(
                 {
                     error!("[pipeline] upsert_vector failed for face {face_id}: {e}");
                     all_ok = false;
+                } else {
+                    vectorized.push(face_id);
                 }
             }
             Err(e) => {
@@ -140,6 +131,7 @@ async fn save_faces(
         )
         .await;
     }
+    vectorized
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -204,22 +196,16 @@ pub async fn run_pipeline(
 
     info!("[pipeline] Pipeline background loop started, awaiting tasks...");
 
-    // Recover incremental-clustering cursor + dirty flag across restarts.
-    let mut last_clustered_face_id: i64 = crate::settings::repo::get_setting(&pool, "clustering_last_face_id")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    // Recover the dirty flag across restarts. Incremental edges are already
+    // persisted in `face_edges`, so the idle full sweep is the only state needed to
+    // reconcile work left in flight when the app last closed.
     let mut clustering_dirty: bool = crate::settings::repo::get_setting(&pool, "clustering_dirty")
         .await
         .ok()
         .flatten()
         .map(|s| s == "true")
         .unwrap_or(false);
-    info!(
-        "[pipeline] clustering state recovered: last_clustered_face_id={last_clustered_face_id}, dirty={clustering_dirty}"
-    );
+    info!("[pipeline] clustering state recovered: dirty={clustering_dirty}");
 
     loop {
         // Pull both queues
@@ -256,11 +242,31 @@ pub async fn run_pipeline(
             // preempts it instead of stalling.
             if clustering_dirty {
                 info!("[pipeline] Idle: running authoritative full clustering sweep...");
-                let pool_for_cancel = pool.clone();
-                let cancel_check = move || queue_has_work(&pool_for_cancel);
-                match crate::people::clustering::cluster_unassigned_faces(&pool, Some(&cancel_check))
-                    .await
-                {
+                // Non-blocking cancellation: a background poller flips the flag when
+                // new inference work lands, and the sweep reads it between faces.
+                let cancel_flag = Arc::new(AtomicBool::new(false));
+                let poll_flag = cancel_flag.clone();
+                let poll_pool = pool.clone();
+                let poller = tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        if crate::pipeline::queue::count_pending_inference(&poll_pool)
+                            .await
+                            .unwrap_or(0)
+                            > 0
+                        {
+                            poll_flag.store(true, AtomicOrdering::Relaxed);
+                            break;
+                        }
+                    }
+                });
+                let result = crate::people::clustering::cluster_unassigned_faces(
+                    &pool,
+                    Some(cancel_flag.as_ref()),
+                )
+                .await;
+                poller.abort();
+                match result {
                     Ok(Some(_)) => {
                         upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
                         clustering_dirty = false;
@@ -375,6 +381,9 @@ pub async fn run_pipeline(
 
         // Stage 2: dispatch embed + face, write results
         let mut processed_subject_work = false;
+        // Exact set of faces vectorized this iteration — drives the incremental
+        // edge update without relying on face-id ordering.
+        let mut batch_new_face_ids: Vec<i64> = Vec::new();
 
         // Phase A — pre-dispatch all embed requests before awaiting any reply.
         // This fills the embed actor's channel so its try_recv loop drains a
@@ -506,7 +515,9 @@ pub async fn run_pipeline(
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                let new_ids =
+                                    save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                batch_new_face_ids.extend(new_ids);
                                 processed_subject_work = true;
                             }
                         }
@@ -639,48 +650,24 @@ pub async fn run_pipeline(
         // immediately pulls the next batch. The authoritative full sweep is
         // deferred to the idle branch.
         if processed_subject_work {
-            match crate::people::repo::get_face_ids_with_vectors_above(&pool, last_clustered_face_id)
-                .await
-            {
-                Ok(new_ids) => {
-                    let max_new = new_ids.iter().copied().max();
-                    let incremental_result: anyhow::Result<()> = async {
-                        if !new_ids.is_empty() {
-                            crate::people::clustering::update_edges_incremental(&pool, &new_ids)
-                                .await?;
-                        }
-                        // Constraints/assignments may have changed even with no new
-                        // vectors, so always relabel.
-                        crate::people::clustering::relabel_from_edges(&pool).await?;
-                        Ok(())
-                    }
-                    .await;
+            let incremental_result: anyhow::Result<()> = async {
+                if !batch_new_face_ids.is_empty() {
+                    crate::people::clustering::update_edges_incremental(&pool, &batch_new_face_ids)
+                        .await?;
+                }
+                // Constraints/assignments may have changed even with no new
+                // vectors, so always relabel.
+                crate::people::clustering::relabel_from_edges(&pool).await?;
+                Ok(())
+            }
+            .await;
 
-                    match incremental_result {
-                        Ok(()) => {
-                            upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
-                            // Advance the cursor only on success so failed faces retry.
-                            if let Some(m) = max_new {
-                                last_clustered_face_id = m;
-                                let _ = crate::settings::repo::set_setting(
-                                    &pool,
-                                    "clustering_last_face_id",
-                                    &m.to_string(),
-                                )
-                                .await;
-                            }
-                            clustering_dirty = true;
-                            let _ = crate::settings::repo::set_setting(
-                                &pool,
-                                "clustering_dirty",
-                                "true",
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            error!("[pipeline] incremental clustering failed: {e}");
-                        }
-                    }
+            match incremental_result {
+                Ok(()) => {
+                    upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
+                    clustering_dirty = true;
+                    let _ =
+                        crate::settings::repo::set_setting(&pool, "clustering_dirty", "true").await;
                 }
                 Err(e) => error!("[pipeline] incremental clustering failed: {e}"),
             }
