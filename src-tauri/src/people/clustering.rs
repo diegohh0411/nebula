@@ -366,10 +366,18 @@ pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
     })
 }
 
-pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
+/// Full authoritative sweep. Serves as the idle backstop. Runs the read-heavy
+/// KNN first (so `face_edges` stays populated during the entire multi-minute
+/// computation), checks `cancel` periodically, and only swaps the edge graph
+/// once KNN completes uncancelled.
+///
+/// Returns `Ok(None)` if a `cancel()` check fired mid-KNN (new work entered the
+/// queue); the caller should leave `clustering_dirty` set and retry later.
+pub async fn cluster_unassigned_faces(
+    pool: &SqlitePool,
+    cancel: Option<&(dyn Fn() -> bool + Send + Sync)>,
+) -> Result<Option<ReclusterResult>> {
     let started = Instant::now();
-    // 1. Rebuild similarity edge graph
-    people_repo::clear_all_face_edges(pool).await?;
     let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
     let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
     info!(
@@ -378,40 +386,41 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
         face_subjects.len()
     );
 
-    // Build subject-aware knn map: face_id → Vec<(neighbor_id, cosine_sim)>.
-    // Same-subject neighbors are excluded so a dominant subject can't crowd
-    // cross-subject bridge edges out of the top-k (TT-57).
+    // KNN first — does NOT touch face_edges, so the table stays valid the whole time.
     let knn_started = Instant::now();
-    let all_knn = build_subject_aware_knn(
+    let all_knn = match build_subject_aware_knn(
         pool,
         &all_face_ids,
         &all_face_ids,
         &face_subjects,
         K_NEAREST,
-        None,
+        cancel,
     )
     .await?
-    .expect("build_subject_aware_knn returns Some when cancel is None");
+    {
+        Some(map) => map,
+        None => {
+            info!("[clustering] full sweep cancelled — new work entered the queue");
+            return Ok(None);
+        }
+    };
     debug!(
         "[clustering] knn graph built for {} faces in {:.1}s",
         all_face_ids.len(),
         knn_started.elapsed().as_secs_f32()
     );
 
-    // Compute mutual sim edges and persist
+    // Compute mutual edges and atomically swap the graph.
     let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
-    for &(fa, fb, weight) in &sim_edges {
-        people_repo::upsert_face_edge(pool, fa, fb, weight).await?;
-    }
+    people_repo::replace_all_face_edges(pool, &sim_edges).await?;
 
-    // Back half (constraints, union-find, labels, cleanup, thumbnails,
-    // suggestions) now reads the edges we just persisted.
+    // Back half reads the freshly-persisted edges.
     let result = relabel_from_edges(pool).await?;
     info!(
         "[clustering] recluster done in {:.1}s",
         started.elapsed().as_secs_f32()
     );
-    Ok(result)
+    Ok(Some(result))
 }
 
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
@@ -840,7 +849,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(face_f)
@@ -949,7 +958,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let subjects: Vec<Option<i64>> =
             sqlx::query_scalar("SELECT subject_id FROM faces ORDER BY id")
@@ -1158,7 +1167,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
             .fetch_one(&pool)
@@ -1223,7 +1232,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(orphan)
