@@ -1,7 +1,8 @@
 use anyhow::Result;
-use log::warn;
+use log::{debug, info, warn};
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use crate::people::repo as people_repo;
 
@@ -130,8 +131,20 @@ async fn build_subject_aware_knn(
         }
     }
 
+    // This loop runs one sqlite-vec KNN per face over the whole library, so on
+    // large collections it dominates the recluster cost (and, called after every
+    // pipeline batch, can make inference look "stuck"). Log periodic progress so
+    // a multi-minute pass shows movement instead of an apparent hang.
+    let total = all_face_ids.len();
+    let knn_start = Instant::now();
     let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
-    for &fid in all_face_ids {
+    for (i, &fid) in all_face_ids.iter().enumerate() {
+        if i > 0 && i % 250 == 0 {
+            debug!(
+                "[clustering] knn progress {i}/{total} faces in {:.1}s",
+                knn_start.elapsed().as_secs_f32()
+            );
+        }
         let own_subject = face_subjects.get(&fid).copied();
         // Over-fetch k + subject_size candidates. `knn` excludes the query face
         // itself, so at most (subject_size - 1) same-subject neighbors can
@@ -280,15 +293,27 @@ fn build_components_with_constraints(
 }
 
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
+    let started = Instant::now();
     // 1. Rebuild similarity edge graph
     people_repo::clear_all_face_edges(pool).await?;
     let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
     let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
+    info!(
+        "[clustering] recluster start: {} vectorized faces, {} already assigned",
+        all_face_ids.len(),
+        face_subjects.len()
+    );
 
     // Build subject-aware knn map: face_id → Vec<(neighbor_id, cosine_sim)>.
     // Same-subject neighbors are excluded so a dominant subject can't crowd
     // cross-subject bridge edges out of the top-k (TT-57).
+    let knn_started = Instant::now();
     let all_knn = build_subject_aware_knn(pool, &all_face_ids, &face_subjects, K_NEAREST).await?;
+    debug!(
+        "[clustering] knn graph built for {} faces in {:.1}s",
+        all_face_ids.len(),
+        knn_started.elapsed().as_secs_f32()
+    );
 
     // Compute mutual sim edges and persist
     let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
@@ -352,6 +377,14 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     let deleted = people_repo::delete_subjects_with_no_faces(pool).await?;
     let _ = people_repo::auto_assign_missing_thumbnails(pool).await;
     let _ = find_merge_suggestions(pool).await;
+
+    info!(
+        "[clustering] recluster done in {:.1}s: {} new clusters, {} noise faces, {} subjects deleted",
+        started.elapsed().as_secs_f32(),
+        new_clusters_count,
+        noise_count,
+        deleted
+    );
 
     Ok(ReclusterResult {
         clusters: new_clusters_count,
