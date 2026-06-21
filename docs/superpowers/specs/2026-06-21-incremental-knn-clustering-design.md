@@ -82,23 +82,38 @@ suggestions. Split the cheap "back half" out so it can be reused:
 - **`update_edges_incremental(pool, new_face_ids)`** — for the new faces only:
   - Build the affected set `S = new_face_ids ∪ {candidate neighbors of each new face}`.
   - Compute subject-aware KNN for every face in `S` into a local
-    `HashMap<i64, Vec<(i64, f32)>>` (reusing the existing `build_subject_aware_knn`
-    logic, restricted to `S`). Computing both endpoints' neighbor lists is what lets
-    `compute_mutual_sim_edges` evaluate mutuality correctly for the new edges.
+    `HashMap<i64, Vec<(i64, f32)>>` by calling `build_subject_aware_knn` with the full
+    list of all vectorized face IDs (for correct `subject_sizes` calculation) but
+    restricted to query only the subset `S`. Computing both endpoints' neighbor lists is
+    what lets `compute_mutual_sim_edges` evaluate mutuality correctly for the new edges.
   - Run `compute_mutual_sim_edges` over the local map and `upsert_face_edge` the
     results. Does **not** `clear_all_face_edges` and does **not** remove now-stale edges
     — the idle backstop reconciles those.
 
-- **`cluster_unassigned_faces(pool)`** (full, behavior unchanged) — `clear_all_face_edges`
-  → full `build_subject_aware_knn` over all faces → mutual edges → upsert →
-  `relabel_from_edges`. Serves as the idle backstop. Existing integration tests keep
-  calling this entry point and remain valid.
+- **`cluster_unassigned_faces(pool, cancel)`** (full sweep with cancellation support)
+  - Accepts an optional cancellation check closure: `cancel: Option<&dyn Fn() -> bool>`.
+  - Runs the read-heavy `build_subject_aware_knn` first over all faces. It checks the
+    `cancel` check periodically (e.g., every 250 faces) and aborts early if new work has
+    entered the queues.
+  - Once KNN is computed and verified not cancelled, it runs `clear_all_face_edges`,
+    computes mutual edges, and upserts them in a single transaction. This keeps the
+    `face_edges` table populated during the entire 300s KNN computation.
+  - Runs `relabel_from_edges`. Serves as the idle backstop.
 
-Note: thumbnail-upgrade + eager face-crop generation + `subjects_updated` emit currently
-live in `pipeline/mod.rs:554-585` around the clustering call, not inside
-`cluster_unassigned_faces`. Those stay in the pipeline layer and run after both the
-per-batch relabel and the idle full sweep (factor into a small local helper to avoid
-duplication).
+### Refactor `build_subject_aware_knn`
+
+Widen the signature to allow querying a subset of faces while still using the full set of
+face IDs to compute correct subject sizes:
+```rust
+async fn build_subject_aware_knn(
+    pool: &SqlitePool,
+    all_face_ids: &[i64],      // For computing correct subject sizes
+    faces_to_query: &[i64],    // The subset to actually run KNN queries for
+    face_subjects: &HashMap<i64, i64>,
+    k: usize,
+    cancel: Option<&dyn Fn() -> bool>, // Optional cancellation check
+) -> Result<HashMap<i64, Vec<(i64, f32)>>>
+```
 
 ### New repo helper (`people/repo.rs`)
 
@@ -109,28 +124,31 @@ pub async fn get_face_ids_with_vectors_above(pool: &SqlitePool, after_id: i64) -
 
 ### Pipeline loop changes (`pipeline/mod.rs`)
 
-- Add loop-scoped state before the `loop {`: `let mut last_clustered_face_id: i64 = 0;`
-  and `let mut clustering_dirty = false;`.
+- At startup, load `last_clustered_face_id` and `clustering_dirty` from database settings
+  (defaulting to `0` and `false` respectively).
 - Replace the inline block at `mod.rs:551-588`:
   - When `processed_subject_work`:
     1. `let new_ids = get_face_ids_with_vectors_above(&pool, last_clustered_face_id)`.
-    2. `update_edges_incremental(&pool, &new_ids)`.
-    3. `relabel_from_edges(&pool)`.
+    2. If `new_ids` is not empty, call `update_edges_incremental(&pool, &new_ids)`.
+    3. Call `relabel_from_edges(&pool)`.
     4. Run the thumbnail-upgrade/eager-crop/emit helper.
-    5. Advance `last_clustered_face_id` to the max of `new_ids` (when non-empty).
-    6. `clustering_dirty = true;`
+    5. On success, advance `last_clustered_face_id` to the max of `new_ids` (when non-empty)
+       and persist it to the DB settings.
+    6. Set `clustering_dirty = true` and persist it to the DB settings.
   - All steps are cheap → the loop immediately pulls the next batch.
-- In the idle branch (`mod.rs:190`, both queues empty): if `clustering_dirty`, run the
-  full `cluster_unassigned_faces(&pool)` once, run the thumbnail/emit helper, then set
-  `clustering_dirty = false`. (Keep the existing 2s sleep/continue.)
+- In the idle branch (`mod.rs:190`, both queues empty):
+  - If `clustering_dirty` is true:
+    1. Run `cluster_unassigned_faces(&pool, Some(&|| queue_has_work(&pool)))`.
+    2. If it completed without cancellation, run the thumbnail/emit helper, then set
+       `clustering_dirty = false` and persist it to the DB settings.
+  - (Keep the existing 2s sleep/continue.)
 
 ### High-water mark semantics
 
 Face IDs are autoincrement `rowid`s, so `> last_clustered_face_id` reliably selects
-faces vectorized since the last incremental pass. On a fresh process start
-`last_clustered_face_id = 0`; the first idle backstop (or first incremental pass) covers
-the backlog. Faces created out-of-band (e.g. user split) are reconciled by the next idle
-full sweep.
+faces vectorized since the last incremental pass. On startup, we recover the last
+successfully processed ID from settings. Faces created out-of-band (e.g. user split)
+are reconciled by the next idle full sweep.
 
 ## Data flow
 
@@ -141,14 +159,15 @@ import active:
         -> update_edges_incremental(new_ids)   # few KNN queries
         -> relabel_from_edges()                # in-mem union-find, ms
         -> thumbnails + emit subjects_updated   # live People view
-        -> last_clustered_face_id = max(new_ids); dirty = true
+        -> last_clustered_face_id = max(new_ids); dirty = true (persisted)
   (loop pulls next batch immediately)
 
 queue drained (idle):
   if dirty:
-    cluster_unassigned_faces()                 # full clear+resweep+relabel
-    thumbnails + emit
-    dirty = false
+    cluster_unassigned_faces(cancel_if_new_work) # full sweep (deferred clear)
+    if not cancelled:
+      thumbnails + emit
+      dirty = false (persisted)
   sleep(2s)
 ```
 
@@ -156,7 +175,9 @@ queue drained (idle):
 
 - `update_edges_incremental` / `relabel_from_edges` return `Result`; on `Err` log
   `[pipeline] incremental clustering failed: {e}` and continue the loop (do not block
-  inference). Matches today's `else { error!("[pipeline] Clustering failed") }` posture.
+  inference).
+- If the incremental pass fails, `last_clustered_face_id` is NOT advanced in settings, so
+  the next batch will retry processing the failed faces.
 - Empty `new_ids` (subject work that produced no new vectors): skip
   `update_edges_incremental`, still run `relabel_from_edges` (constraints/assignments may
   have changed). Cheap.
@@ -184,7 +205,8 @@ Reuse the existing in-memory sqlite-vec integration harness in `clustering.rs` t
 ## Files
 
 - `src-tauri/src/people/clustering.rs` — split into `relabel_from_edges`,
-  `update_edges_incremental`; refactor `cluster_unassigned_faces` to reuse the back half.
+  `update_edges_incremental`; refactor `cluster_unassigned_faces` and `build_subject_aware_knn`
+  to support subsets and cancellation.
 - `src-tauri/src/people/repo.rs` — add `get_face_ids_with_vectors_above`.
-- `src-tauri/src/pipeline/mod.rs` — high-water mark + dirty flag, per-batch incremental
-  path, idle backstop; extract thumbnail/emit helper.
+- `src-tauri/src/pipeline/mod.rs` — settings-backed state recovery, cancellation callback
+  definition, incremental path, and cancel-aware idle backstop; extract thumbnail/emit helper.
