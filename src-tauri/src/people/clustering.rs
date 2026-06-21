@@ -116,14 +116,13 @@ fn compute_mutual_sim_edges(
 async fn build_subject_aware_knn(
     pool: &SqlitePool,
     all_face_ids: &[i64],
+    faces_to_query: &[i64],
     face_subjects: &HashMap<i64, i64>,
     k: usize,
-) -> Result<HashMap<i64, Vec<(i64, f32)>>> {
-    // How many *vectorized* faces each subject owns — bounds how many
-    // same-subject neighbors could sit ahead of the first cross-subject one in
-    // the candidate list. Counted from `all_face_ids` (faces that actually have
-    // vectors and can appear in knn results), not from `face_subjects` alone,
-    // which may include assigned faces that were never vectorized.
+    cancel: Option<&(dyn Fn() -> bool + Send + Sync)>,
+) -> Result<Option<HashMap<i64, Vec<(i64, f32)>>>> {
+    // Subject sizes are counted from the *full* vectorized set so candidate_k is
+    // correct even when we only query a subset (incremental pass).
     let mut subject_sizes: HashMap<i64, usize> = HashMap::new();
     for &fid in all_face_ids {
         if let Some(&sid) = face_subjects.get(&fid) {
@@ -131,24 +130,23 @@ async fn build_subject_aware_knn(
         }
     }
 
-    // This loop runs one sqlite-vec KNN per face over the whole library, so on
-    // large collections it dominates the recluster cost (and, called after every
-    // pipeline batch, can make inference look "stuck"). Log periodic progress so
-    // a multi-minute pass shows movement instead of an apparent hang.
-    let total = all_face_ids.len();
+    let total = faces_to_query.len();
     let knn_start = Instant::now();
     let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
-    for (i, &fid) in all_face_ids.iter().enumerate() {
+    for (i, &fid) in faces_to_query.iter().enumerate() {
         if i > 0 && i % 250 == 0 {
+            if let Some(c) = cancel {
+                if c() {
+                    debug!("[clustering] knn cancelled at {i}/{total} faces");
+                    return Ok(None);
+                }
+            }
             debug!(
                 "[clustering] knn progress {i}/{total} faces in {:.1}s",
                 knn_start.elapsed().as_secs_f32()
             );
         }
         let own_subject = face_subjects.get(&fid).copied();
-        // Over-fetch k + subject_size candidates. `knn` excludes the query face
-        // itself, so at most (subject_size - 1) same-subject neighbors can
-        // appear; dropping them still leaves >= k cross-subject candidates.
         let candidate_k = match own_subject {
             Some(sid) => k + subject_sizes.get(&sid).copied().unwrap_or(0),
             None => k,
@@ -165,7 +163,7 @@ async fn build_subject_aware_knn(
                 .collect();
         all_knn.insert(fid, neighbors);
     }
-    Ok(all_knn)
+    Ok(Some(all_knn))
 }
 
 #[derive(Debug)]
@@ -308,7 +306,16 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     // Same-subject neighbors are excluded so a dominant subject can't crowd
     // cross-subject bridge edges out of the top-k (TT-57).
     let knn_started = Instant::now();
-    let all_knn = build_subject_aware_knn(pool, &all_face_ids, &face_subjects, K_NEAREST).await?;
+    let all_knn = build_subject_aware_knn(
+        pool,
+        &all_face_ids,
+        &all_face_ids,
+        &face_subjects,
+        K_NEAREST,
+        None,
+    )
+    .await?
+    .expect("build_subject_aware_knn returns Some when cancel is None");
     debug!(
         "[clustering] knn graph built for {} faces in {:.1}s",
         all_face_ids.len(),
