@@ -700,7 +700,6 @@ pub async fn add_cannot_link(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn upsert_face_edge(
     pool: &SqlitePool,
     face_a: i64,

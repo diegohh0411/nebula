@@ -373,7 +373,6 @@ pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
 /// The affected set `S = new_face_ids ∪ {candidate neighbors of each new face}`
 /// is queried so both endpoints of every candidate new edge have a neighbor list,
 /// which is what lets `compute_mutual_sim_edges` evaluate mutuality correctly.
-#[allow(dead_code)]
 pub async fn update_edges_incremental(pool: &SqlitePool, new_face_ids: &[i64]) -> Result<()> {
     if new_face_ids.is_empty() {
         return Ok(());
