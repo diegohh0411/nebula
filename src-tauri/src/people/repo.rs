@@ -725,7 +725,6 @@ pub async fn clear_all_face_edges(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 pub async fn get_all_similarity_edges(pool: &SqlitePool) -> Result<Vec<(i64, i64, f32)>> {
     let rows = sqlx::query("SELECT face_a, face_b, weight FROM face_edges")
         .fetch_all(pool)

@@ -290,6 +290,82 @@ fn build_components_with_constraints(
     uf
 }
 
+/// KNN-free back half of clustering: rebuild components from the *persisted*
+/// `face_edges` graph + constraints, apply label actions, then cleanup,
+/// thumbnails, and merge suggestions. In-memory union-find over all faces plus a
+/// few writes — milliseconds even at ~14k faces.
+pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
+    let started = Instant::now();
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
+    let sim_edges = people_repo::get_all_similarity_edges(pool).await?;
+    let must_links = people_repo::get_all_must_link_pairs(pool).await?;
+    let cannot_links = people_repo::get_all_cannot_link_pairs(pool).await?;
+
+    let mut uf =
+        build_components_with_constraints(sim_edges, &must_links, &cannot_links, &all_face_ids);
+    let components = uf.components(&all_face_ids);
+
+    let subject_rows = sqlx::query("SELECT id, name FROM subjects")
+        .fetch_all(pool)
+        .await?;
+    let subject_names: HashMap<i64, Option<String>> = subject_rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>("id"), r.get::<Option<String>, _>("name")))
+        .collect();
+
+    let actions = compute_label_actions(
+        &components,
+        &face_subjects,
+        &subject_names,
+        MIN_COMPONENT_SIZE,
+    );
+    let mut new_clusters_count = 0usize;
+    let mut noise_count = 0usize;
+    for action in actions {
+        match action {
+            LabelAction::AssignAll { faces, subject_id } => {
+                for fid in faces {
+                    people_repo::update_face_subject(pool, fid, Some(subject_id)).await?;
+                }
+            }
+            LabelAction::NewSubject { faces } => {
+                let sid = people_repo::insert_subject(pool, None, "person").await?;
+                for fid in &faces {
+                    people_repo::update_face_subject(pool, *fid, Some(sid)).await?;
+                }
+                new_clusters_count += 1;
+            }
+            LabelAction::Noise { faces } => {
+                for fid in &faces {
+                    people_repo::update_face_subject(pool, *fid, None).await?;
+                }
+                noise_count += faces.len();
+            }
+            LabelAction::SuggestMerge { .. } => {}
+        }
+    }
+
+    let deleted = people_repo::delete_subjects_with_no_faces(pool).await?;
+    let _ = people_repo::auto_assign_missing_thumbnails(pool).await;
+    let _ = find_merge_suggestions(pool).await;
+
+    info!(
+        "[clustering] relabel done in {:.1}s: {} new clusters, {} noise faces, {} subjects deleted",
+        started.elapsed().as_secs_f32(),
+        new_clusters_count,
+        noise_count,
+        deleted
+    );
+
+    Ok(ReclusterResult {
+        clusters: new_clusters_count,
+        noise: noise_count,
+        merged: 0,
+        deleted,
+    })
+}
+
 pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
     let started = Instant::now();
     // 1. Rebuild similarity edge graph
@@ -328,77 +404,14 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
         people_repo::upsert_face_edge(pool, fa, fb, weight).await?;
     }
 
-    // 2. Load constraints
-    let must_links = people_repo::get_all_must_link_pairs(pool).await?;
-    let cannot_links = people_repo::get_all_cannot_link_pairs(pool).await?;
-
-    // 3. Build Union-Find with constraint enforcement
-    let mut uf =
-        build_components_with_constraints(sim_edges, &must_links, &cannot_links, &all_face_ids);
-
-    // 4. Compute components and load subject names (assignments loaded in step 1)
-    let components = uf.components(&all_face_ids);
-    let subject_rows = sqlx::query("SELECT id, name FROM subjects")
-        .fetch_all(pool)
-        .await?;
-    let subject_names: HashMap<i64, Option<String>> = subject_rows
-        .into_iter()
-        .map(|r| (r.get::<i64, _>("id"), r.get::<Option<String>, _>("name")))
-        .collect();
-
-    // 5. Apply label rules
-    let actions = compute_label_actions(
-        &components,
-        &face_subjects,
-        &subject_names,
-        MIN_COMPONENT_SIZE,
-    );
-    let mut new_clusters_count = 0usize;
-    let mut noise_count = 0usize;
-
-    for action in actions {
-        match action {
-            LabelAction::AssignAll { faces, subject_id } => {
-                for fid in faces {
-                    people_repo::update_face_subject(pool, fid, Some(subject_id)).await?;
-                }
-            }
-            LabelAction::NewSubject { faces } => {
-                let sid = people_repo::insert_subject(pool, None, "person").await?;
-                for fid in &faces {
-                    people_repo::update_face_subject(pool, *fid, Some(sid)).await?;
-                }
-                new_clusters_count += 1;
-            }
-            LabelAction::Noise { faces } => {
-                for fid in &faces {
-                    people_repo::update_face_subject(pool, *fid, None).await?;
-                }
-                noise_count += faces.len();
-            }
-            LabelAction::SuggestMerge { .. } => {} // handled by find_merge_suggestions
-        }
-    }
-
-    // 6. Cleanup
-    let deleted = people_repo::delete_subjects_with_no_faces(pool).await?;
-    let _ = people_repo::auto_assign_missing_thumbnails(pool).await;
-    let _ = find_merge_suggestions(pool).await;
-
+    // Back half (constraints, union-find, labels, cleanup, thumbnails,
+    // suggestions) now reads the edges we just persisted.
+    let result = relabel_from_edges(pool).await?;
     info!(
-        "[clustering] recluster done in {:.1}s: {} new clusters, {} noise faces, {} subjects deleted",
-        started.elapsed().as_secs_f32(),
-        new_clusters_count,
-        noise_count,
-        deleted
+        "[clustering] recluster done in {:.1}s",
+        started.elapsed().as_secs_f32()
     );
-
-    Ok(ReclusterResult {
-        clusters: new_clusters_count,
-        noise: noise_count,
-        merged: 0,
-        deleted,
-    })
+    Ok(result)
 }
 
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
@@ -1221,6 +1234,60 @@ mod tests {
             assigned,
             Some(alex),
             "unassigned face inside a crowded subject's cluster must be assigned to that subject"
+        );
+    }
+
+    #[tokio::test]
+    async fn relabel_from_edges_assigns_unlabeled_in_single_subject_component() {
+        let pool = make_integration_pool().await;
+
+        // One named subject with an assigned anchor face.
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let anchor: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
+        )
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // An unlabeled face.
+        let orphan: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, NULL, 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Vectors so both appear in get_all_face_ids_with_vectors.
+        for fid in [anchor, orphan] {
+            sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+                .bind(fid)
+                .bind(emb_bytes(&[1.0f32, 0.0, 0.0]))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // Seed the edge directly — relabel must consume persisted edges, no KNN.
+        people_repo::upsert_face_edge(&pool, anchor, orphan, 0.9)
+            .await
+            .unwrap();
+
+        let result = relabel_from_edges(&pool).await.unwrap();
+        assert_eq!(result.noise, 0);
+
+        let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+            .bind(orphan)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            assigned,
+            Some(alice),
+            "orphan in a single-subject component must be assigned to that subject"
         );
     }
 }
