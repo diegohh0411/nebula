@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 pub use crate::models::{Face, Subject};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CoverageReport {
@@ -20,4 +20,12 @@ pub struct SubjectCoverage {
     pub subject_id: i64,
     pub name: String,
     pub frequency: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SavedReport {
+    pub id: i64,
+    pub name: String,
+    pub folder_id: i64,
+    pub tag_ids: Vec<i64>,
 }

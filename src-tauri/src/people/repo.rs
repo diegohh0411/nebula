@@ -2,10 +2,12 @@
 use crate::library::repo::row_to_image;
 use crate::models::Image;
 use crate::models::{MergeSuggestion, SubjectDetail};
-use crate::people::models::{CoverageReport, CoverageSummary, Face, Subject, SubjectCoverage};
+use crate::people::models::{CoverageReport, CoverageSummary, Face, SavedReport, Subject, SubjectCoverage};
 use anyhow::Result;
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 
 pub async fn insert_subject(
     pool: &SqlitePool,
@@ -862,7 +864,7 @@ pub async fn get_folder_coverage(
 ) -> anyhow::Result<CoverageReport> {
     // 1. Get all target subjects from the selected tags
     let mut targets = std::collections::HashMap::new();
-    
+
     if !tag_ids.is_empty() {
         let q = format!(
             "SELECT DISTINCT s.id, s.name 
@@ -871,12 +873,12 @@ pub async fn get_folder_coverage(
              WHERE st.tag_id IN ({})",
             tag_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
         );
-        
+
         let mut query = sqlx::query(&q);
         for id in tag_ids {
             query = query.bind(id);
         }
-        
+
         let rows = query.fetch_all(pool).await?;
         for row in rows {
             let id: i64 = row.get("id");
@@ -892,7 +894,7 @@ pub async fn get_folder_coverage(
          JOIN images i ON i.id = f.image_id
          JOIN subjects s ON s.id = f.subject_id
          WHERE i.folder_id = ? AND f.subject_id IS NOT NULL
-         GROUP BY f.subject_id"
+         GROUP BY f.subject_id",
     )
     .bind(folder_id)
     .fetch_all(pool)
@@ -900,7 +902,7 @@ pub async fn get_folder_coverage(
 
     let mut present_targets = Vec::new();
     let mut others_found = Vec::new();
-    
+
     // To track which targets we've seen
     let mut seen_targets = std::collections::HashSet::new();
 
@@ -935,7 +937,7 @@ pub async fn get_folder_coverage(
             });
         }
     }
-    
+
     // Sort lists by name
     missing_targets.sort_by(|a, b| a.name.cmp(&b.name));
     present_targets.sort_by(|a, b| a.name.cmp(&b.name));
@@ -952,4 +954,76 @@ pub async fn get_folder_coverage(
         present_targets,
         others_found,
     })
+}
+
+pub async fn create_saved_report(
+    pool: &sqlx::SqlitePool,
+    name: &str,
+    folder_id: i64,
+    tag_ids: &[i64],
+) -> anyhow::Result<SavedReport> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    let mut tx = pool.begin().await?;
+
+    let report_id = sqlx::query("INSERT INTO saved_reports (name, folder_id, added_at) VALUES (?, ?, ?)")
+        .bind(name)
+        .bind(folder_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+
+    for tag_id in tag_ids {
+        sqlx::query("INSERT INTO saved_report_tags (report_id, tag_id) VALUES (?, ?)")
+            .bind(report_id)
+            .bind(tag_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(SavedReport {
+        id: report_id,
+        name: name.to_string(),
+        folder_id,
+        tag_ids: tag_ids.to_vec(),
+    })
+}
+
+pub async fn list_saved_reports(pool: &sqlx::SqlitePool) -> anyhow::Result<Vec<SavedReport>> {
+    let rows = sqlx::query("SELECT id, name, folder_id FROM saved_reports ORDER BY added_at DESC")
+        .fetch_all(pool)
+        .await?;
+
+    let mut reports = Vec::new();
+    for row in rows {
+        let id: i64 = row.get("id");
+        let name: String = row.get("name");
+        let folder_id: i64 = row.get("folder_id");
+
+        let tag_rows = sqlx::query("SELECT tag_id FROM saved_report_tags WHERE report_id = ?")
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+            
+        let tag_ids = tag_rows.iter().map(|r| r.get("tag_id")).collect();
+
+        reports.push(SavedReport {
+            id,
+            name,
+            folder_id,
+            tag_ids,
+        });
+    }
+
+    Ok(reports)
+}
+
+pub async fn delete_saved_report(pool: &sqlx::SqlitePool, report_id: i64) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM saved_reports WHERE id = ?")
+        .bind(report_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
