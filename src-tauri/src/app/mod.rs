@@ -120,6 +120,7 @@ pub fn run() {
             crate::commands::search,
             crate::commands::get_processing_status,
             crate::people::commands::list_subjects,
+            crate::people::commands::get_folder_coverage,
             crate::people::commands::name_subject,
             crate::people::commands::list_faces,
             crate::people::commands::list_faces_for_image,

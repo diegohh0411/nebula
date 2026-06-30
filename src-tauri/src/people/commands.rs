@@ -1,7 +1,7 @@
 use crate::{
     media::thumbnail,
     models::{Face, MergeSuggestion, NameSubjectResult, SearchResult, Subject, SubjectMatch},
-    people::repo,
+    people::{models::CoverageReport, repo},
     tags::repo as tags_repo,
     AppState,
 };
@@ -13,6 +13,17 @@ fn map_err<E: std::fmt::Display>(e: E) -> String {
 #[tauri::command]
 pub async fn list_subjects(state: tauri::State<'_, AppState>) -> Result<Vec<Subject>, String> {
     repo::list_all_subjects(&state.pool).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn get_folder_coverage(
+    folder_id: i64,
+    tag_ids: Vec<i64>,
+    state: tauri::State<'_, AppState>,
+) -> Result<CoverageReport, String> {
+    repo::get_folder_coverage(&state.pool, folder_id, &tag_ids)
+        .await
+        .map_err(map_err)
 }
 
 #[tauri::command]
