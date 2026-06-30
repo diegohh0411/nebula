@@ -2,7 +2,7 @@
 use crate::library::repo::row_to_image;
 use crate::models::Image;
 use crate::models::{MergeSuggestion, SubjectDetail};
-use crate::people::models::{Face, Subject};
+use crate::people::models::{CoverageReport, CoverageSummary, Face, Subject, SubjectCoverage};
 use anyhow::Result;
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
@@ -853,4 +853,103 @@ pub async fn reset_all_subject_data(pool: &SqlitePool) -> Result<()> {
 
     tx.commit().await?;
     Ok(())
+}
+
+pub async fn get_folder_coverage(
+    pool: &sqlx::SqlitePool,
+    folder_id: i64,
+    tag_ids: &[i64],
+) -> anyhow::Result<CoverageReport> {
+    // 1. Get all target subjects from the selected tags
+    let mut targets = std::collections::HashMap::new();
+    
+    if !tag_ids.is_empty() {
+        let q = format!(
+            "SELECT DISTINCT s.id, s.name 
+             FROM subjects s 
+             JOIN subject_tags st ON st.subject_id = s.id 
+             WHERE st.tag_id IN ({})",
+            tag_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+        );
+        
+        let mut query = sqlx::query(&q);
+        for id in tag_ids {
+            query = query.bind(id);
+        }
+        
+        let rows = query.fetch_all(pool).await?;
+        for row in rows {
+            let id: i64 = row.get("id");
+            let name: Option<String> = row.get("name");
+            targets.insert(id, name.unwrap_or_else(|| "Unknown".to_string()));
+        }
+    }
+
+    // 2. Get frequency of all subjects in the given folder
+    let folder_subjects = sqlx::query(
+        "SELECT f.subject_id, s.name, COUNT(f.id) as frequency 
+         FROM faces f
+         JOIN images i ON i.id = f.image_id
+         JOIN subjects s ON s.id = f.subject_id
+         WHERE i.folder_id = ? AND f.subject_id IS NOT NULL
+         GROUP BY f.subject_id"
+    )
+    .bind(folder_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut present_targets = Vec::new();
+    let mut others_found = Vec::new();
+    
+    // To track which targets we've seen
+    let mut seen_targets = std::collections::HashSet::new();
+
+    for row in folder_subjects {
+        let subj_id: i64 = row.get("subject_id");
+        let name: Option<String> = row.get("name");
+        let name = name.unwrap_or_else(|| "Unknown".to_string());
+        let freq: i64 = row.get("frequency");
+
+        let coverage = SubjectCoverage {
+            subject_id: subj_id,
+            name,
+            frequency: freq as usize,
+        };
+
+        if targets.contains_key(&subj_id) {
+            present_targets.push(coverage);
+            seen_targets.insert(subj_id);
+        } else {
+            others_found.push(coverage);
+        }
+    }
+
+    // 3. Find missing targets
+    let mut missing_targets = Vec::new();
+    for (id, name) in targets.iter() {
+        if !seen_targets.contains(id) {
+            missing_targets.push(SubjectCoverage {
+                subject_id: *id,
+                name: name.clone(),
+                frequency: 0,
+            });
+        }
+    }
+    
+    // Sort lists by name
+    missing_targets.sort_by(|a, b| a.name.cmp(&b.name));
+    present_targets.sort_by(|a, b| a.name.cmp(&b.name));
+    others_found.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let summary = CoverageSummary {
+        total_targets: targets.len(),
+        present_targets: present_targets.len(),
+    };
+
+    Ok(CoverageReport {
+        summary,
+        missing_targets,
+        present_targets,
+        others_found,
+    })
 }
