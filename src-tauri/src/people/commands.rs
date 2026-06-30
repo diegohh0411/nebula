@@ -1,7 +1,7 @@
 use crate::{
     media::thumbnail,
     models::{Face, MergeSuggestion, NameSubjectResult, SearchResult, Subject, SubjectMatch},
-    people::{models::CoverageReport, repo},
+    people::{models::{CoverageReport, SavedReport}, repo},
     tags::repo as tags_repo,
     AppState,
 };
@@ -294,6 +294,37 @@ pub async fn search_subjects(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SubjectMatch>, String> {
     tags_repo::search_subjects_matching(&state.pool, &query)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn create_saved_report(
+    name: String,
+    folder_id: i64,
+    tag_ids: Vec<i64>,
+    state: tauri::State<'_, AppState>,
+) -> Result<SavedReport, String> {
+    repo::create_saved_report(&state.pool, &name, folder_id, &tag_ids)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn list_saved_reports(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SavedReport>, String> {
+    repo::list_saved_reports(&state.pool)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn delete_saved_report(
+    id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    repo::delete_saved_report(&state.pool, id)
         .await
         .map_err(map_err)
 }
