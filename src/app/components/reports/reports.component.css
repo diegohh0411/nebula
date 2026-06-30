@@ -1,0 +1,17 @@
+.reports-container { padding: 24px; max-width: 1000px; margin: 0 auto; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+h2 { font-size: 24px; font-weight: 600; color: #fff; margin: 0; }
+.btn-primary { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 6px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.btn-primary:hover { background: #2563eb; }
+.btn-secondary { background: transparent; color: #94a3b8; border: 1px solid #475569; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+.btn-icon { background: transparent; border: none; color: #ef4444; cursor: pointer; opacity: 0.7; }
+.btn-icon:hover { opacity: 1; }
+.create-form { background: #1e293b; padding: 16px; border-radius: 8px; display: flex; gap: 12px; margin-bottom: 24px; align-items: center; border: 1px solid #334155; }
+.create-form input, .create-form select { background: #0f172a; border: 1px solid #334155; color: white; padding: 8px; border-radius: 4px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; cursor: pointer; transition: border-color 0.2s; }
+.card:hover { border-color: #3b82f6; }
+.card-header { display: flex; justify-content: space-between; margin-bottom: 12px; }
+.card-header h3 { margin: 0; font-size: 16px; color: #f8fafc; }
+.card-body p { margin: 4px 0; font-size: 14px; color: #94a3b8; }
+.card-body strong { color: #cbd5e1; }

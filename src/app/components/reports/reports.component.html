@@ -1,0 +1,45 @@
+<div class="reports-container">
+  <div class="header">
+    <h2>Saved Reports</h2>
+    <button class="btn-primary" (click)="isCreating.set(true)">
+      <lucide-icon name="plus" size="16"></lucide-icon> New Report
+    </button>
+  </div>
+
+  @if (isCreating()) {
+    <div class="create-form">
+      <input type="text" placeholder="Report Name" [ngModel]="newName()" (ngModelChange)="newName.set($event)">
+      <select [ngModel]="newFolderId()" (ngModelChange)="newFolderId.set($event * 1)">
+        <option [value]="null">Select Folder...</option>
+        @for (f of photos.folders(); track f.id) {
+          <option [value]="f.id">{{ getFolderName(f.id) }}</option>
+        }
+      </select>
+      <select [ngModel]="newTagId()" (ngModelChange)="newTagId.set($event * 1)">
+        <option [value]="null">Select Tag (Roster)...</option>
+        @for (t of tags(); track t.id) {
+          <option [value]="t.id">{{ t.name }}</option>
+        }
+      </select>
+      <button class="btn-primary" (click)="createReport()">Save & Run</button>
+      <button class="btn-secondary" (click)="isCreating.set(false)">Cancel</button>
+    </div>
+  }
+
+  <div class="grid">
+    @for (rep of reports(); track rep.id) {
+      <div class="card" [routerLink]="['/reports', rep.id]">
+        <div class="card-header">
+          <h3>{{ rep.name }}</h3>
+          <button class="btn-icon" (click)="deleteReport(rep.id, $event)">
+            <lucide-icon name="trash-2" size="16"></lucide-icon>
+          </button>
+        </div>
+        <div class="card-body">
+          <p><strong>Folder:</strong> {{ getFolderName(rep.folder_id) }}</p>
+          <p><strong>Tags:</strong> {{ getTagsDesc(rep.tag_ids) }}</p>
+        </div>
+      </div>
+    }
+  </div>
+</div>
