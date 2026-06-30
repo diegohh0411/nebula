@@ -6,7 +6,9 @@
     }
   </div>
 
-  @if (coverage(); as cov) {
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  } @else if (coverage(); as cov) {
     <div class="summary">
       <strong>Coverage Summary:</strong> {{ cov.summary.present_targets }} of {{ cov.summary.total_targets }} target subjects present.
     </div>

@@ -18,28 +18,40 @@ export class ReportDetailComponent implements OnInit {
 
   protected report = signal<SavedReport | null>(null);
   protected coverage = signal<CoverageReport | null>(null);
+  protected error = signal<string | null>(null);
   
   protected missingMatches = signal<SubjectMatch[]>([]);
   protected presentMatches = signal<SubjectMatch[]>([]);
   protected othersMatches = signal<SubjectMatch[]>([]);
 
   async ngOnInit() {
-    const id = Number(this.route.snapshot.paramMap.get('id'));
-    if (!id) return;
+    try {
+      const id = Number(this.route.snapshot.paramMap.get('id'));
+      if (!id) {
+        this.error.set('Report not found');
+        return;
+      }
 
-    const reports = await this.photos.listSavedReports();
-    const rep = reports.find(r => r.id === id);
-    if (!rep) return;
-    this.report.set(rep);
+      const reports = await this.photos.listSavedReports();
+      const rep = reports.find(r => r.id === id);
+      if (!rep) {
+        this.error.set('Report not found');
+        return;
+      }
+      this.report.set(rep);
 
-    await this.photos.loadSubjects();
+      await this.photos.loadSubjects();
 
-    const cov = await this.photos.getFolderCoverage(rep.folder_id, rep.tag_ids);
-    this.coverage.set(cov);
+      const cov = await this.photos.getFolderCoverage(rep.folder_id, rep.tag_ids);
+      this.coverage.set(cov);
 
-    this.missingMatches.set(this.mapToMatches(cov.missing_targets));
-    this.presentMatches.set(this.mapToMatches(cov.present_targets));
-    this.othersMatches.set(this.mapToMatches(cov.others_found));
+      this.missingMatches.set(this.mapToMatches(cov.missing_targets));
+      this.presentMatches.set(this.mapToMatches(cov.present_targets));
+      this.othersMatches.set(this.mapToMatches(cov.others_found));
+    } catch (err: any) {
+      console.error('Failed to load report detail:', err);
+      this.error.set(err.message || 'An error occurred loading the report');
+    }
   }
 
   private mapToMatches(covList: SubjectCoverage[]): SubjectMatch[] {
@@ -50,7 +62,7 @@ export class ReportDetailComponent implements OnInit {
         // Fallback for missing subjects not loaded in cache
         subject = { id: item.subject_id, name: item.name, thumbnail_face_id: null, type: 'person', added_at: 0 };
       }
-      const fakeTag: Tag = { id: -1, name: `${item.frequency} photos`, added_at: 0 };
+      const fakeTag: Tag = { id: -1, name: `${item.frequency} photo${item.frequency === 1 ? '' : 's'}`, added_at: 0 };
       return { subject, tags: [fakeTag] };
     });
   }
