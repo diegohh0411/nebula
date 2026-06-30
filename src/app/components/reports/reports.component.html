@@ -9,19 +9,19 @@
   @if (isCreating()) {
     <div class="create-form">
       <input type="text" placeholder="Report Name" [ngModel]="newName()" (ngModelChange)="newName.set($event)">
-      <select [ngModel]="newFolderId()" (ngModelChange)="newFolderId.set($event * 1)">
-        <option [value]="null">Select Folder...</option>
+      <select [ngModel]="newFolderId()" (ngModelChange)="newFolderId.set($event)">
+        <option [ngValue]="null">Select Folder...</option>
         @for (f of photos.folders(); track f.id) {
-          <option [value]="f.id">{{ getFolderName(f.id) }}</option>
+          <option [ngValue]="f.id">{{ getFolderName(f.id) }}</option>
         }
       </select>
-      <select [ngModel]="newTagId()" (ngModelChange)="newTagId.set($event * 1)">
-        <option [value]="null">Select Tag (Roster)...</option>
+      <select [ngModel]="newTagId()" (ngModelChange)="newTagId.set($event)">
+        <option [ngValue]="null">Select Tag (Roster)...</option>
         @for (t of tags(); track t.id) {
-          <option [value]="t.id">{{ t.name }}</option>
+          <option [ngValue]="t.id">{{ t.name }}</option>
         }
       </select>
-      <button class="btn-primary" (click)="createReport()">Save & Run</button>
+      <button class="btn-primary" (click)="createReport()" [disabled]="!newFolderId() || !newTagId() || !newName().trim()">Save & Run</button>
       <button class="btn-secondary" (click)="isCreating.set(false)">Cancel</button>
     </div>
   }

@@ -2,7 +2,8 @@
 .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
 h2 { font-size: 24px; font-weight: 600; color: #fff; margin: 0; }
 .btn-primary { background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 6px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.btn-primary:hover { background: #2563eb; }
+.btn-primary:hover:not(:disabled) { background: #2563eb; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-secondary { background: transparent; color: #94a3b8; border: 1px solid #475569; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
 .btn-icon { background: transparent; border: none; color: #ef4444; cursor: pointer; opacity: 0.7; }
 .btn-icon:hover { opacity: 1; }

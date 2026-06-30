@@ -39,8 +39,13 @@ export class ReportsComponent implements OnInit {
 
   protected async deleteReport(id: number, e: Event) {
     e.stopPropagation();
-    await this.photos.deleteSavedReport(id);
-    await this.loadData();
+    try {
+      await this.photos.deleteSavedReport(id);
+      await this.loadData();
+    } catch (err) {
+      console.error('Failed to delete report:', err);
+      alert('Failed to delete report. See console for details.');
+    }
   }
 
   protected getFolderName(id: number): string {
@@ -60,9 +65,16 @@ export class ReportsComponent implements OnInit {
     const name = this.newName().trim();
     if (!fId || !tId || !name) return;
 
-    const rep = await this.photos.createSavedReport(name, fId, [tId]);
-    this.isCreating.set(false);
-    this.newName.set('');
-    void this.router.navigate(['/reports', rep.id]);
+    try {
+      const rep = await this.photos.createSavedReport(name, fId, [tId]);
+      this.isCreating.set(false);
+      this.newName.set('');
+      this.newFolderId.set(null);
+      this.newTagId.set(null);
+      void this.router.navigate(['/reports', rep.id]);
+    } catch (err) {
+      console.error('Failed to create report:', err);
+      alert('Failed to create report. See console for details.');
+    }
   }
 }
