@@ -992,22 +992,30 @@ pub async fn create_saved_report(
 }
 
 pub async fn list_saved_reports(pool: &sqlx::SqlitePool) -> anyhow::Result<Vec<SavedReport>> {
-    let rows = sqlx::query("SELECT id, name, folder_id FROM saved_reports ORDER BY added_at DESC")
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT r.id, r.name, r.folder_id, GROUP_CONCAT(t.tag_id) as tags 
+         FROM saved_reports r 
+         LEFT JOIN saved_report_tags t ON r.id = t.report_id 
+         GROUP BY r.id 
+         ORDER BY r.added_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
 
     let mut reports = Vec::new();
     for row in rows {
         let id: i64 = row.get("id");
         let name: String = row.get("name");
         let folder_id: i64 = row.get("folder_id");
+        let tags_str: Option<String> = row.get("tags");
 
-        let tag_rows = sqlx::query("SELECT tag_id FROM saved_report_tags WHERE report_id = ?")
-            .bind(id)
-            .fetch_all(pool)
-            .await?;
-            
-        let tag_ids = tag_rows.iter().map(|r| r.get("tag_id")).collect();
+        let tag_ids = tags_str
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|p| p.parse::<i64>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         reports.push(SavedReport {
             id,

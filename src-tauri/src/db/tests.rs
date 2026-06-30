@@ -1420,37 +1420,87 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
 #[tokio::test]
 async fn test_get_folder_coverage() {
     let pool = init_test_pool().await;
-    
+
     // Insert mock data
     sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'path', 0)")
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO subjects (id, name, type, added_at) VALUES (1, 'Alice', 'person', 0), (2, 'Bob', 'person', 0), (3, 'Charlie', 'person', 0)")
         .execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Cabin A', 'cabin a', 0)")
         .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO subject_tags (subject_id, tag_id, added_at) VALUES (1, 1, 0), (2, 1, 0)")
-        .execute(&pool).await.unwrap(); // Alice and Bob in Cabin A
-        
+    sqlx::query(
+        "INSERT INTO subject_tags (subject_id, tag_id, added_at) VALUES (1, 1, 0), (2, 1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap(); // Alice and Bob in Cabin A
+
     sqlx::query("INSERT INTO images (id, folder_id, path, file_hash, hash_status, file_size, mtime, semantic_analysis_done, subject_analysis_done, added_at, updated_at) VALUES (1, 1, 'p1', 'h1', 'ok', 0, 0, false, false, 0, 0)")
         .execute(&pool).await.unwrap();
-        
+
     sqlx::query("INSERT INTO faces (id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 1, 0,0,1,1,0), (2, 1, 3, 0,0,1,1,0), (3, 1, 1, 0,0,1,1,0)")
         .execute(&pool).await.unwrap(); // Alice has 2 faces, Charlie has 1 face, Bob has 0
-        
-    let report = crate::people::repo::get_folder_coverage(&pool, 1, &[1]).await.unwrap();
-    
+
+    let report = crate::people::repo::get_folder_coverage(&pool, 1, &[1])
+        .await
+        .unwrap();
+
     assert_eq!(report.summary.total_targets, 2); // Alice and Bob
     assert_eq!(report.summary.present_targets, 1); // Alice
-    
+
     assert_eq!(report.missing_targets.len(), 1);
     assert_eq!(report.missing_targets[0].name, "Bob");
     assert_eq!(report.missing_targets[0].frequency, 0);
-    
+
     assert_eq!(report.present_targets.len(), 1);
     assert_eq!(report.present_targets[0].name, "Alice");
     assert_eq!(report.present_targets[0].frequency, 2);
-    
+
     assert_eq!(report.others_found.len(), 1);
     assert_eq!(report.others_found[0].name, "Charlie");
     assert_eq!(report.others_found[0].frequency, 1);
+}
+
+#[tokio::test]
+async fn test_saved_report_crud() {
+    let pool = init_test_pool().await;
+
+    // Create a folder and some tags for FK constraints
+    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'path', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    
+    sqlx::query("INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Tag1', 'tag1', 0), (2, 'Tag2', 'tag2', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let report_name = "My Test Report";
+    let folder_id = 1;
+    let tag_ids = vec![1, 2];
+
+    // 1. Create
+    let created = crate::people::repo::create_saved_report(&pool, report_name, folder_id, &tag_ids).await.unwrap();
+    assert_eq!(created.name, report_name);
+    assert_eq!(created.folder_id, folder_id);
+    assert_eq!(created.tag_ids, tag_ids);
+
+    // 2. List
+    let reports = crate::people::repo::list_saved_reports(&pool).await.unwrap();
+    assert_eq!(reports.len(), 1);
+    let listed = &reports[0];
+    assert_eq!(listed.id, created.id);
+    assert_eq!(listed.name, report_name);
+    assert_eq!(listed.folder_id, folder_id);
+    assert_eq!(listed.tag_ids, tag_ids);
+
+    // 3. Delete
+    crate::people::repo::delete_saved_report(&pool, created.id).await.unwrap();
+
+    // Verify deletion
+    let reports_after = crate::people::repo::list_saved_reports(&pool).await.unwrap();
+    assert!(reports_after.is_empty());
 }
