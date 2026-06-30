@@ -1,39 +1,50 @@
-# Folder Coverage Report Frontend Design
+# Folder Coverage Report & Saved Reports Design
 
 ## Overview
-This design implements the frontend for the Folder Coverage Report, a feature allowing users to check which subjects from a specific target list (roster) are present or missing within a selected folder, as well as identifying non-target subjects found in that folder.
+This design expands the Folder Coverage Report to allow users to create, save, and run multiple report configurations. Users can select a folder and a set of target tags, save this configuration to the database, and run it to see which subjects are present, missing, or found outside the target list.
+
+## Database & Backend (New Additions)
+### Schema
+- `saved_reports` table:
+  - `id` (INTEGER PRIMARY KEY)
+  - `name` (TEXT)
+  - `folder_id` (INTEGER)
+  - `added_at` (INTEGER)
+- `saved_report_tags` table:
+  - `report_id` (INTEGER)
+  - `tag_id` (INTEGER)
+
+### Tauri Commands
+- `create_saved_report(name: String, folder_id: i64, tag_ids: Vec<i64>) -> Result<SavedReport>`
+- `list_saved_reports() -> Result<Vec<SavedReport>>`
+- `delete_saved_report(id: i64) -> Result<()>`
+- (The existing `get_folder_coverage(folder_id, tag_ids)` will remain as the engine to run the report).
 
 ## Route and Navigation
-- **Route:** A new route `/reports` will be added to `src/app/app.routes.ts`.
-- **Sidebar:** A "Reports" navigation link will be added to `src/app/components/sidebar/sidebar.component.html` and `.ts`, making the page easily accessible.
+- **Route:** `/reports` (List view) and `/reports/:id` (Run/View view).
+- **Sidebar:** A "Reports" navigation link in `SidebarComponent`.
 
-## Service Additions (`PhotoService`)
-- Add `getFolderCoverage(folderId: number, tagIds: number[]): Promise<CoverageReport>` to call the Tauri `get_folder_coverage` command.
-- Add interfaces for `CoverageSummary`, `SubjectCoverage`, and `CoverageReport` based on the backend structs.
+## UI Component (`ReportsComponent` & `ReportDetailComponent`)
 
-## UI Component (`ReportsComponent`)
-**File:** `src/app/components/reports/reports.component.ts`
+### Flow B Architecture
+1. **Reports Index (`/reports`):**
+   - Displays a grid or list of saved report cards.
+   - Each card shows the report name, folder name, and target tags.
+   - Includes a "Delete" button on each card.
+   - A prominent "Create New Report" button opens a modal or navigates to a builder view to select a Folder, select Tags, name the report, and save it.
 
-### 1. Controls
-The top of the page will contain inputs to configure the report:
-- **Folder Selector:** A native `<select>` dropdown populated by `this.photos.folders()`.
-- **Target Tags:** A UI (e.g. multi-select or list of toggleable pills) populated by `this.photos.listTags()`.
-- **Run Button:** (Optional/Implied) The report can auto-generate on selection or require a "Run Report" button. We will use auto-generate when both a folder and at least one tag are selected.
+2. **Report Detail (`/reports/:id`):**
+   - Fetches the saved report configuration (folder_id, tag_ids).
+   - Automatically calls `getFolderCoverage(folder_id, tag_ids)`.
+   - Displays the report name as the header.
 
-### 2. Summary
-A brief text summary displaying `CoverageSummary.present_targets` out of `CoverageSummary.total_targets`.
-
-### 3. Sections
-The report will display three distinct vertical sections:
-1. **Missing:** Subjects from the target list that have 0 frequency in the folder.
-2. **Present:** Subjects from the target list that have > 0 frequency in the folder.
-3. **Others Found:** Subjects found in the folder that are not part of the target list.
-
-### 4. Interactive Cards (Card Mapping)
-- The results will use the existing `SubjectPersonCardComponent`.
-- **Data Mapping:** Since the backend returns `SubjectCoverage` (which lacks `thumbnail_face_id`), the frontend will cross-reference the returned `subject_id` with `this.photos.subjects()` to retrieve the full `Subject` object required by `SubjectPersonCardComponent`.
-- **Frequency Badge:** To display the number of photos without altering the `SubjectPersonCardComponent`, the frontend will inject a pseudo-tag (e.g., `{ id: -1, name: "15 photos", added_at: 0 }`) into the `tags` array of the `SubjectMatch` passed to the component.
-
-## Dependencies and State
-- The component will depend on `PhotoService` for data.
-- It will require `this.photos.loadSubjects()` to be executed (or rely on the app having loaded it) so that full subject objects are available for the cards.
+### Results Display (Inside Report Detail)
+- **Summary:** Quick text showing "Targets present: X / Y".
+- **Sections:** Three distinct vertical sections:
+  1. **Missing:** Target subjects with 0 frequency.
+  2. **Present:** Target subjects with > 0 frequency.
+  3. **Others Found:** Non-target subjects found in the folder.
+- **Interactive Cards:**
+  - Uses the existing `SubjectPersonCardComponent`.
+  - Frontend looks up full `Subject` data from `photoService.subjects()`.
+  - **Frequency Badge:** A pseudo-tag (e.g. `{ id: -1, name: "15 photos", added_at: 0 }`) is injected into the `tags` array so the card naturally displays the photo count without needing modifications.
