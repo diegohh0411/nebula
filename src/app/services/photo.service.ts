@@ -19,6 +19,8 @@ import {
   SubjectMatch,
   SubjectPhotoFace,
   FaceBBox,
+  CoverageReport,
+  SavedReport,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -454,6 +456,19 @@ export class PhotoService {
 
   async getTagSubjects(tagId: number): Promise<SubjectMatch[]> {
     return await invoke<SubjectMatch[]>('get_tag_subjects', { tagId });
+  }
+
+  async getFolderCoverage(folderId: number, tagIds: number[]): Promise<CoverageReport> {
+    return await invoke<CoverageReport>('get_folder_coverage', { folderId, tagIds });
+  }
+  async createSavedReport(name: string, folderId: number, tagIds: number[]): Promise<SavedReport> {
+    return await invoke<SavedReport>('create_saved_report', { name, folderId, tagIds });
+  }
+  async listSavedReports(): Promise<SavedReport[]> {
+    return await invoke<SavedReport[]>('list_saved_reports');
+  }
+  async deleteSavedReport(id: number): Promise<void> {
+    await invoke('delete_saved_report', { id });
   }
 }
 

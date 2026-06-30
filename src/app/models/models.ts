@@ -163,3 +163,25 @@ export interface ModelDownloadEvent {
   done: boolean;
   error: string | null;
 }
+
+export interface CoverageSummary {
+  total_targets: number;
+  present_targets: number;
+}
+export interface SubjectCoverage {
+  subject_id: number;
+  name: string;
+  frequency: number;
+}
+export interface CoverageReport {
+  summary: CoverageSummary;
+  missing_targets: SubjectCoverage[];
+  present_targets: SubjectCoverage[];
+  others_found: SubjectCoverage[];
+}
+export interface SavedReport {
+  id: number;
+  name: string;
+  folder_id: number;
+  tag_ids: number[];
+}
