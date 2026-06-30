@@ -1,0 +1,10 @@
+.report-detail { padding: 24px; max-width: 1200px; margin: 0 auto; }
+.header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.back-link { display: flex; align-items: center; gap: 4px; color: #94a3b8; text-decoration: none; font-size: 14px; }
+.back-link:hover { color: #f8fafc; }
+h2 { margin: 0; font-size: 24px; color: #fff; }
+.summary { background: #1e293b; border: 1px solid #334155; padding: 16px; border-radius: 8px; margin-bottom: 24px; color: #e2e8f0; font-size: 16px; }
+.section { margin-bottom: 32px; }
+h3 { font-size: 18px; color: #cbd5e1; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #334155; }
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+.loading { color: #94a3b8; font-size: 16px; }

@@ -1,0 +1,45 @@
+<div class="report-detail">
+  <div class="header">
+    <a routerLink="/reports" class="back-link"><lucide-icon name="arrow-left" size="16"></lucide-icon> Back</a>
+    @if (report(); as rep) {
+      <h2>{{ rep.name }}</h2>
+    }
+  </div>
+
+  @if (coverage(); as cov) {
+    <div class="summary">
+      <strong>Coverage Summary:</strong> {{ cov.summary.present_targets }} of {{ cov.summary.total_targets }} target subjects present.
+    </div>
+
+    <div class="sections">
+      <div class="section">
+        <h3>Missing Targets ({{ cov.missing_targets.length }})</h3>
+        <div class="cards-grid">
+          @for (match of missingMatches(); track match.subject.id) {
+            <app-subject-person-card [match]="match" />
+          }
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Present Targets ({{ cov.present_targets.length }})</h3>
+        <div class="cards-grid">
+          @for (match of presentMatches(); track match.subject.id) {
+            <app-subject-person-card [match]="match" />
+          }
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Others Found ({{ cov.others_found.length }})</h3>
+        <div class="cards-grid">
+          @for (match of othersMatches(); track match.subject.id) {
+            <app-subject-person-card [match]="match" />
+          }
+        </div>
+      </div>
+    </div>
+  } @else {
+    <div class="loading">Generating report...</div>
+  }
+</div>
