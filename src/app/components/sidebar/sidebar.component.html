@@ -40,6 +40,16 @@
       <span class="folder-name">Tags</span>
     </app-sidebar-item>
 
+    <app-sidebar-item
+      [isActive]="isReportsActive()"
+      routerLink="/reports"
+    >
+      <span class="folder-icon">
+        <lucide-icon name="file-text" size="14"></lucide-icon>
+      </span>
+      <span class="folder-name">Reports</span>
+    </app-sidebar-item>
+
     <div class="sidebar-divider"></div>
 
     <span class="sidebar-title sidebar-title--sub">Folders</span>
