@@ -53,6 +53,35 @@ impl log::Log for FileLogger {
     fn flush(&self) {}
 }
 
+/// Default log directive used when `RUST_LOG` is unset: keep our own crate at
+/// DEBUG, surface everything else at INFO, and mute sqlx's per-statement DEBUG
+/// spam (it logs every query under the `sqlx` target) down to WARN so slow-query
+/// warnings still come through. Override with `RUST_LOG`, e.g.
+/// `RUST_LOG=info,sqlx::query=debug` to bring statement logging back.
+const DEFAULT_DIRECTIVES: &str = "info,nebula_lib=debug,sqlx=warn";
+
+/// Build the level/target filter from an optional directive string (typically
+/// `RUST_LOG`). When `None`, [`DEFAULT_DIRECTIVES`] is used.
+fn build_filter(directives: Option<&str>) -> env_filter::Filter {
+    env_filter::Builder::new()
+        .parse(directives.unwrap_or(DEFAULT_DIRECTIVES))
+        .build()
+}
+
+pub fn init(data_dir: &std::path::Path) {
+    let log_path = data_dir.join("nebula.log");
+    let filter = build_filter(std::env::var("RUST_LOG").ok().as_deref());
+    // Set the global max level so `log` can cheaply short-circuit disabled
+    // records before they ever reach our `enabled`/`matches` checks.
+    let max_level = filter.filter();
+    let logger = FileLogger {
+        log_path,
+        file_mutex: Mutex::new(()),
+        filter,
+    };
+    let _ = log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(max_level));
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_filter;
@@ -92,33 +121,4 @@ mod tests {
         assert!(enabled(&f, Level::Debug, "sqlx::query"));
         assert!(enabled(&f, Level::Trace, "anything::at::all"));
     }
-}
-
-/// Default log directive used when `RUST_LOG` is unset: keep our own crate at
-/// DEBUG, surface everything else at INFO, and mute sqlx's per-statement DEBUG
-/// spam (it logs every query under the `sqlx` target) down to WARN so slow-query
-/// warnings still come through. Override with `RUST_LOG`, e.g.
-/// `RUST_LOG=info,sqlx::query=debug` to bring statement logging back.
-const DEFAULT_DIRECTIVES: &str = "info,nebula_lib=debug,sqlx=warn";
-
-/// Build the level/target filter from an optional directive string (typically
-/// `RUST_LOG`). When `None`, [`DEFAULT_DIRECTIVES`] is used.
-fn build_filter(directives: Option<&str>) -> env_filter::Filter {
-    env_filter::Builder::new()
-        .parse(directives.unwrap_or(DEFAULT_DIRECTIVES))
-        .build()
-}
-
-pub fn init(data_dir: &std::path::Path) {
-    let log_path = data_dir.join("nebula.log");
-    let filter = build_filter(std::env::var("RUST_LOG").ok().as_deref());
-    // Set the global max level so `log` can cheaply short-circuit disabled
-    // records before they ever reach our `enabled`/`matches` checks.
-    let max_level = filter.filter();
-    let logger = FileLogger {
-        log_path,
-        file_mutex: Mutex::new(()),
-        filter,
-    };
-    let _ = log::set_boxed_logger(Box::new(logger)).map(|()| log::set_max_level(max_level));
 }

@@ -38,8 +38,42 @@ impl Default for PipelineConfig {
 }
 
 use log::{debug, error, info, warn};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Upgrade each subject's profile crop to its best-quality face, eagerly generate
+/// the crop file, then emit `subjects_updated` so the People view refreshes.
+async fn upgrade_thumbnails_and_emit(
+    pool: &sqlx::SqlitePool,
+    data_dir: &std::path::Path,
+    app: &tauri::AppHandle,
+) {
+    use tauri::Emitter;
+    if let Ok(changed) = crate::people::repo::upgrade_subject_thumbnails(pool).await {
+        debug!(
+            "[pipeline] Upgraded thumbnails for {} subjects",
+            changed.len()
+        );
+        for (_subject_id, face_id) in changed {
+            if let Ok(Some((path, bbox))) =
+                crate::people::repo::get_face_with_image(pool, face_id).await
+            {
+                let dest = crate::media::thumbnail::face_crop_path_for(data_dir, face_id);
+                if let Err(e) = crate::media::thumbnail::generate_face_crop(
+                    std::path::PathBuf::from(path),
+                    dest,
+                    bbox,
+                )
+                .await
+                {
+                    error!("[pipeline] eager crop gen failed for face {face_id}: {e}");
+                }
+            }
+        }
+    }
+    let _ = app.emit("subjects_updated", ());
+}
 
 async fn save_faces(
     pool: &sqlx::SqlitePool,
@@ -47,8 +81,9 @@ async fn save_faces(
     sub_qid: i64,
     sub_attempts: i32,
     faces: Vec<face_actor::FaceResult>,
-) {
+) -> Vec<i64> {
     let mut all_ok = true;
+    let mut vectorized: Vec<i64> = Vec::new();
     for (detection, face_emb, sharp) in faces {
         let bbox = detection.bbox;
         let rel_x = bbox.x1 as f64;
@@ -75,6 +110,8 @@ async fn save_faces(
                 {
                     error!("[pipeline] upsert_vector failed for face {face_id}: {e}");
                     all_ok = false;
+                } else {
+                    vectorized.push(face_id);
                 }
             }
             Err(e) => {
@@ -94,6 +131,7 @@ async fn save_faces(
         )
         .await;
     }
+    vectorized
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -158,6 +196,17 @@ pub async fn run_pipeline(
 
     info!("[pipeline] Pipeline background loop started, awaiting tasks...");
 
+    // Recover the dirty flag across restarts. Incremental edges are already
+    // persisted in `face_edges`, so the idle full sweep is the only state needed to
+    // reconcile work left in flight when the app last closed.
+    let mut clustering_dirty: bool = crate::settings::repo::get_setting(&pool, "clustering_dirty")
+        .await
+        .ok()
+        .flatten()
+        .map(|s| s == "true")
+        .unwrap_or(false);
+    info!("[pipeline] clustering state recovered: dirty={clustering_dirty}");
+
     loop {
         // Pull both queues
         let sem_batch = match crate::pipeline::queue::get_queue_batch(
@@ -188,6 +237,50 @@ pub async fn run_pipeline(
         };
 
         if sem_batch.is_empty() && sub_batch.is_empty() {
+            // Idle backstop: one authoritative full sweep reconciles any drift
+            // accumulated by the incremental path. Cancellable so new import work
+            // preempts it instead of stalling.
+            if clustering_dirty {
+                info!("[pipeline] Idle: running authoritative full clustering sweep...");
+                // Non-blocking cancellation: a background poller flips the flag when
+                // new inference work lands, and the sweep reads it between faces.
+                let cancel_flag = Arc::new(AtomicBool::new(false));
+                let poll_flag = cancel_flag.clone();
+                let poll_pool = pool.clone();
+                let poller = tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        if crate::pipeline::queue::count_pending_inference(&poll_pool)
+                            .await
+                            .unwrap_or(0)
+                            > 0
+                        {
+                            poll_flag.store(true, AtomicOrdering::Relaxed);
+                            break;
+                        }
+                    }
+                });
+                let result = crate::people::clustering::cluster_unassigned_faces(
+                    &pool,
+                    Some(cancel_flag.as_ref()),
+                )
+                .await;
+                poller.abort();
+                match result {
+                    Ok(Some(_)) => {
+                        upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
+                        clustering_dirty = false;
+                        let _ =
+                            crate::settings::repo::set_setting(&pool, "clustering_dirty", "false")
+                                .await;
+                        info!("[pipeline] Idle full sweep complete.");
+                    }
+                    Ok(None) => {
+                        info!("[pipeline] Idle full sweep cancelled — new work arrived.");
+                    }
+                    Err(e) => error!("[pipeline] idle full sweep failed: {e}"),
+                }
+            }
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
@@ -288,6 +381,9 @@ pub async fn run_pipeline(
 
         // Stage 2: dispatch embed + face, write results
         let mut processed_subject_work = false;
+        // Exact set of faces vectorized this iteration — drives the incremental
+        // edge update without relying on face-id ordering.
+        let mut batch_new_face_ids: Vec<i64> = Vec::new();
 
         // Phase A — pre-dispatch all embed requests before awaiting any reply.
         // This fills the embed actor's channel so its try_recv loop drains a
@@ -419,7 +515,9 @@ pub async fn run_pipeline(
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                let new_ids =
+                                    save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                batch_new_face_ids.extend(new_ids);
                                 processed_subject_work = true;
                             }
                         }
@@ -547,44 +645,31 @@ pub async fn run_pipeline(
         .await
         .ok();
 
-        // Auto-recluster only when subject work was done this iteration
+        // Incremental clustering on the critical path: only edges for newly
+        // vectorized faces, then an in-memory relabel. Both are cheap, so the loop
+        // immediately pulls the next batch. The authoritative full sweep is
+        // deferred to the idle branch.
         if processed_subject_work {
-            info!("[pipeline] Auto-clustering unassigned faces...");
-            if let Ok(_result) = crate::people::clustering::cluster_unassigned_faces(&pool).await {
-                info!("[pipeline] Clustering complete. Upgrading subject thumbnails...");
-                // Upgrade each subject's profile crop to its best-quality face, then
-                // generate the crop file eagerly so the People grid has it before the
-                // frontend asks (closes the lazy-generation first-paint delay).
-                if let Ok(changed) = crate::people::repo::upgrade_subject_thumbnails(&pool).await {
-                    info!(
-                        "[pipeline] Upgraded thumbnails for {} subjects",
-                        changed.len()
-                    );
-                    for (_subject_id, face_id) in changed {
-                        if let Ok(Some((path, bbox))) =
-                            crate::people::repo::get_face_with_image(&pool, face_id).await
-                        {
-                            let dest =
-                                crate::media::thumbnail::face_crop_path_for(&data_dir, face_id);
-                            debug!(
-                                "[pipeline] Eagerly generating face crop for face_id {} to {:?}",
-                                face_id, dest
-                            );
-                            if let Err(e) = crate::media::thumbnail::generate_face_crop(
-                                std::path::PathBuf::from(path),
-                                dest,
-                                bbox,
-                            )
-                            .await
-                            {
-                                error!("[pipeline] eager crop gen failed for face {face_id}: {e}");
-                            }
-                        }
-                    }
+            let incremental_result: anyhow::Result<()> = async {
+                if !batch_new_face_ids.is_empty() {
+                    crate::people::clustering::update_edges_incremental(&pool, &batch_new_face_ids)
+                        .await?;
                 }
-                let _ = app.emit("subjects_updated", ());
-            } else {
-                error!("[pipeline] Clustering failed");
+                // Constraints/assignments may have changed even with no new
+                // vectors, so always relabel.
+                crate::people::clustering::relabel_from_edges(&pool).await?;
+                Ok(())
+            }
+            .await;
+
+            match incremental_result {
+                Ok(()) => {
+                    upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
+                    clustering_dirty = true;
+                    let _ =
+                        crate::settings::repo::set_setting(&pool, "clustering_dirty", "true").await;
+                }
+                Err(e) => error!("[pipeline] incremental clustering failed: {e}"),
             }
         }
     }

@@ -2,6 +2,7 @@ use anyhow::Result;
 use log::{debug, info, warn};
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::people::repo as people_repo;
@@ -116,14 +117,13 @@ fn compute_mutual_sim_edges(
 async fn build_subject_aware_knn(
     pool: &SqlitePool,
     all_face_ids: &[i64],
+    faces_to_query: &[i64],
     face_subjects: &HashMap<i64, i64>,
     k: usize,
-) -> Result<HashMap<i64, Vec<(i64, f32)>>> {
-    // How many *vectorized* faces each subject owns — bounds how many
-    // same-subject neighbors could sit ahead of the first cross-subject one in
-    // the candidate list. Counted from `all_face_ids` (faces that actually have
-    // vectors and can appear in knn results), not from `face_subjects` alone,
-    // which may include assigned faces that were never vectorized.
+    cancel: Option<&AtomicBool>,
+) -> Result<Option<HashMap<i64, Vec<(i64, f32)>>>> {
+    // Subject sizes are counted from the *full* vectorized set so candidate_k is
+    // correct even when we only query a subset (incremental pass).
     let mut subject_sizes: HashMap<i64, usize> = HashMap::new();
     for &fid in all_face_ids {
         if let Some(&sid) = face_subjects.get(&fid) {
@@ -131,14 +131,17 @@ async fn build_subject_aware_knn(
         }
     }
 
-    // This loop runs one sqlite-vec KNN per face over the whole library, so on
-    // large collections it dominates the recluster cost (and, called after every
-    // pipeline batch, can make inference look "stuck"). Log periodic progress so
-    // a multi-minute pass shows movement instead of an apparent hang.
-    let total = all_face_ids.len();
+    let total = faces_to_query.len();
     let knn_start = Instant::now();
     let mut all_knn: HashMap<i64, Vec<(i64, f32)>> = HashMap::new();
-    for (i, &fid) in all_face_ids.iter().enumerate() {
+    for (i, &fid) in faces_to_query.iter().enumerate() {
+        // Cheap atomic read per face: responsive cancellation without blocking.
+        if let Some(c) = cancel {
+            if c.load(Ordering::Relaxed) {
+                debug!("[clustering] knn cancelled at {i}/{total} faces");
+                return Ok(None);
+            }
+        }
         if i > 0 && i % 250 == 0 {
             debug!(
                 "[clustering] knn progress {i}/{total} faces in {:.1}s",
@@ -146,9 +149,6 @@ async fn build_subject_aware_knn(
             );
         }
         let own_subject = face_subjects.get(&fid).copied();
-        // Over-fetch k + subject_size candidates. `knn` excludes the query face
-        // itself, so at most (subject_size - 1) same-subject neighbors can
-        // appear; dropping them still leaves >= k cross-subject candidates.
         let candidate_k = match own_subject {
             Some(sid) => k + subject_sizes.get(&sid).copied().unwrap_or(0),
             None => k,
@@ -165,7 +165,7 @@ async fn build_subject_aware_knn(
                 .collect();
         all_knn.insert(fid, neighbors);
     }
-    Ok(all_knn)
+    Ok(Some(all_knn))
 }
 
 #[derive(Debug)]
@@ -292,45 +292,22 @@ fn build_components_with_constraints(
     uf
 }
 
-pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResult> {
+/// KNN-free back half of clustering: rebuild components from the *persisted*
+/// `face_edges` graph + constraints, apply label actions, then cleanup,
+/// thumbnails, and merge suggestions. In-memory union-find over all faces plus a
+/// few writes — milliseconds even at ~14k faces.
+pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
     let started = Instant::now();
-    // 1. Rebuild similarity edge graph
-    people_repo::clear_all_face_edges(pool).await?;
     let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
     let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
-    info!(
-        "[clustering] recluster start: {} vectorized faces, {} already assigned",
-        all_face_ids.len(),
-        face_subjects.len()
-    );
-
-    // Build subject-aware knn map: face_id → Vec<(neighbor_id, cosine_sim)>.
-    // Same-subject neighbors are excluded so a dominant subject can't crowd
-    // cross-subject bridge edges out of the top-k (TT-57).
-    let knn_started = Instant::now();
-    let all_knn = build_subject_aware_knn(pool, &all_face_ids, &face_subjects, K_NEAREST).await?;
-    debug!(
-        "[clustering] knn graph built for {} faces in {:.1}s",
-        all_face_ids.len(),
-        knn_started.elapsed().as_secs_f32()
-    );
-
-    // Compute mutual sim edges and persist
-    let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
-    for &(fa, fb, weight) in &sim_edges {
-        people_repo::upsert_face_edge(pool, fa, fb, weight).await?;
-    }
-
-    // 2. Load constraints
+    let sim_edges = people_repo::get_all_similarity_edges(pool).await?;
     let must_links = people_repo::get_all_must_link_pairs(pool).await?;
     let cannot_links = people_repo::get_all_cannot_link_pairs(pool).await?;
 
-    // 3. Build Union-Find with constraint enforcement
     let mut uf =
         build_components_with_constraints(sim_edges, &must_links, &cannot_links, &all_face_ids);
-
-    // 4. Compute components and load subject names (assignments loaded in step 1)
     let components = uf.components(&all_face_ids);
+
     let subject_rows = sqlx::query("SELECT id, name FROM subjects")
         .fetch_all(pool)
         .await?;
@@ -339,7 +316,6 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
         .map(|r| (r.get::<i64, _>("id"), r.get::<Option<String>, _>("name")))
         .collect();
 
-    // 5. Apply label rules
     let actions = compute_label_actions(
         &components,
         &face_subjects,
@@ -348,7 +324,6 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
     );
     let mut new_clusters_count = 0usize;
     let mut noise_count = 0usize;
-
     for action in actions {
         match action {
             LabelAction::AssignAll { faces, subject_id } => {
@@ -369,17 +344,16 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
                 }
                 noise_count += faces.len();
             }
-            LabelAction::SuggestMerge { .. } => {} // handled by find_merge_suggestions
+            LabelAction::SuggestMerge { .. } => {}
         }
     }
 
-    // 6. Cleanup
     let deleted = people_repo::delete_subjects_with_no_faces(pool).await?;
     let _ = people_repo::auto_assign_missing_thumbnails(pool).await;
     let _ = find_merge_suggestions(pool).await;
 
     info!(
-        "[clustering] recluster done in {:.1}s: {} new clusters, {} noise faces, {} subjects deleted",
+        "[clustering] relabel done in {:.1}s: {} new clusters, {} noise faces, {} subjects deleted",
         started.elapsed().as_secs_f32(),
         new_clusters_count,
         noise_count,
@@ -392,6 +366,114 @@ pub async fn cluster_unassigned_faces(pool: &SqlitePool) -> Result<ReclusterResu
         merged: 0,
         deleted,
     })
+}
+
+/// Cheap per-batch edge update: compute mutual-kNN edges for the *new* faces and
+/// their immediate neighbors only, and upsert them. Does NOT clear edges and does
+/// NOT remove now-stale edges — the idle full sweep reconciles any drift.
+///
+/// The affected set `S = new_face_ids ∪ {candidate neighbors of each new face}`
+/// is queried so both endpoints of every candidate new edge have a neighbor list,
+/// which is what lets `compute_mutual_sim_edges` evaluate mutuality correctly.
+pub async fn update_edges_incremental(pool: &SqlitePool, new_face_ids: &[i64]) -> Result<()> {
+    if new_face_ids.is_empty() {
+        return Ok(());
+    }
+
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
+
+    // Build the affected set S.
+    let mut affected: HashSet<i64> = new_face_ids.iter().copied().collect();
+    for &fid in new_face_ids {
+        // Over-fetch by one: knn excludes the query face itself.
+        let neighbors = crate::people::face_store::knn_cosine_sim(pool, fid, K_NEAREST + 1).await?;
+        for (nid, _) in neighbors {
+            affected.insert(nid);
+        }
+    }
+    let faces_to_query: Vec<i64> = affected.into_iter().collect();
+
+    // Subject-aware KNN over S only (full id list still drives subject_sizes).
+    let local_knn = build_subject_aware_knn(
+        pool,
+        &all_face_ids,
+        &faces_to_query,
+        &face_subjects,
+        K_NEAREST,
+        None,
+    )
+    .await?
+    .expect("build_subject_aware_knn returns Some when cancel is None");
+
+    let edges = compute_mutual_sim_edges(&local_knn, TAU_SIM);
+    for &(fa, fb, weight) in &edges {
+        people_repo::upsert_face_edge(pool, fa, fb, weight).await?;
+    }
+    debug!(
+        "[clustering] incremental: {} new faces, {} queried, {} edges upserted",
+        new_face_ids.len(),
+        faces_to_query.len(),
+        edges.len()
+    );
+    Ok(())
+}
+
+/// Full authoritative sweep. Serves as the idle backstop. Runs the read-heavy
+/// KNN first (so `face_edges` stays populated during the entire multi-minute
+/// computation), checks `cancel` periodically, and only swaps the edge graph
+/// once KNN completes uncancelled.
+///
+/// Returns `Ok(None)` if a `cancel()` check fired mid-KNN (new work entered the
+/// queue); the caller should leave `clustering_dirty` set and retry later.
+pub async fn cluster_unassigned_faces(
+    pool: &SqlitePool,
+    cancel: Option<&AtomicBool>,
+) -> Result<Option<ReclusterResult>> {
+    let started = Instant::now();
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
+    info!(
+        "[clustering] recluster start: {} vectorized faces, {} already assigned",
+        all_face_ids.len(),
+        face_subjects.len()
+    );
+
+    // KNN first — does NOT touch face_edges, so the table stays valid the whole time.
+    let knn_started = Instant::now();
+    let all_knn = match build_subject_aware_knn(
+        pool,
+        &all_face_ids,
+        &all_face_ids,
+        &face_subjects,
+        K_NEAREST,
+        cancel,
+    )
+    .await?
+    {
+        Some(map) => map,
+        None => {
+            info!("[clustering] full sweep cancelled — new work entered the queue");
+            return Ok(None);
+        }
+    };
+    debug!(
+        "[clustering] knn graph built for {} faces in {:.1}s",
+        all_face_ids.len(),
+        knn_started.elapsed().as_secs_f32()
+    );
+
+    // Compute mutual edges and atomically swap the graph.
+    let sim_edges = compute_mutual_sim_edges(&all_knn, TAU_SIM);
+    people_repo::replace_all_face_edges(pool, &sim_edges).await?;
+
+    // Back half reads the freshly-persisted edges.
+    let result = relabel_from_edges(pool).await?;
+    info!(
+        "[clustering] recluster done in {:.1}s",
+        started.elapsed().as_secs_f32()
+    );
+    Ok(Some(result))
 }
 
 pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
@@ -820,7 +902,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(face_f)
@@ -929,7 +1011,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let subjects: Vec<Option<i64>> =
             sqlx::query_scalar("SELECT subject_id FROM faces ORDER BY id")
@@ -1070,6 +1152,181 @@ mod tests {
         v.iter().map(|x| x / n).collect()
     }
 
+    /// Group all vectorized faces by subject, returning sorted groups of face ids.
+    /// Subject *identity* is ignored — only the partition structure is compared,
+    /// which is the right equivalence for from-scratch unassigned imports.
+    async fn subject_partition(pool: &sqlx::SqlitePool) -> Vec<Vec<i64>> {
+        let rows: Vec<(i64, Option<i64>)> =
+            sqlx::query_as("SELECT id, subject_id FROM faces ORDER BY id")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let mut groups: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut singletons: Vec<Vec<i64>> = Vec::new();
+        for (fid, sid) in rows {
+            match sid {
+                Some(s) => groups.entry(s).or_default().push(fid),
+                None => singletons.push(vec![fid]),
+            }
+        }
+        let mut out: Vec<Vec<i64>> = groups.into_values().collect();
+        out.extend(singletons);
+        for g in &mut out {
+            g.sort_unstable();
+        }
+        out.sort();
+        out
+    }
+
+    async fn insert_face_with_vector(
+        pool: &sqlx::SqlitePool,
+        subject_id: Option<i64>,
+        v: &[f32],
+    ) -> i64 {
+        let fid: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
+        )
+        .bind(subject_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fid)
+            .bind(emb_bytes(&unit(v)))
+            .execute(pool)
+            .await
+            .unwrap();
+        fid
+    }
+
+    #[tokio::test]
+    async fn update_edges_incremental_links_new_face_into_existing_cluster() {
+        let pool = make_integration_pool().await;
+        let alex: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alex', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Two assigned Alex faces already vectorized.
+        let _a1 = insert_face_with_vector(&pool, Some(alex), &[1.0, 0.0, 0.0]).await;
+        let _a2 = insert_face_with_vector(&pool, Some(alex), &[1.0, 0.02, 0.0]).await;
+        // A new, unassigned face inside the cluster.
+        let new_face = insert_face_with_vector(&pool, None, &[1.0, 0.01, 0.0]).await;
+
+        update_edges_incremental(&pool, &[new_face]).await.unwrap();
+
+        // An edge between the new face and an Alex face must have been upserted.
+        let edge_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM face_edges WHERE face_a = ? OR face_b = ?")
+                .bind(new_face)
+                .bind(new_face)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            edge_count >= 1,
+            "new face must gain at least one mutual edge"
+        );
+
+        // And relabel must then assign it to Alex.
+        relabel_from_edges(&pool).await.unwrap();
+        let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+            .bind(new_face)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(assigned, Some(alex));
+    }
+
+    #[tokio::test]
+    async fn incremental_then_idle_converges_to_full_sweep() {
+        // Two well-separated clusters: {A1,A2} near x-axis, {B1,B2} near y-axis.
+        let va1 = [1.0f32, 0.0, 0.0];
+        let va2 = [0.99f32, 0.14, 0.0];
+        let vb1 = [0.0f32, 1.0, 0.0];
+        let vb2 = [0.14f32, 0.99, 0.0];
+
+        // Pool 1: incremental in two batches, then a final full sweep.
+        let inc = make_integration_pool().await;
+        let f1 = insert_face_with_vector(&inc, None, &va1).await;
+        let f2 = insert_face_with_vector(&inc, None, &va2).await;
+        update_edges_incremental(&inc, &[f1, f2]).await.unwrap();
+        relabel_from_edges(&inc).await.unwrap();
+        let f3 = insert_face_with_vector(&inc, None, &vb1).await;
+        let f4 = insert_face_with_vector(&inc, None, &vb2).await;
+        update_edges_incremental(&inc, &[f3, f4]).await.unwrap();
+        relabel_from_edges(&inc).await.unwrap();
+        cluster_unassigned_faces(&inc, None).await.unwrap();
+        let inc_partition = subject_partition(&inc).await;
+
+        // Pool 2: single full sweep over all four faces.
+        let full = make_integration_pool().await;
+        insert_face_with_vector(&full, None, &va1).await;
+        insert_face_with_vector(&full, None, &va2).await;
+        insert_face_with_vector(&full, None, &vb1).await;
+        insert_face_with_vector(&full, None, &vb2).await;
+        cluster_unassigned_faces(&full, None).await.unwrap();
+        let full_partition = subject_partition(&full).await;
+
+        assert_eq!(
+            inc_partition, full_partition,
+            "idle backstop must reconcile incremental state to match a single full sweep"
+        );
+        // Sanity: the two clusters are distinct.
+        assert_eq!(full_partition.len(), 2, "expected two subjects");
+    }
+
+    #[tokio::test]
+    async fn full_sweep_cancelled_returns_none_and_leaves_edges_untouched() {
+        let pool = make_integration_pool().await;
+        // A few vectorized faces; the cancel check fires before any are processed.
+        insert_face_with_vector(&pool, None, &[1.0, 0.0, 0.0]).await;
+        insert_face_with_vector(&pool, None, &[0.99, 0.14, 0.0]).await;
+
+        let cancel = AtomicBool::new(true);
+        let result = cluster_unassigned_faces(&pool, Some(&cancel))
+            .await
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "a pre-cancelled sweep must return Ok(None)"
+        );
+
+        // The KNN-first design means a cancel before completion never reaches the
+        // atomic edge swap, so the (empty) edge graph is left untouched.
+        let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_edges")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(edge_count, 0, "cancelled sweep must not write edges");
+    }
+
+    #[tokio::test]
+    async fn full_sweep_with_uncancelled_flag_completes_normally() {
+        // Same two well-separated clusters as the convergence test, but driven
+        // through the cancel-capable path with the flag left false.
+        let pool = make_integration_pool().await;
+        insert_face_with_vector(&pool, None, &[1.0, 0.0, 0.0]).await;
+        insert_face_with_vector(&pool, None, &[0.99, 0.14, 0.0]).await;
+        insert_face_with_vector(&pool, None, &[0.0, 1.0, 0.0]).await;
+        insert_face_with_vector(&pool, None, &[0.14, 0.99, 0.0]).await;
+
+        let cancel = AtomicBool::new(false);
+        let result = cluster_unassigned_faces(&pool, Some(&cancel))
+            .await
+            .unwrap();
+        assert!(
+            result.is_some(),
+            "an uncancelled sweep must return Ok(Some)"
+        );
+        assert_eq!(
+            subject_partition(&pool).await.len(),
+            2,
+            "passing an unset cancel flag must not change the result"
+        );
+    }
+
     #[tokio::test]
     async fn crowded_subject_still_yields_cross_subject_merge_suggestion() {
         // Regression for TT-57. A named subject that owns more than K_NEAREST
@@ -1138,7 +1395,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
             .fetch_one(&pool)
@@ -1203,7 +1460,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool).await.unwrap();
+        cluster_unassigned_faces(&pool, None).await.unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(orphan)
@@ -1214,6 +1471,60 @@ mod tests {
             assigned,
             Some(alex),
             "unassigned face inside a crowded subject's cluster must be assigned to that subject"
+        );
+    }
+
+    #[tokio::test]
+    async fn relabel_from_edges_assigns_unlabeled_in_single_subject_component() {
+        let pool = make_integration_pool().await;
+
+        // One named subject with an assigned anchor face.
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let anchor: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
+        )
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // An unlabeled face.
+        let orphan: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, NULL, 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Vectors so both appear in get_all_face_ids_with_vectors.
+        for fid in [anchor, orphan] {
+            sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+                .bind(fid)
+                .bind(emb_bytes(&[1.0f32, 0.0, 0.0]))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // Seed the edge directly — relabel must consume persisted edges, no KNN.
+        people_repo::upsert_face_edge(&pool, anchor, orphan, 0.9)
+            .await
+            .unwrap();
+
+        let result = relabel_from_edges(&pool).await.unwrap();
+        assert_eq!(result.noise, 0);
+
+        let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
+            .bind(orphan)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            assigned,
+            Some(alice),
+            "orphan in a single-subject component must be assigned to that subject"
         );
     }
 }

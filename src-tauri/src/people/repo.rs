@@ -720,12 +720,32 @@ pub async fn upsert_face_edge(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn clear_all_face_edges(pool: &SqlitePool) -> Result<()> {
     sqlx::query("DELETE FROM face_edges").execute(pool).await?;
     Ok(())
 }
 
-#[allow(dead_code)]
+/// Atomically replace the entire edge graph: clear, then insert `edges`, in one
+/// transaction. Pairs are normalized to `face_a < face_b` (matching upsert_face_edge).
+pub async fn replace_all_face_edges(pool: &SqlitePool, edges: &[(i64, i64, f32)]) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM face_edges")
+        .execute(&mut *tx)
+        .await?;
+    for &(fa, fb, weight) in edges {
+        let (a, b) = if fa < fb { (fa, fb) } else { (fb, fa) };
+        sqlx::query("INSERT OR REPLACE INTO face_edges (face_a, face_b, weight) VALUES (?, ?, ?)")
+            .bind(a)
+            .bind(b)
+            .bind(weight)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn get_all_similarity_edges(pool: &SqlitePool) -> Result<Vec<(i64, i64, f32)>> {
     let rows = sqlx::query("SELECT face_a, face_b, weight FROM face_edges")
         .fetch_all(pool)
