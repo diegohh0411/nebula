@@ -15,6 +15,7 @@ import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { buildJustifiedRows } from '../../utils/justified-layout';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+import { ConfirmMergeDialogComponent } from '../confirm-merge-dialog/confirm-merge-dialog.component';
 import { HlmInput } from '@spartan-ng/helm/input';
 
 @Component({
@@ -28,6 +29,7 @@ import { HlmInput } from '@spartan-ng/helm/input';
     PhotoGridComponent,
     LightboxComponent,
     EditableTextComponent,
+    ConfirmMergeDialogComponent,
     HlmInput,
   ],
   templateUrl: './subject-detail.component.html',
