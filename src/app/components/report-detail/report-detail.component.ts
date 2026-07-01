@@ -1,9 +1,14 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
-import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch, Tag } from '../../models/models';
+import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch } from '../../models/models';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
 import { LucideAngularModule } from 'lucide-angular';
+
+export interface ReportMatch {
+  match: SubjectMatch;
+  frequency: number;
+}
 
 @Component({
   selector: 'app-report-detail',
@@ -51,9 +56,9 @@ export class ReportDetailComponent implements OnInit {
   protected coverage = signal<CoverageReport | null>(null);
   protected error = signal<string | null>(null);
   
-  protected missingMatches = signal<SubjectMatch[]>([]);
-  protected presentMatches = signal<SubjectMatch[]>([]);
-  protected othersMatches = signal<SubjectMatch[]>([]);
+  protected missingMatches = signal<ReportMatch[]>([]);
+  protected presentMatches = signal<ReportMatch[]>([]);
+  protected othersMatches = signal<ReportMatch[]>([]);
 
   async ngOnInit() {
     try {
@@ -85,7 +90,7 @@ export class ReportDetailComponent implements OnInit {
     }
   }
 
-  private mapToMatches(covList: SubjectCoverage[]): SubjectMatch[] {
+  private mapToMatches(covList: SubjectCoverage[]): ReportMatch[] {
     const allSubjects = this.photos.subjects();
     return covList.map(item => {
       let subject = allSubjects.find(s => s.id === item.subject_id);
@@ -93,8 +98,7 @@ export class ReportDetailComponent implements OnInit {
         // Fallback for missing subjects not loaded in cache
         subject = { id: item.subject_id, name: item.name, thumbnail_face_id: null, type: 'person', added_at: 0 };
       }
-      const fakeTag: Tag = { id: -1, name: `${item.frequency} photo${item.frequency === 1 ? '' : 's'}`, added_at: 0 };
-      return { subject, tags: [fakeTag] };
+      return { match: { subject, tags: [] }, frequency: item.frequency };
     });
   }
 }

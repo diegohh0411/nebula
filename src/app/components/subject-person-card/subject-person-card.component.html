@@ -19,6 +19,9 @@
       </div>
     }
     <span class="person-card-name">{{ displayName }}</span>
+    @if (subtitle()) {
+      <span class="person-card-subtitle">{{ subtitle() }}</span>
+    }
   </div>
 
   @if (removable()) {
