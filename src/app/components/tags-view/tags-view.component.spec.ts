@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { Subject as RxSubject } from 'rxjs';
 import { By } from '@angular/platform-browser';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
 import { PhotoService } from '../../services/photo.service';
 import { TauriEventsService } from '../../services/tauri-events.service';
 import { TagWithCount, SubjectMatch } from '../../models/models';
@@ -125,5 +126,59 @@ describe('TagsViewComponent — card event wiring', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.textContent).toContain('Maria');
+  });
+});
+
+describe('TagsViewComponent — persisted tag selection', () => {
+  class TagsPhotoServiceStub {
+    listTags = vi.fn();
+    getTagSubjects = vi.fn();
+    createTag = vi.fn();
+    renameTag = vi.fn();
+    deleteTag = vi.fn();
+  }
+
+  const fakeTags: TagWithCount[] = [
+    { id: 1, name: 'Cabaña-21', added_at: 0, subject_count: 2 },
+    { id: 2, name: 'Beach', added_at: 0, subject_count: 1 },
+  ];
+
+  let stub: TagsPhotoServiceStub;
+
+  beforeEach(() => {
+    stub = new TagsPhotoServiceStub();
+    stub.listTags.mockResolvedValue(fakeTags);
+    stub.getTagSubjects.mockResolvedValue([]);
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: 'tags', component: TagsViewComponent }]),
+        { provide: PhotoService, useValue: stub },
+      ],
+    });
+  });
+
+  it('restores the selected tag from the tag query param on load', async () => {
+    const harness = await RouterTestingHarness.create('/tags?tag=2');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(stub.getTagSubjects).toHaveBeenCalledWith(2);
+    expect(harness.routeNativeElement?.textContent).toContain('Beach');
+  });
+
+  it('updates the tag query param when a tag is selected', async () => {
+    const harness = await RouterTestingHarness.create('/tags');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const tagEntry = harness.routeNativeElement!.querySelectorAll('.tag-entry')[0] as HTMLElement;
+    tagEntry.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const router = TestBed.inject(Router);
+    expect(router.url).toBe('/tags?tag=1');
   });
 });
