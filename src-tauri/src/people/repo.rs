@@ -2,12 +2,13 @@
 use crate::library::repo::row_to_image;
 use crate::models::Image;
 use crate::models::{MergeSuggestion, SubjectDetail};
-use crate::people::models::{CoverageReport, CoverageSummary, Face, SavedReport, Subject, SubjectCoverage};
+use crate::people::models::{
+    CoverageReport, CoverageSummary, Face, SavedReport, Subject, SubjectCoverage,
+};
 use anyhow::Result;
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
-
 
 pub async fn insert_subject(
     pool: &SqlitePool,
@@ -965,13 +966,14 @@ pub async fn create_saved_report(
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     let mut tx = pool.begin().await?;
 
-    let report_id = sqlx::query("INSERT INTO saved_reports (name, folder_id, added_at) VALUES (?, ?, ?)")
-        .bind(name)
-        .bind(folder_id)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?
-        .last_insert_rowid();
+    let report_id =
+        sqlx::query("INSERT INTO saved_reports (name, folder_id, added_at) VALUES (?, ?, ?)")
+            .bind(name)
+            .bind(folder_id)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
 
     for tag_id in tag_ids {
         sqlx::query("INSERT INTO saved_report_tags (report_id, tag_id) VALUES (?, ?)")
@@ -997,7 +999,7 @@ pub async fn list_saved_reports(pool: &sqlx::SqlitePool) -> anyhow::Result<Vec<S
          FROM saved_reports r 
          LEFT JOIN saved_report_tags t ON r.id = t.report_id 
          GROUP BY r.id 
-         ORDER BY r.added_at DESC"
+         ORDER BY r.added_at DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -1010,11 +1012,7 @@ pub async fn list_saved_reports(pool: &sqlx::SqlitePool) -> anyhow::Result<Vec<S
         let tags_str: Option<String> = row.get("tags");
 
         let tag_ids = tags_str
-            .map(|s| {
-                s.split(',')
-                    .filter_map(|p| p.parse::<i64>().ok())
-                    .collect()
-            })
+            .map(|s| s.split(',').filter_map(|p| p.parse::<i64>().ok()).collect())
             .unwrap_or_default();
 
         reports.push(SavedReport {
@@ -1036,7 +1034,11 @@ pub async fn delete_saved_report(pool: &sqlx::SqlitePool, report_id: i64) -> any
     Ok(())
 }
 
-pub async fn update_saved_report_name(pool: &sqlx::SqlitePool, report_id: i64, new_name: &str) -> anyhow::Result<()> {
+pub async fn update_saved_report_name(
+    pool: &sqlx::SqlitePool,
+    report_id: i64,
+    new_name: &str,
+) -> anyhow::Result<()> {
     sqlx::query("UPDATE saved_reports SET name = ? WHERE id = ?")
         .bind(new_name)
         .bind(report_id)

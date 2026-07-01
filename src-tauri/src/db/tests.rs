@@ -1472,7 +1472,7 @@ async fn test_saved_report_crud() {
         .execute(&pool)
         .await
         .unwrap();
-    
+
     sqlx::query("INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Tag1', 'tag1', 0), (2, 'Tag2', 'tag2', 0)")
         .execute(&pool)
         .await
@@ -1483,13 +1483,17 @@ async fn test_saved_report_crud() {
     let tag_ids = vec![1, 2];
 
     // 1. Create
-    let created = crate::people::repo::create_saved_report(&pool, report_name, folder_id, &tag_ids).await.unwrap();
+    let created = crate::people::repo::create_saved_report(&pool, report_name, folder_id, &tag_ids)
+        .await
+        .unwrap();
     assert_eq!(created.name, report_name);
     assert_eq!(created.folder_id, folder_id);
     assert_eq!(created.tag_ids, tag_ids);
 
     // 2. List
-    let reports = crate::people::repo::list_saved_reports(&pool).await.unwrap();
+    let reports = crate::people::repo::list_saved_reports(&pool)
+        .await
+        .unwrap();
     assert_eq!(reports.len(), 1);
     let listed = &reports[0];
     assert_eq!(listed.id, created.id);
@@ -1498,9 +1502,13 @@ async fn test_saved_report_crud() {
     assert_eq!(listed.tag_ids, tag_ids);
 
     // 3. Delete
-    crate::people::repo::delete_saved_report(&pool, created.id).await.unwrap();
+    crate::people::repo::delete_saved_report(&pool, created.id)
+        .await
+        .unwrap();
 
     // Verify deletion
-    let reports_after = crate::people::repo::list_saved_reports(&pool).await.unwrap();
+    let reports_after = crate::people::repo::list_saved_reports(&pool)
+        .await
+        .unwrap();
     assert!(reports_after.is_empty());
 }

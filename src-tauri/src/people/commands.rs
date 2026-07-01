@@ -1,7 +1,10 @@
 use crate::{
     media::thumbnail,
     models::{Face, MergeSuggestion, NameSubjectResult, SearchResult, Subject, SubjectMatch},
-    people::{models::{CoverageReport, SavedReport}, repo},
+    people::{
+        models::{CoverageReport, SavedReport},
+        repo,
+    },
     tags::repo as tags_repo,
     AppState,
 };
@@ -314,16 +317,11 @@ pub async fn create_saved_report(
 pub async fn list_saved_reports(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SavedReport>, String> {
-    repo::list_saved_reports(&state.pool)
-        .await
-        .map_err(map_err)
+    repo::list_saved_reports(&state.pool).await.map_err(map_err)
 }
 
 #[tauri::command]
-pub async fn delete_saved_report(
-    id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_saved_report(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
     repo::delete_saved_report(&state.pool, id)
         .await
         .map_err(map_err)
