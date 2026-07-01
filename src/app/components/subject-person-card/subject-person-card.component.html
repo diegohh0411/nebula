@@ -6,26 +6,16 @@
   (keydown.enter)="navigate()"
   (keydown.space)="navigate()"
 >
-  @if (cropUrl(); as url) {
-    <img [src]="url" [alt]="name() ?? 'Unnamed'" loading="lazy" decoding="async" class="person-card-img" />
-  } @else {
-    <span class="person-card-placeholder">👤</span>
-  }
-
-  <div class="person-card-scrim"></div>
-
-  <div class="person-card-meta">
-    @if (match().tags.length > 0) {
-      <div class="person-card-tags">
-        @for (tag of match().tags.slice(0, 2); track tag.id) {
-          <span class="person-card-tag">{{ tag.name }}</span>
-        }
-        @if (match().tags.length > 2) {
-          <span class="person-card-tag">+{{ match().tags.length - 2 }}</span>
-        }
-      </div>
+  <div class="person-card-photo">
+    @if (cropUrl(); as url) {
+      <img [src]="url" [alt]="name() ?? 'Unnamed'" loading="lazy" decoding="async" class="person-card-img" />
+    } @else {
+      <span class="person-card-placeholder">👤</span>
     }
-    <div (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
+
+    <div class="person-card-scrim"></div>
+
+    <div class="person-card-meta" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
       <app-editable-text
         [value]="name()"
         placeholder="Unnamed"
@@ -36,9 +26,39 @@
     </div>
   </div>
 
-  @if (removable()) {
-    <span class="person-card-remove" role="button" tabindex="0" (click)="onRemove($event)" (keydown.enter)="onRemove($event)" (keydown.space)="onRemove($event)">Remove</span>
-  }
+  <div class="person-card-tags-footer" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
+    @if (tags().length > 0) {
+      <div class="person-card-tags">
+        @for (tag of tags(); track tag.id) {
+          <span class="person-card-tag">
+            {{ tag.name }}
+            <button type="button" class="person-card-tag-remove" (click)="removeTag(tag.id)" title="Remove tag">×</button>
+          </span>
+        }
+      </div>
+    }
+    <div class="person-card-add-tag">
+      <input
+        hlmInput
+        class="h-6 flex-1 text-[11px] px-2 py-0.5"
+        placeholder="Add tag…"
+        [attr.list]="'person-card-tags-list-' + match().subject.id"
+        [value]="newTagName()"
+        (input)="newTagName.set($any($event.target).value)"
+        (focus)="onTagFocus()"
+        (keydown.enter)="addTag()"
+      />
+      <datalist [id]="'person-card-tags-list-' + match().subject.id">
+        @for (t of allTags(); track t.id) {
+          <option [value]="t.name"></option>
+        }
+      </datalist>
+      <button type="button" class="person-card-add-tag-btn" (click)="addTag()">Add</button>
+    </div>
+    @if (tagError()) {
+      <span class="person-card-tag-error">{{ tagError() }}</span>
+    }
+  </div>
 </div>
 
 <app-confirm-merge-dialog

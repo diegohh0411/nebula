@@ -9,12 +9,16 @@ class PhotoServiceStub {
   thumbnailUrl = vi.fn((p: string | null) => (p ? `asset://${p}` : null));
   nameSubject = vi.fn().mockResolvedValue({ duplicate_subject_id: null });
   mergeSubjects = vi.fn().mockResolvedValue(undefined);
+  addSubjectTag = vi.fn().mockResolvedValue({ id: 9, name: 'New Tag', added_at: 0 });
+  removeSubjectTag = vi.fn().mockResolvedValue(undefined);
+  getSubjectTags = vi.fn().mockResolvedValue([]);
+  listTags = vi.fn().mockResolvedValue([]);
 }
 
-function match(over: Partial<SubjectMatch['subject']> = {}): SubjectMatch {
+function match(over: Partial<SubjectMatch['subject']> = {}, tags: SubjectMatch['tags'] = []): SubjectMatch {
   return {
     subject: { id: 1, name: 'Sofía', thumbnail_face_id: 7, type: 'person', added_at: 0, ...over },
-    tags: [],
+    tags,
   };
 }
 
@@ -121,5 +125,45 @@ describe('SubjectPersonCardComponent', () => {
 
     expect(stub.mergeSubjects).toHaveBeenCalledWith(1, 42);
     expect(mergedSpy).toHaveBeenCalled();
+  });
+
+  it('adds a tag via addSubjectTag and emits tagAdded', async () => {
+    stub.getSubjectTags = vi.fn().mockResolvedValue([{ id: 9, name: 'New Tag', added_at: 0 }]);
+    const fixture = TestBed.createComponent(SubjectPersonCardComponent);
+    fixture.componentRef.setInput('match', match());
+    const tagAddedSpy = vi.fn();
+    fixture.componentInstance.tagAdded.subscribe(tagAddedSpy);
+    fixture.detectChanges();
+
+    const input = fixture.nativeElement.querySelector('.person-card-add-tag input') as HTMLInputElement;
+    input.value = 'New Tag';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(stub.addSubjectTag).toHaveBeenCalledWith(1, 'New Tag');
+    expect(tagAddedSpy).toHaveBeenCalledWith({ id: 9, name: 'New Tag', added_at: 0 });
+    expect(fixture.nativeElement.textContent).toContain('New Tag');
+  });
+
+  it('removes a tag via removeSubjectTag, emits tagRemoved, and does not navigate', async () => {
+    const fixture = TestBed.createComponent(SubjectPersonCardComponent);
+    fixture.componentRef.setInput('match', match({}, [{ id: 5, name: 'Old Tag', added_at: 0 }]));
+    const router = TestBed.inject(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate');
+    const tagRemovedSpy = vi.fn();
+    fixture.componentInstance.tagRemoved.subscribe(tagRemovedSpy);
+    fixture.detectChanges();
+
+    const removeBtn = fixture.nativeElement.querySelector('.person-card-tag-remove') as HTMLButtonElement;
+    removeBtn.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(stub.removeSubjectTag).toHaveBeenCalledWith(1, 5);
+    expect(tagRemovedSpy).toHaveBeenCalledWith(5);
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).not.toContain('Old Tag');
   });
 });
