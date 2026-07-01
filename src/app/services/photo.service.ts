@@ -467,6 +467,10 @@ export class PhotoService {
   async listSavedReports(): Promise<SavedReport[]> {
     return await invoke<SavedReport[]>('list_saved_reports');
   }
+  async updateSavedReportName(id: number, name: string): Promise<void> {
+    await invoke('update_saved_report_name', { id, name });
+  }
+
   async deleteSavedReport(id: number): Promise<void> {
     await invoke('delete_saved_report', { id });
   }

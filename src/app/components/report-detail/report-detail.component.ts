@@ -1,5 +1,5 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
 import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch, Tag } from '../../models/models';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
@@ -15,6 +15,37 @@ import { LucideAngularModule } from 'lucide-angular';
 export class ReportDetailComponent implements OnInit {
   private route = inject(ActivatedRoute);
   protected photos = inject(PhotoService);
+  private router = inject(Router);
+
+  protected async editReportName() {
+    const rep = this.report();
+    if (!rep) return;
+    const newName = prompt('Enter new report name:', rep.name);
+    if (newName !== null && newName.trim() !== '') {
+      try {
+        await this.photos.updateSavedReportName(rep.id, newName.trim());
+        this.report.set({ ...rep, name: newName.trim() });
+      } catch (err: any) {
+        console.error('Failed to rename report:', err);
+        alert('Failed to rename report');
+      }
+    }
+  }
+
+  protected async deleteReport() {
+    const rep = this.report();
+    if (!rep) return;
+    if (confirm('Are you sure you want to delete this report?')) {
+      try {
+        await this.photos.deleteSavedReport(rep.id);
+        void this.router.navigate(['/reports']);
+      } catch (err: any) {
+        console.error('Failed to delete report:', err);
+        alert('Failed to delete report');
+      }
+    }
+  }
+
 
   protected report = signal<SavedReport | null>(null);
   protected coverage = signal<CoverageReport | null>(null);

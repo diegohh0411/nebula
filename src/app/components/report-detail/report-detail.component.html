@@ -3,6 +3,11 @@
     <a routerLink="/reports" class="back-link"><lucide-icon name="arrow-left" size="16"></lucide-icon> Back</a>
     @if (report(); as rep) {
       <h2>{{ rep.name }}</h2>
+      <div class="header-actions">
+        <button class="btn" (click)="editReportName()">Edit Name</button>
+        <button class="btn btn-danger" (click)="deleteReport()">Delete</button>
+      </div>
+
     }
   </div>
 
