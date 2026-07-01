@@ -3,12 +3,10 @@ import angular from '@analogjs/vite-plugin-angular';
 
 // The `@spartan-ng/helm/*` specifiers below are mapped to local files via
 // tsconfig.json's `compilerOptions.paths` for type-checking, but Vite's dev/test
-// module graph does not read tsconfig path mappings on its own. Angular's router
-// plugin happens to pre-resolve these for components reachable from a lazy route
-// (e.g. subject-detail, tags-view), which is why those specs pass without this
-// alias — but any other component importing `@spartan-ng/helm/*` (e.g. a card or
-// popover that isn't itself route-loaded) fails to resolve at test time without
-// it. Mirror the tsconfig paths here so all components resolve consistently.
+// module graph does not read tsconfig path mappings on its own. Prior specs did not
+// instantiate components with these imports (they exercised services directly),
+// so the resolution gap was never encountered until now. Mirror the tsconfig paths
+// here so all components resolve consistently at test time.
 export default defineConfig({
   plugins: [angular()],
   resolve: {
