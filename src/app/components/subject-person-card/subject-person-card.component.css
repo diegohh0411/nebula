@@ -1,5 +1,5 @@
 .person-card {
-  @apply relative block w-40 aspect-[3/4] rounded-2xl overflow-hidden flex-shrink-0
+  @apply relative block w-56 aspect-[3/4] rounded-2xl overflow-hidden flex-shrink-0
          border border-white/10 shadow-lg bg-muted text-left
          transition-transform duration-150 ease-out
          focus:outline-none focus-visible:ring-2 focus-visible:ring-ring;
