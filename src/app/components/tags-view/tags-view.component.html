@@ -62,7 +62,12 @@
         } @else {
           <div class="subject-cards-grid">
             @for (match of tagSubjects(); track match.subject.id) {
-              <app-subject-person-card [match]="match" [removable]="true" (remove)="removeSubjectFromTag($event)" />
+              <app-subject-person-card
+                [match]="match"
+                (tagAdded)="onTagAdded()"
+                (tagRemoved)="onTagRemoved(match.subject.id, $event)"
+                (merged)="onMerged()"
+              />
             }
           </div>
         }

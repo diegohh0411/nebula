@@ -83,13 +83,23 @@ export class TagsViewComponent implements OnInit {
     } catch { /* ignore */ }
   }
 
-  protected async removeSubjectFromTag(subjectId: number): Promise<void> {
+  protected async onTagAdded(): Promise<void> {
+    await this.loadTags();
+  }
+
+  protected async onTagRemoved(subjectId: number, tagId: number): Promise<void> {
+    if (this.selectedTag()?.id === tagId) {
+      this.tagSubjects.update((ss) => ss.filter((s) => s.subject.id !== subjectId));
+    }
+    await this.loadTags();
+  }
+
+  protected async onMerged(): Promise<void> {
+    await this.loadTags();
     const tag = this.selectedTag();
     if (!tag) return;
     try {
-      await this.photos.removeSubjectTag(subjectId, tag.id);
-      this.tagSubjects.update((ss) => ss.filter((s) => s.subject.id !== subjectId));
-      await this.loadTags();
+      this.tagSubjects.set(await this.photos.getTagSubjects(tag.id));
     } catch { /* ignore */ }
   }
 }
