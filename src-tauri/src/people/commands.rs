@@ -328,3 +328,14 @@ pub async fn delete_saved_report(
         .await
         .map_err(map_err)
 }
+
+#[tauri::command]
+pub async fn update_saved_report_name(
+    state: tauri::State<'_, crate::app::AppState>,
+    id: i64,
+    name: String,
+) -> Result<(), String> {
+    repo::update_saved_report_name(&state.pool, id, &name)
+        .await
+        .map_err(|e| e.to_string())
+}

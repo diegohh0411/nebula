@@ -1035,3 +1035,12 @@ pub async fn delete_saved_report(pool: &sqlx::SqlitePool, report_id: i64) -> any
         .await?;
     Ok(())
 }
+
+pub async fn update_saved_report_name(pool: &sqlx::SqlitePool, report_id: i64, new_name: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE saved_reports SET name = ? WHERE id = ?")
+        .bind(new_name)
+        .bind(report_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
