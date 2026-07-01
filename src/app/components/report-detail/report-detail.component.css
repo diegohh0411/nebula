@@ -1,11 +1,13 @@
-.report-detail { padding: 24px; max-width: 1200px; margin: 0 auto; }
-.header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-.back-link { display: flex; align-items: center; gap: 4px; color: #94a3b8; text-decoration: none; font-size: 14px; }
-.back-link:hover { color: #f8fafc; }
-h2 { margin: 0; font-size: 24px; color: #fff; }
-.summary { background: #1e293b; border: 1px solid #334155; padding: 16px; border-radius: 8px; margin-bottom: 24px; color: #e2e8f0; font-size: 16px; }
-.section { margin-bottom: 32px; }
-h3 { font-size: 18px; color: #cbd5e1; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #334155; }
-.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
-.loading { color: #94a3b8; font-size: 16px; }
-.error-msg { background: #7f1d1d; border: 1px solid #b91c1c; padding: 16px; border-radius: 8px; color: #fee2e2; margin-bottom: 24px; }
+.report-detail { @apply p-6 max-w-6xl mx-auto; }
+.header { @apply flex items-center gap-4 mb-6; }
+.header-actions { @apply flex items-center gap-2 ml-auto; }
+.btn { @apply bg-transparent text-muted-foreground border border-border px-3 py-1.5 rounded-md cursor-pointer hover:bg-muted hover:text-foreground text-sm transition-colors; }
+.btn-danger { @apply bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive/20; }
+.back-link { @apply flex items-center gap-1 text-muted-foreground no-underline text-sm hover:text-foreground transition-colors; }
+h2 { @apply m-0 text-2xl font-semibold text-foreground; }
+.summary { @apply bg-card border border-border p-4 rounded-lg mb-6 text-foreground text-base; }
+.section { @apply mb-8; }
+h3 { @apply text-lg font-medium text-foreground mb-4 pb-2 border-b border-border; }
+.cards-grid { @apply grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4; }
+.loading { @apply text-muted-foreground text-base flex items-center gap-2; }
+.error-msg { @apply bg-destructive/10 border border-destructive/20 p-4 rounded-lg text-destructive mb-6 text-sm; }
