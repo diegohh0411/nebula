@@ -48,7 +48,11 @@
   @apply text-white/70 hover:text-destructive leading-none;
 }
 
-.person-card-add-tag { @apply flex items-center gap-1.5; }
+.person-card-add-tag {
+  @apply flex items-center gap-1.5 opacity-0 pointer-events-none transition-opacity duration-150
+         group-hover:opacity-100 group-hover:pointer-events-auto
+         group-focus-within:opacity-100 group-focus-within:pointer-events-auto;
+}
 
 .person-card-add-tag-btn {
   @apply text-[11px] text-white hover:text-white/80 shrink-0;
