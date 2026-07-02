@@ -21,10 +21,12 @@ Make the `subject_model` setting actually control which face-recognition preset 
 One entry appended to `VERSIONED_MIGRATIONS` (`db/mod.rs`):
 
 ```sql
-ALTER TABLE faces ADD COLUMN preset_id TEXT;
+ALTER TABLE faces ADD COLUMN preset_id TEXT NOT NULL DEFAULT 'blitz';
 ```
 
-- Nullable. `NULL` is interpreted as `"blitz"` (legacy rows — every embedding produced to date came from `BUFFALO_S_PRESET` due to the §1 hardcode, even on installs showing "Standard" as active).
+- `NOT NULL`, backfilled to `'blitz'` by the `DEFAULT` — factually correct for all legacy rows, since the §1 hardcode means every embedding produced to date came from `BUFFALO_S_PRESET`, even on installs showing "Standard" as active. No NULL-handling is needed anywhere downstream.
+- `BASE_SCHEMA`'s `faces` definition gains the same column for fresh installs.
+- Insert/update code always sets `preset_id` explicitly to the active preset; the `DEFAULT` exists only for the migration backfill.
 - No changes to `face_vectors`, `constraints`, `subjects`, `merge_suggestions`, `dismissed_pairs`.
 
 ## Wiring fix (§1)
@@ -63,7 +65,7 @@ This same code path serves both first-time analysis (no existing faces → every
 
 ## Clustering guard (mixed-state safety)
 
-During migration the library holds vectors from two models. `people/clustering.rs` (edge building, `cluster_unassigned_faces`, merge-suggestion generation) must filter to `COALESCE(faces.preset_id, 'blitz') = <current preset id>` so cross-model vector comparisons never occur. Stale faces keep displaying their existing subject assignments in the UI until reprocessed.
+During migration the library holds vectors from two models. `people/clustering.rs` (edge building, `cluster_unassigned_faces`, merge-suggestion generation) must filter to `faces.preset_id = <current preset id>` so cross-model vector comparisons never occur. Stale faces keep displaying their existing subject assignments in the UI until reprocessed.
 
 ## Failure & resume
 
@@ -73,7 +75,7 @@ The migration is just queue items on the existing `embedding_queue` `'subject'` 
 
 - Repo test: IoU matcher updates in place, preserving face id, `subject_id`, and constraint rows; unmatched old faces are deleted with cascades; unmatched detections insert unassigned.
 - Repo test: `mark_subject_data_stale` preserves `subjects`, `faces`, `face_vectors`, `constraints`; clears `merge_suggestions`/`face_edges`; re-enqueues images.
-- Clustering test: faces with differing `preset_id` (incl. NULL-as-blitz) are never joined by an edge or merge suggestion.
+- Clustering test: faces with differing `preset_id` are never joined by an edge or merge suggestion; migration test confirms legacy rows are backfilled to `'blitz'`.
 - Pipeline test (or manual verification): changing `subject_model` mid-session causes the next batch to use the new preset's analyzer.
 
 ## Out of scope (follow-ups)
