@@ -21,12 +21,13 @@ Make the `subject_model` setting actually control which face-recognition preset 
 One entry appended to `VERSIONED_MIGRATIONS` (`db/mod.rs`):
 
 ```sql
-ALTER TABLE faces ADD COLUMN preset_id TEXT NOT NULL DEFAULT 'blitz';
+ALTER TABLE faces ADD COLUMN embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition';
 ```
 
-- `NOT NULL`, backfilled to `'blitz'` by the `DEFAULT` — factually correct for all legacy rows, since the §1 hardcode means every embedding produced to date came from `BUFFALO_S_PRESET`, even on installs showing "Standard" as active. No NULL-handling is needed anywhere downstream.
+- The stamped identifier is the **embedder `ModelSpec.id`** (`preset.embedder.id`, e.g. `"buffalo_s_recognition"`, `"antelopev2_recognition"`), not the preset id. The column's sole invariant is vector comparability, and only the recognizer model determines that — detector and gender/age models don't. Presets that share a recognizer therefore never trigger re-embedding of each other's rows.
+- `NOT NULL`, backfilled by the `DEFAULT` — factually correct for all legacy rows, since the §1 hardcode means every embedding produced to date came from `BUFFALO_S_PRESET`'s recognizer, even on installs showing "Standard" as active. No NULL-handling is needed anywhere downstream.
 - `BASE_SCHEMA`'s `faces` definition gains the same column for fresh installs.
-- Insert/update code always sets `preset_id` explicitly to the active preset; the `DEFAULT` exists only for the migration backfill.
+- Insert/update code always sets `embedder_id` explicitly to the active preset's embedder id; the `DEFAULT` exists only for the migration backfill.
 - No changes to `face_vectors`, `constraints`, `subjects`, `merge_suggestions`, `dismissed_pairs`.
 
 ## Wiring fix (§1)
@@ -40,7 +41,7 @@ ALTER TABLE faces ADD COLUMN preset_id TEXT NOT NULL DEFAULT 'blitz';
 On change:
 
 1. `ensure_ready` for the new preset's detector/embedder/gender-age models (unchanged from today).
-2. Replace the `reset_all_subject_data` call with a new `people::repo::mark_subject_data_stale(pool)`:
+2. If the new preset's `embedder.id` equals the old one's, skip staleness entirely — existing vectors remain valid. Otherwise, replace the `reset_all_subject_data` call with a new `people::repo::mark_subject_data_stale(pool)`:
    - `DELETE FROM merge_suggestions;`
    - `DELETE FROM face_edges;`
    - `UPDATE images SET subject_analysis_done = 0 WHERE deleted_at IS NULL;`
@@ -56,8 +57,8 @@ For each dequeued image:
 
 1. Detect faces with the current preset.
 2. Load the image's existing `faces` rows. Match each new detection to at most one existing row by **IoU ≥ 0.5** (greedy, highest IoU first).
-3. **Matched:** update the existing row in place — bbox, `det_score`, `quality_score`, `preset_id` — and replace its row in `face_vectors`. Face id (hence `subject_id`, constraints, thumbnail references) is preserved.
-4. **New detection, no match:** insert a fresh face row (`subject_id = NULL`, current `preset_id`) + vector.
+3. **Matched:** update the existing row in place — bbox, `det_score`, `quality_score`, `embedder_id` — and replace its row in `face_vectors`. Face id (hence `subject_id`, constraints, thumbnail references) is preserved.
+4. **New detection, no match:** insert a fresh face row (`subject_id = NULL`, current `embedder_id`) + vector.
 5. **Existing row unmatched by any new detection:** delete it. FK cascades clean up its constraints and edges, but its `face_vectors` row must be deleted explicitly — `face_vectors` is a `vec0` virtual table and does not participate in FK cascades.
 6. Mark `subject_analysis_done = 1`.
 
@@ -65,7 +66,7 @@ This same code path serves both first-time analysis (no existing faces → every
 
 ## Clustering guard (mixed-state safety)
 
-During migration the library holds vectors from two models. `people/clustering.rs` (edge building, `cluster_unassigned_faces`, merge-suggestion generation) must filter to `faces.preset_id = <current preset id>` so cross-model vector comparisons never occur. Stale faces keep displaying their existing subject assignments in the UI until reprocessed.
+During migration the library holds vectors from two models. `people/clustering.rs` (edge building, `cluster_unassigned_faces`, merge-suggestion generation) must filter to `faces.embedder_id = <current preset's embedder id>` so cross-model vector comparisons never occur. Stale faces keep displaying their existing subject assignments in the UI until reprocessed.
 
 ## Failure & resume
 
@@ -75,7 +76,8 @@ The migration is just queue items on the existing `embedding_queue` `'subject'` 
 
 - Repo test: IoU matcher updates in place, preserving face id, `subject_id`, and constraint rows; unmatched old faces are deleted with cascades; unmatched detections insert unassigned.
 - Repo test: `mark_subject_data_stale` preserves `subjects`, `faces`, `face_vectors`, `constraints`; clears `merge_suggestions`/`face_edges`; re-enqueues images.
-- Clustering test: faces with differing `preset_id` are never joined by an edge or merge suggestion; migration test confirms legacy rows are backfilled to `'blitz'`.
+- Clustering test: faces with differing `embedder_id` are never joined by an edge or merge suggestion; migration test confirms legacy rows are backfilled to `'buffalo_s_recognition'`.
+- Switch-flow test: changing to a preset with the same embedder id does not mark data stale.
 - Pipeline test (or manual verification): changing `subject_model` mid-session causes the next batch to use the new preset's analyzer.
 
 ## Out of scope (follow-ups)
