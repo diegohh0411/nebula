@@ -5,31 +5,33 @@
   (click)="navigate()"
   (keydown.enter)="navigate()"
   (keydown.space)="navigate()"
+  (mouseenter)="onCardHoverOrFocusIn()"
+  (mouseleave)="onCardMouseLeave($event)"
+  (focusin)="onCardHoverOrFocusIn()"
+  (focusout)="onCardFocusOut($event)"
 >
-  <div class="person-card-photo">
-    @if (cropUrl(); as url) {
-      <img [src]="url" [alt]="tagging.name() ?? 'Unnamed'" loading="lazy" decoding="async" class="person-card-img" />
-    } @else {
-      <span class="person-card-placeholder">👤</span>
-    }
+  @if (cropUrl(); as url) {
+    <img [src]="url" [alt]="tagging.name() ?? 'Unnamed'" loading="lazy" decoding="async" class="person-card-img" />
+  } @else {
+    <span class="person-card-placeholder">👤</span>
+  }
 
-    <div class="person-card-scrim"></div>
+  <div class="person-card-scrim"></div>
 
-    <div class="person-card-meta" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
+  <div class="person-card-content" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
+    <div class="person-card-meta">
       <app-editable-text
         [value]="tagging.name()"
         placeholder="Unnamed"
-        placeholderClass="opacity-70"
-        displayClass="person-card-name"
+        placeholderClass="person-card-name text-[15px] font-semibold text-white tracking-tight truncate block opacity-70"
+        displayClass="person-card-name text-[15px] font-semibold text-white tracking-tight truncate block"
         (commit)="tagging.saveName($event)"
       />
       @if (subtitle()) {
         <span class="person-card-subtitle">{{ subtitle() }}</span>
       }
     </div>
-  </div>
 
-  <div class="person-card-tags-footer" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
     @if (tagging.tags().length > 0) {
       <div class="person-card-tags">
         @for (tag of tagging.tags(); track tag.id) {
@@ -40,10 +42,10 @@
         }
       </div>
     }
-    <div class="person-card-add-tag">
+    <div class="person-card-add-tag" #addTagRow>
       <input
         hlmInput
-        class="h-6 flex-1 text-[11px] px-2 py-0.5"
+        class="h-6 flex-1 text-[11px] px-2 py-0.5 bg-white/10 border-white/20 text-white placeholder:text-white/50 focus-visible:ring-white/30"
         placeholder="Add tag…"
         [attr.list]="'person-card-tags-list-' + match().subject.id"
         [value]="tagging.newTagName()"
