@@ -5,6 +5,7 @@
 .btn-danger { @apply bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive/20; }
 .back-link { @apply flex items-center gap-1 text-muted-foreground no-underline text-sm hover:text-foreground transition-colors; }
 h2 { @apply m-0 text-2xl font-semibold text-foreground; }
+.name-edit-input { @apply text-2xl font-semibold text-foreground bg-card border border-border rounded-md px-2 py-1; }
 .summary { @apply bg-card border border-border p-4 rounded-lg mb-6 text-foreground text-base; }
 .section { @apply mb-8; }
 h3 { @apply text-lg font-medium text-foreground mb-4 pb-2 border-b border-border; }

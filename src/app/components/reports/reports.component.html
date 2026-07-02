@@ -63,8 +63,8 @@
       </div>
 
       <div class="form-actions">
-        <button class="btn-primary" (click)="createReport()" [disabled]="!newFolderId() || selectedTagIds().length === 0 || !newName().trim()">
-          Save & Run
+        <button class="btn-primary" (click)="createReport()" [disabled]="!newFolderId() || selectedTagIds().length === 0 || !newName().trim() || isSubmitting()">
+          {{ isSubmitting() ? 'Saving...' : 'Save & Run' }}
         </button>
         <button class="btn-secondary" (click)="cancelCreation()">Cancel</button>
       </div>

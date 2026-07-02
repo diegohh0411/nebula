@@ -20,6 +20,7 @@ export class ReportsComponent implements OnInit {
   protected tags = signal<TagWithCount[]>([]);
   
   protected isCreating = signal(false);
+  protected isSubmitting = signal(false);
   protected newName = signal('');
   protected newFolderId = signal<number | null>(null);
   
@@ -107,8 +108,9 @@ export class ReportsComponent implements OnInit {
     const fId = this.newFolderId();
     const tIds = this.selectedTagIds();
     const name = this.newName().trim();
-    if (!fId || tIds.length === 0 || !name) return;
+    if (!fId || tIds.length === 0 || !name || this.isSubmitting()) return;
 
+    this.isSubmitting.set(true);
     try {
       const rep = await this.photos.createSavedReport(name, fId, tIds);
       this.isCreating.set(false);
@@ -121,6 +123,8 @@ export class ReportsComponent implements OnInit {
     } catch (err) {
       console.error('Failed to create report:', err);
       alert('Failed to create report. See console for details.');
+    } finally {
+      this.isSubmitting.set(false);
     }
   }
 

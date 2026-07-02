@@ -6,6 +6,7 @@ pub mod models;
 mod people;
 pub mod pipeline;
 mod platform;
+mod reports;
 mod search;
 mod settings;
 mod tags;

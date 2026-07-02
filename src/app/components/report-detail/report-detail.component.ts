@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
+import { FormsModule } from '@angular/forms';
 import { PhotoService } from '../../services/photo.service';
 import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch } from '../../models/models';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
@@ -13,7 +14,7 @@ export interface ReportMatch {
 @Component({
   selector: 'app-report-detail',
   standalone: true,
-  imports: [SubjectPersonCardComponent, LucideAngularModule, RouterLink],
+  imports: [SubjectPersonCardComponent, LucideAngularModule, RouterLink, FormsModule],
   templateUrl: './report-detail.component.html',
   styleUrl: './report-detail.component.css',
 })
@@ -22,18 +23,32 @@ export class ReportDetailComponent implements OnInit {
   protected photos = inject(PhotoService);
   private router = inject(Router);
 
-  protected async editReportName() {
+  protected isEditingName = signal(false);
+  protected editNameValue = signal('');
+
+  protected startEditName() {
     const rep = this.report();
     if (!rep) return;
-    const newName = prompt('Enter new report name:', rep.name);
-    if (newName !== null && newName.trim() !== '') {
-      try {
-        await this.photos.updateSavedReportName(rep.id, newName.trim());
-        this.report.set({ ...rep, name: newName.trim() });
-      } catch (err: any) {
-        console.error('Failed to rename report:', err);
-        alert('Failed to rename report');
-      }
+    this.editNameValue.set(rep.name);
+    this.isEditingName.set(true);
+  }
+
+  protected cancelEditName() {
+    this.isEditingName.set(false);
+  }
+
+  protected async confirmEditName() {
+    const rep = this.report();
+    const newName = this.editNameValue().trim();
+    if (!rep || !newName) return;
+
+    try {
+      await this.photos.updateSavedReportName(rep.id, newName);
+      this.report.set({ ...rep, name: newName });
+      this.isEditingName.set(false);
+    } catch (err: any) {
+      console.error('Failed to rename report:', err);
+      alert('Failed to rename report');
     }
   }
 
@@ -68,15 +83,15 @@ export class ReportDetailComponent implements OnInit {
         return;
       }
 
-      const reports = await this.photos.listSavedReports();
-      const rep = reports.find(r => r.id === id);
+      const [rep] = await Promise.all([
+        this.photos.getSavedReport(id),
+        this.photos.loadSubjects(),
+      ]);
       if (!rep) {
         this.error.set('Report not found');
         return;
       }
       this.report.set(rep);
-
-      await this.photos.loadSubjects();
 
       const cov = await this.photos.getFolderCoverage(rep.folder_id, rep.tag_ids);
       this.coverage.set(cov);

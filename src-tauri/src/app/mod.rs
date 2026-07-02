@@ -120,7 +120,6 @@ pub fn run() {
             crate::commands::search,
             crate::commands::get_processing_status,
             crate::people::commands::list_subjects,
-            crate::people::commands::get_folder_coverage,
             crate::people::commands::name_subject,
             crate::people::commands::list_faces,
             crate::people::commands::list_faces_for_image,
@@ -148,10 +147,12 @@ pub fn run() {
             crate::settings::commands::get_available_subject_models,
             crate::settings::commands::get_setting,
             crate::settings::commands::update_setting,
-            crate::people::commands::create_saved_report,
-            crate::people::commands::list_saved_reports,
-            crate::people::commands::delete_saved_report,
-            crate::people::commands::update_saved_report_name,
+            crate::reports::commands::get_folder_coverage,
+            crate::reports::commands::create_saved_report,
+            crate::reports::commands::list_saved_reports,
+            crate::reports::commands::get_saved_report,
+            crate::reports::commands::delete_saved_report,
+            crate::reports::commands::update_saved_report_name,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
