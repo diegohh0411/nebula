@@ -80,59 +80,57 @@ async fn save_faces(
     image_id: i64,
     sub_qid: i64,
     sub_attempts: i32,
+    embedder_id: &str,
     faces: Vec<face_actor::FaceResult>,
 ) -> Vec<i64> {
-    let mut all_ok = true;
-    let mut vectorized: Vec<i64> = Vec::new();
-    for (detection, face_emb, sharp) in faces {
-        let bbox = detection.bbox;
-        let rel_x = bbox.x1 as f64;
-        let rel_y = bbox.y1 as f64;
-        let rel_w = (bbox.x2 - bbox.x1) as f64;
-        let rel_h = (bbox.y2 - bbox.y1) as f64;
+    let detections: Vec<crate::people::service::DetectedFaceInput> = faces
+        .into_iter()
+        .map(|(detection, embedding, sharp)| {
+            let bbox = detection.bbox;
+            let rel = (
+                bbox.x1 as f64,
+                bbox.y1 as f64,
+                (bbox.x2 - bbox.x1) as f64,
+                (bbox.y2 - bbox.y1) as f64,
+            );
+            let frontality =
+                crate::people::face_quality::frontality(detection.landmarks.as_deref());
+            let quality = crate::people::face_quality::composite(detection.score, frontality, sharp);
+            crate::people::service::DetectedFaceInput {
+                bbox: rel,
+                det_score: detection.score as f64,
+                quality_score: quality as f64,
+                embedding,
+            }
+        })
+        .collect();
 
-        let frontality = crate::people::face_quality::frontality(detection.landmarks.as_deref());
-        let quality = crate::people::face_quality::composite(detection.score, frontality, sharp);
+    let existing = match crate::people::repo::list_faces_for_image(pool, image_id).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("[pipeline] list_faces_for_image failed for image {image_id}: {e}");
+            let _ =
+                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
+                    .await;
+            return Vec::new();
+        }
+    };
 
-        match crate::people::repo::insert_face(
-            pool,
-            image_id,
-            None,
-            (rel_x, rel_y, rel_w, rel_h),
-            Some(detection.score as f64),
-            Some(quality as f64),
-            crate::models::registry::BUFFALO_S_PRESET.embedder.id,
-        )
+    match crate::people::service::reprocess_image_faces(pool, image_id, embedder_id, detections, existing)
         .await
-        {
-            Ok(face_id) => {
-                if let Err(e) =
-                    crate::people::face_store::upsert_vector(pool, face_id, &face_emb).await
-                {
-                    error!("[pipeline] upsert_vector failed for face {face_id}: {e}");
-                    all_ok = false;
-                } else {
-                    vectorized.push(face_id);
-                }
-            }
-            Err(e) => {
-                error!("[pipeline] insert_face failed for image {image_id}: {e}");
-                all_ok = false;
-            }
+    {
+        Ok(touched) => {
+            let _ = crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
+            touched
+        }
+        Err(e) => {
+            error!("[pipeline] reprocess_image_faces failed for image {image_id}: {e}");
+            let _ =
+                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
+                    .await;
+            Vec::new()
         }
     }
-    if all_ok {
-        let _ = crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
-    } else {
-        let _ = crate::pipeline::queue::mark_failed(
-            pool,
-            sub_qid,
-            sub_attempts,
-            "one or more face inserts failed",
-        )
-        .await;
-    }
-    vectorized
 }
 
 /// Resolve the `subject_model` setting to its preset, falling back to Blitz
@@ -564,7 +562,7 @@ pub async fn run_pipeline(
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 info!("[pipeline] Found {} faces in image {image_id}", faces.len());
                                 let new_ids =
-                                    save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                    save_faces(&pool, image_id, sub_qid, sub_attempts, subject_preset.embedder.id, faces).await;
                                 batch_new_face_ids.extend(new_ids);
                                 processed_subject_work = true;
                             }
@@ -639,7 +637,7 @@ pub async fn run_pipeline(
                     Ok(Ok(faces)) => {
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
                             info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                            save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                            save_faces(&pool, image_id, sub_qid, sub_attempts, subject_preset.embedder.id, faces).await;
                             processed_subject_work = true;
                         }
                     }
