@@ -150,9 +150,13 @@ pub async fn update_setting(
                 .ensure_ready(&app, preset.gender_age)
                 .await
                 .map_err(|e| e.to_string())?;
-            crate::people::repo::reset_all_subject_data(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+
+            let old_preset = resolve_subject_preset(current.as_deref());
+            if old_preset.embedder.id != preset.embedder.id {
+                crate::people::repo::mark_subject_data_stale(pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
         }
     }
 

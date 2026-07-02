@@ -865,6 +865,7 @@ pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn reset_all_subject_data(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
 

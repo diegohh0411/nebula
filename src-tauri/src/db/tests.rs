@@ -5,7 +5,7 @@ use crate::library::repo::{
     get_image_by_id, images_needing_preview, insert_folder, insert_image, update_preview_path,
     update_thumbnail_path,
 };
-use crate::people::repo::{mark_subject_data_stale, update_face_detection, delete_face, 
+use crate::people::repo::{update_face_detection, delete_face, 
     add_cannot_link, add_must_link, clear_all_face_edges, dismiss_merge_suggestion,
     get_all_similarity_edges, get_dismissed_pair_set, get_face_with_image, get_merge_suggestions,
     insert_face, list_faces_for_subject_with_images, merge_subjects, upgrade_subject_thumbnails,
@@ -913,6 +913,7 @@ async fn delete_face_removes_row_and_cascades_constraints_and_edges() {
     assert_eq!(edge_count, 0, "FK cascade must remove face_edges referencing the deleted face");
 }
 
+#[tokio::test]
 async fn insert_face_persists_quality_scores() {
     let pool = init_test_pool().await;
     let face_id = insert_face(&pool, 1, None, (0.1, 0.1, 0.2, 0.2), Some(0.9), Some(0.75), "buffalo_s_recognition")
