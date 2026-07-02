@@ -615,6 +615,34 @@ async fn faces_table_has_quality_columns() {
 }
 
 #[tokio::test]
+async fn faces_table_has_embedder_id_column_defaulted() {
+    let pool = init_test_pool().await;
+    let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(
+        cols.contains(&"embedder_id".to_string()),
+        "faces must have embedder_id; got {cols:?}"
+    );
+
+    sqlx::query(
+        "INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (100, 1, 0, 0, 1, 1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let embedder_id: String = sqlx::query_scalar("SELECT embedder_id FROM faces WHERE id = 100")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        embedder_id, "buffalo_s_recognition",
+        "legacy rows (and any row inserted without an explicit embedder_id) must default to buffalo_s_recognition"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_vec_extension_loads() {
     crate::db::ensure_sqlite_vec_registered();
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
