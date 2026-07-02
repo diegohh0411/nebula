@@ -122,8 +122,12 @@ async fn build_subject_aware_knn(
     k: usize,
     cancel: Option<&AtomicBool>,
 ) -> Result<Option<HashMap<i64, Vec<(i64, f32)>>>> {
-    // Subject sizes are counted from the *full* vectorized set so candidate_k is
-    // correct even when we only query a subset (incremental pass).
+    // `all_face_ids` is already filtered to the current preset's embedder_id by
+    // the caller (via `get_all_face_ids_with_vectors`). Every neighbor result
+    // is filtered against this set too, so a stale-embedder face can never
+    // become a mutual-kNN edge endpoint regardless of raw vector similarity.
+    let valid_ids: HashSet<i64> = all_face_ids.iter().copied().collect();
+
     let mut subject_sizes: HashMap<i64, usize> = HashMap::new();
     for &fid in all_face_ids {
         if let Some(&sid) = face_subjects.get(&fid) {
@@ -157,6 +161,7 @@ async fn build_subject_aware_knn(
             crate::people::face_store::knn_cosine_sim(pool, fid, candidate_k)
                 .await?
                 .into_iter()
+                .filter(|(nid, _)| valid_ids.contains(nid))
                 .filter(|(nid, _)| match own_subject {
                     Some(sid) => face_subjects.get(nid).copied() != Some(sid),
                     None => true,
@@ -296,9 +301,9 @@ fn build_components_with_constraints(
 /// `face_edges` graph + constraints, apply label actions, then cleanup,
 /// thumbnails, and merge suggestions. In-memory union-find over all faces plus a
 /// few writes — milliseconds even at ~14k faces.
-pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
+pub async fn relabel_from_edges(pool: &SqlitePool, embedder_id: &str) -> Result<ReclusterResult> {
     let started = Instant::now();
-    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool, embedder_id).await?;
     let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
     let sim_edges = people_repo::get_all_similarity_edges(pool).await?;
     let must_links = people_repo::get_all_must_link_pairs(pool).await?;
@@ -375,12 +380,16 @@ pub async fn relabel_from_edges(pool: &SqlitePool) -> Result<ReclusterResult> {
 /// The affected set `S = new_face_ids ∪ {candidate neighbors of each new face}`
 /// is queried so both endpoints of every candidate new edge have a neighbor list,
 /// which is what lets `compute_mutual_sim_edges` evaluate mutuality correctly.
-pub async fn update_edges_incremental(pool: &SqlitePool, new_face_ids: &[i64]) -> Result<()> {
+pub async fn update_edges_incremental(
+    pool: &SqlitePool,
+    new_face_ids: &[i64],
+    embedder_id: &str,
+) -> Result<()> {
     if new_face_ids.is_empty() {
         return Ok(());
     }
 
-    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool, embedder_id).await?;
     let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
 
     // Build the affected set S.
@@ -428,10 +437,11 @@ pub async fn update_edges_incremental(pool: &SqlitePool, new_face_ids: &[i64]) -
 /// queue); the caller should leave `clustering_dirty` set and retry later.
 pub async fn cluster_unassigned_faces(
     pool: &SqlitePool,
+    embedder_id: &str,
     cancel: Option<&AtomicBool>,
 ) -> Result<Option<ReclusterResult>> {
     let started = Instant::now();
-    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool).await?;
+    let all_face_ids = people_repo::get_all_face_ids_with_vectors(pool, embedder_id).await?;
     let face_subjects = people_repo::get_assigned_face_subject_map(pool).await?;
     info!(
         "[clustering] recluster start: {} vectorized faces, {} already assigned",
@@ -468,7 +478,7 @@ pub async fn cluster_unassigned_faces(
     people_repo::replace_all_face_edges(pool, &sim_edges).await?;
 
     // Back half reads the freshly-persisted edges.
-    let result = relabel_from_edges(pool).await?;
+    let result = relabel_from_edges(pool, embedder_id).await?;
     info!(
         "[clustering] recluster done in {:.1}s",
         started.elapsed().as_secs_f32()
@@ -826,7 +836,7 @@ mod tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         for stmt in [
             "CREATE TABLE subjects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT NOT NULL DEFAULT 'person', thumbnail_face_id INTEGER, added_at INTEGER NOT NULL DEFAULT 0)",
-            "CREATE TABLE faces (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL DEFAULT 0, subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL, bbox_x REAL NOT NULL DEFAULT 0, bbox_y REAL NOT NULL DEFAULT 0, bbox_w REAL NOT NULL DEFAULT 0.5, bbox_h REAL NOT NULL DEFAULT 0.5, added_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE TABLE faces (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL DEFAULT 0, subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL, bbox_x REAL NOT NULL DEFAULT 0, bbox_y REAL NOT NULL DEFAULT 0, bbox_w REAL NOT NULL DEFAULT 0.5, bbox_h REAL NOT NULL DEFAULT 0.5, added_at INTEGER NOT NULL DEFAULT 0, embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition')",
             "CREATE VIRTUAL TABLE face_vectors USING vec0(embedding float[3])",
             "CREATE TABLE constraints (face_a INTEGER NOT NULL, face_b INTEGER NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (face_a, face_b, kind))",
             "CREATE TABLE face_edges (face_a INTEGER NOT NULL, face_b INTEGER NOT NULL, weight REAL NOT NULL, PRIMARY KEY (face_a, face_b))",
@@ -902,7 +912,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(face_f)
@@ -1011,7 +1021,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
 
         let subjects: Vec<Option<i64>> =
             sqlx::query_scalar("SELECT subject_id FROM faces ORDER BY id")
@@ -1214,7 +1224,7 @@ mod tests {
         // A new, unassigned face inside the cluster.
         let new_face = insert_face_with_vector(&pool, None, &[1.0, 0.01, 0.0]).await;
 
-        update_edges_incremental(&pool, &[new_face]).await.unwrap();
+        update_edges_incremental(&pool, &[new_face], "buffalo_s_recognition").await.unwrap();
 
         // An edge between the new face and an Alex face must have been upserted.
         let edge_count: i64 =
@@ -1230,7 +1240,7 @@ mod tests {
         );
 
         // And relabel must then assign it to Alex.
-        relabel_from_edges(&pool).await.unwrap();
+        relabel_from_edges(&pool, "buffalo_s_recognition").await.unwrap();
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(new_face)
             .fetch_one(&pool)
@@ -1251,13 +1261,13 @@ mod tests {
         let inc = make_integration_pool().await;
         let f1 = insert_face_with_vector(&inc, None, &va1).await;
         let f2 = insert_face_with_vector(&inc, None, &va2).await;
-        update_edges_incremental(&inc, &[f1, f2]).await.unwrap();
-        relabel_from_edges(&inc).await.unwrap();
+        update_edges_incremental(&inc, &[f1, f2], "buffalo_s_recognition").await.unwrap();
+        relabel_from_edges(&inc, "buffalo_s_recognition").await.unwrap();
         let f3 = insert_face_with_vector(&inc, None, &vb1).await;
         let f4 = insert_face_with_vector(&inc, None, &vb2).await;
-        update_edges_incremental(&inc, &[f3, f4]).await.unwrap();
-        relabel_from_edges(&inc).await.unwrap();
-        cluster_unassigned_faces(&inc, None).await.unwrap();
+        update_edges_incremental(&inc, &[f3, f4], "buffalo_s_recognition").await.unwrap();
+        relabel_from_edges(&inc, "buffalo_s_recognition").await.unwrap();
+        cluster_unassigned_faces(&inc, "buffalo_s_recognition", None).await.unwrap();
         let inc_partition = subject_partition(&inc).await;
 
         // Pool 2: single full sweep over all four faces.
@@ -1266,7 +1276,7 @@ mod tests {
         insert_face_with_vector(&full, None, &va2).await;
         insert_face_with_vector(&full, None, &vb1).await;
         insert_face_with_vector(&full, None, &vb2).await;
-        cluster_unassigned_faces(&full, None).await.unwrap();
+        cluster_unassigned_faces(&full, "buffalo_s_recognition", None).await.unwrap();
         let full_partition = subject_partition(&full).await;
 
         assert_eq!(
@@ -1285,7 +1295,7 @@ mod tests {
         insert_face_with_vector(&pool, None, &[0.99, 0.14, 0.0]).await;
 
         let cancel = AtomicBool::new(true);
-        let result = cluster_unassigned_faces(&pool, Some(&cancel))
+        let result = cluster_unassigned_faces(&pool, "buffalo_s_recognition", Some(&cancel))
             .await
             .unwrap();
         assert!(
@@ -1313,7 +1323,7 @@ mod tests {
         insert_face_with_vector(&pool, None, &[0.14, 0.99, 0.0]).await;
 
         let cancel = AtomicBool::new(false);
-        let result = cluster_unassigned_faces(&pool, Some(&cancel))
+        let result = cluster_unassigned_faces(&pool, "buffalo_s_recognition", Some(&cancel))
             .await
             .unwrap();
         assert!(
@@ -1395,7 +1405,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
             .fetch_one(&pool)
@@ -1460,7 +1470,7 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(orphan)
@@ -1513,7 +1523,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = relabel_from_edges(&pool).await.unwrap();
+        let result = relabel_from_edges(&pool, "buffalo_s_recognition").await.unwrap();
         assert_eq!(result.noise, 0);
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")

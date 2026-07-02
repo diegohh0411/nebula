@@ -845,11 +845,16 @@ pub async fn get_face_ids_for_subject(pool: &SqlitePool, subject_id: i64) -> Res
     Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
 }
 
-pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool) -> Result<Vec<i64>> {
-    let rows = sqlx::query("SELECT rowid FROM face_vectors")
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
+pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool, embedder_id: &str) -> Result<Vec<i64>> {
+    let rows = sqlx::query(
+        "SELECT fv.rowid AS id FROM face_vectors fv
+         JOIN faces f ON f.id = fv.rowid
+         WHERE f.embedder_id = ?",
+    )
+    .bind(embedder_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
 }
 
 pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
