@@ -5,6 +5,10 @@
   (click)="navigate()"
   (keydown.enter)="navigate()"
   (keydown.space)="navigate()"
+  (mouseenter)="onCardHoverOrFocusIn()"
+  (mouseleave)="onCardMouseLeave($event)"
+  (focusin)="onCardHoverOrFocusIn()"
+  (focusout)="onCardFocusOut($event)"
 >
   @if (cropUrl(); as url) {
     <img [src]="url" [alt]="tagging.name() ?? 'Unnamed'" loading="lazy" decoding="async" class="person-card-img" />
@@ -38,7 +42,7 @@
         }
       </div>
     }
-    <div class="person-card-add-tag">
+    <div class="person-card-add-tag" #addTagRow>
       <input
         hlmInput
         class="h-6 flex-1 text-[11px] px-2 py-0.5 bg-white/10 border-white/20 text-white placeholder:text-white/50 focus-visible:ring-white/30"

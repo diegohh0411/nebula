@@ -1,5 +1,6 @@
 import {
   Component, ChangeDetectionStrategy, computed, inject, input, output, signal, OnInit,
+  ViewChild, ElementRef,
 } from '@angular/core';
 import { Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
@@ -30,6 +31,8 @@ export class SubjectPersonCardComponent implements OnInit {
 
   protected readonly cropUrl = signal<string | null>(null);
 
+  @ViewChild('addTagRow') private addTagRowRef?: ElementRef<HTMLElement>;
+
   private readonly subjectId = computed(() => this.match().subject.id);
   protected readonly tagging = injectSubjectTagging(this.subjectId, {
     onMerged: () => this.merged.emit(),
@@ -52,5 +55,42 @@ export class SubjectPersonCardComponent implements OnInit {
 
   protected navigate(): void {
     void this.router.navigate(['/subject', this.match().subject.id]);
+  }
+
+  protected onCardMouseLeave(event: MouseEvent): void {
+    const root = event.currentTarget as HTMLElement;
+    if (root.contains(document.activeElement)) return;
+    void this.hideAddTagRow();
+  }
+
+  protected onCardFocusOut(event: FocusEvent): void {
+    const root = event.currentTarget as HTMLElement;
+    if (root.contains(event.relatedTarget as Node | null)) return;
+    void this.hideAddTagRow();
+  }
+
+  protected onCardHoverOrFocusIn(): void {
+    void this.showAddTagRow();
+  }
+
+  private async showAddTagRow(): Promise<void> {
+    const el = this.addTagRowRef?.nativeElement;
+    if (!el) return;
+    const { gsap } = await import('gsap');
+    gsap.killTweensOf(el);
+    gsap.to(el, { height: 'auto', opacity: 1, duration: this.reducedMotion() ? 0 : 0.2, ease: 'power2.out' });
+  }
+
+  private async hideAddTagRow(): Promise<void> {
+    const el = this.addTagRowRef?.nativeElement;
+    if (!el) return;
+    const { gsap } = await import('gsap');
+    gsap.killTweensOf(el);
+    gsap.to(el, { height: 0, opacity: 0, duration: this.reducedMotion() ? 0 : 0.15, ease: 'power2.in' });
+  }
+
+  private reducedMotion(): boolean {
+    return typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 }

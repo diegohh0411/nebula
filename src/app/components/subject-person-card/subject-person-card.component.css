@@ -48,10 +48,13 @@
   @apply text-white/70 hover:text-destructive leading-none;
 }
 
+/* Starts collapsed (height 0) so it reserves no layout space; JS (GSAP, see
+   showAddTagRow/hideAddTagRow in the component) animates height/opacity on
+   hover or focus so the content above slides up into the freed space
+   instead of the row just fading in place. */
 .person-card-add-tag {
-  @apply flex items-center gap-1.5 opacity-0 pointer-events-none transition-opacity duration-150
-         group-hover:opacity-100 group-hover:pointer-events-auto
-         group-focus-within:opacity-100 group-focus-within:pointer-events-auto;
+  @apply flex items-center gap-1.5 overflow-hidden opacity-0;
+  height: 0;
 }
 
 .person-card-add-tag-btn {
