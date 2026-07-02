@@ -286,4 +286,3 @@ pub async fn search_subjects(
         .await
         .map_err(map_err)
 }
-

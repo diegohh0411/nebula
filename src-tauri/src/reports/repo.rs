@@ -108,10 +108,7 @@ pub async fn get_folder_coverage(
 /// duplicate tag ids don't hit the `(report_id, tag_id)` primary key.
 fn dedupe_ids(ids: &[i64]) -> Vec<i64> {
     let mut seen = HashSet::new();
-    ids.iter()
-        .filter(|id| seen.insert(**id))
-        .copied()
-        .collect()
+    ids.iter().filter(|id| seen.insert(**id)).copied().collect()
 }
 
 pub async fn create_saved_report(

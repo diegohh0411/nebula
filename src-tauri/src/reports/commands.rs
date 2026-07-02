@@ -45,7 +45,9 @@ pub async fn get_saved_report(
     id: i64,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<SavedReport>, String> {
-    repo::get_saved_report(&state.pool, id).await.map_err(map_err)
+    repo::get_saved_report(&state.pool, id)
+        .await
+        .map_err(map_err)
 }
 
 #[tauri::command]
