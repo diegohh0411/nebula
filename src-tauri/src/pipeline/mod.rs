@@ -307,7 +307,7 @@ pub async fn run_pipeline(
                 });
                 let result = crate::people::clustering::cluster_unassigned_faces(
                     &pool,
-                    crate::models::registry::BUFFALO_S_PRESET.embedder.id,
+                    subject_preset.embedder.id,
                     Some(cancel_flag.as_ref()),
                 )
                 .await;
@@ -698,12 +698,12 @@ pub async fn run_pipeline(
         if processed_subject_work {
             let incremental_result: anyhow::Result<()> = async {
                 if !batch_new_face_ids.is_empty() {
-                    crate::people::clustering::update_edges_incremental(&pool, &batch_new_face_ids, crate::models::registry::BUFFALO_S_PRESET.embedder.id)
+                    crate::people::clustering::update_edges_incremental(&pool, &batch_new_face_ids, subject_preset.embedder.id)
                         .await?;
                 }
                 // Constraints/assignments may have changed even with no new
                 // vectors, so always relabel.
-                crate::people::clustering::relabel_from_edges(&pool, crate::models::registry::BUFFALO_S_PRESET.embedder.id).await?;
+                crate::people::clustering::relabel_from_edges(&pool, subject_preset.embedder.id).await?;
                 Ok(())
             }
             .await;
