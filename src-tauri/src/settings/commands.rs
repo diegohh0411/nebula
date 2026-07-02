@@ -86,6 +86,16 @@ pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Stri
     }
 }
 
+/// Resolve a possibly-unset `subject_model` setting value to its preset,
+/// defaulting to Blitz — the preset actually used for every face embedded
+/// before the §1 wiring fix, regardless of what the setting said. Also the
+/// fallback for a value that no longer matches a known preset id.
+pub(crate) fn resolve_subject_preset(value: Option<&str>) -> &'static crate::models::registry::FaceIdPreset {
+    value
+        .and_then(crate::models::registry::FaceIdPreset::find_by_id)
+        .unwrap_or(&crate::models::registry::BUFFALO_S_PRESET)
+}
+
 #[command]
 pub async fn update_setting(
     app: tauri::AppHandle,
@@ -172,6 +182,47 @@ mod tests {
         assert_eq!(first, Some("onnx-community/siglip2-base-patch32-256-ONNX"));
     }
 
+
+    #[test]
+    fn resolve_subject_preset_defaults_to_blitz_when_unset() {
+        use super::resolve_subject_preset;
+        let resolved = resolve_subject_preset(None);
+        assert_eq!(resolved.id, "blitz");
+    }
+
+    #[test]
+    fn resolve_subject_preset_falls_back_to_blitz_for_unknown_id() {
+        use super::resolve_subject_preset;
+        let resolved = resolve_subject_preset(Some("not-a-real-preset"));
+        assert_eq!(resolved.id, "blitz");
+    }
+
+    #[test]
+    fn resolve_subject_preset_returns_the_matching_preset() {
+        use super::resolve_subject_preset;
+        assert_eq!(resolve_subject_preset(Some("precision")).id, "precision");
+    }
+
+    #[test]
+    fn unset_setting_and_explicit_blitz_resolve_to_the_same_embedder() {
+        // Confirms selecting Blitz when nothing was previously set is a no-op
+        // for staleness purposes: both resolve to the same embedder id, since
+        // the wiring bug meant every pre-fix embedding was already buffalo_s.
+        use super::resolve_subject_preset;
+        assert_eq!(
+            resolve_subject_preset(None).embedder.id,
+            resolve_subject_preset(Some("blitz")).embedder.id
+        );
+    }
+
+    #[test]
+    fn switching_between_presets_changes_the_resolved_embedder_id() {
+        use super::resolve_subject_preset;
+        assert_ne!(
+            resolve_subject_preset(Some("blitz")).embedder.id,
+            resolve_subject_preset(Some("precision")).embedder.id
+        );
+    }
     #[test]
     fn default_subject_model_matches_first_preset() {
         let first = crate::models::registry::ALL_PRESETS.first().map(|p| p.id);
