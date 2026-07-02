@@ -36,6 +36,10 @@
   @apply text-[15px] font-semibold text-white tracking-tight truncate block;
 }
 
+.person-card-subtitle {
+  @apply text-[12px] text-white/70 tracking-tight truncate;
+}
+
 .person-card-tags-footer {
   @apply flex flex-col gap-1.5 px-3 py-2.5 bg-card border-t border-white/10;
 }

@@ -1,0 +1,14 @@
+.report-detail { @apply p-6 max-w-6xl mx-auto; }
+.header { @apply flex items-center gap-4 mb-6; }
+.header-actions { @apply flex items-center gap-2 ml-auto; }
+.btn { @apply bg-transparent text-muted-foreground border border-border px-3 py-1.5 rounded-md cursor-pointer hover:bg-muted hover:text-foreground text-sm transition-colors; }
+.btn-danger { @apply bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive/20; }
+.back-link { @apply flex items-center gap-1 text-muted-foreground no-underline text-sm hover:text-foreground transition-colors; }
+h2 { @apply m-0 text-2xl font-semibold text-foreground; }
+.name-edit-input { @apply text-2xl font-semibold text-foreground bg-card border border-border rounded-md px-2 py-1; }
+.summary { @apply bg-card border border-border p-4 rounded-lg mb-6 text-foreground text-base; }
+.section { @apply mb-8; }
+h3 { @apply text-lg font-medium text-foreground mb-4 pb-2 border-b border-border; }
+.cards-grid { @apply grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4; }
+.loading { @apply text-muted-foreground text-base flex items-center gap-2; }
+.error-msg { @apply bg-destructive/10 border border-destructive/20 p-4 rounded-lg text-destructive mb-6 text-sm; }

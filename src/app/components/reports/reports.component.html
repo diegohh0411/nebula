@@ -1,0 +1,90 @@
+<div class="reports-container">
+  <div class="header">
+    <h2>Saved Reports</h2>
+    <button class="btn-primary" (click)="isCreating.set(true)">
+      <lucide-icon name="plus" size="16"></lucide-icon> New Report
+    </button>
+  </div>
+
+  @if (isCreating()) {
+    <div class="create-form" (click)="$event.stopPropagation()">
+      <div class="form-title">Create Folder Coverage Report</div>
+      
+      <div class="form-fields">
+        <div class="field-group">
+          <label>Report Name</label>
+          <input type="text" placeholder="e.g. Summer Camp 2026 Roster" [ngModel]="newName()" (ngModelChange)="newName.set($event)">
+        </div>
+
+        <div class="field-group">
+          <label>Target Folder</label>
+          <select [ngModel]="newFolderId()" (ngModelChange)="newFolderId.set($event)">
+            <option [ngValue]="null">Select Folder...</option>
+            @for (f of photos.folders(); track f.id) {
+              <option [ngValue]="f.id">{{ getFolderName(f.id) }}</option>
+            }
+          </select>
+        </div>
+
+        <div class="field-group">
+          <label>Roster Tags</label>
+          <div class="multi-select-container">
+            <button type="button" class="multi-select-trigger" (click)="toggleDropdown($event)">
+              <span class="trigger-text">
+                @if (selectedTagIds().length === 0) {
+                  Select Tags...
+                } @else {
+                  {{ getSelectedTagsText() }}
+                }
+              </span>
+              <lucide-icon name="chevron-down" size="14"></lucide-icon>
+            </button>
+
+            @if (isDropdownOpen()) {
+              <div class="multi-select-dropdown">
+                <div class="dropdown-search">
+                  <input type="text" placeholder="Search tags..." [ngModel]="tagSearchQuery()" (ngModelChange)="tagSearchQuery.set($event)" (click)="$event.stopPropagation()">
+                </div>
+                <div class="dropdown-options">
+                  @for (t of filteredTags(); track t.id) {
+                    <label class="dropdown-option" (click)="$event.stopPropagation()">
+                      <input type="checkbox" [checked]="isTagSelected(t.id)" (change)="toggleTag(t.id)">
+                      <span class="option-name">{{ t.name }}</span>
+                      <span class="option-count">({{ t.subject_count }})</span>
+                    </label>
+                  } @empty {
+                    <div class="no-options">No tags found</div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn-primary" (click)="createReport()" [disabled]="!newFolderId() || selectedTagIds().length === 0 || !newName().trim() || isSubmitting()">
+          {{ isSubmitting() ? 'Saving...' : 'Save & Run' }}
+        </button>
+        <button class="btn-secondary" (click)="cancelCreation()">Cancel</button>
+      </div>
+    </div>
+  }
+
+  <div class="grid">
+    @for (rep of reports(); track rep.id) {
+      <div class="card" [routerLink]="['/reports', rep.id]">
+        <div class="card-header">
+          <h3>{{ rep.name }}</h3>
+          <button class="btn-icon" (click)="deleteReport(rep.id, $event)">
+            <lucide-icon name="trash-2" size="16"></lucide-icon>
+          </button>
+        </div>
+        <div class="card-body">
+          <p><strong>Folder:</strong> {{ getFolderName(rep.folder_id) }}</p>
+          <p><strong>Tags:</strong> {{ getTagsDesc(rep.tag_ids) }}</p>
+        </div>
+      </div>
+    }
+  </div>
+</div>

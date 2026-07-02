@@ -1416,3 +1416,191 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
     assert_eq!(face_id_for(0.5), face_a2);
     assert_eq!(rows[2].face_id, face_b);
 }
+
+#[tokio::test]
+async fn test_get_folder_coverage_counts_distinct_photos() {
+    let pool = init_test_pool().await;
+
+    // Insert mock data
+    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'path', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO subjects (id, name, type, added_at) VALUES (1, 'Alice', 'person', 0), (2, 'Bob', 'person', 0), (3, 'Charlie', 'person', 0), (4, 'Dana', 'person', 0)")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Cabin A', 'cabin a', 0)")
+        .execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO subject_tags (subject_id, tag_id, added_at) VALUES (1, 1, 0), (2, 1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap(); // Alice and Bob in Cabin A
+
+    sqlx::query("INSERT INTO images (id, folder_id, path, file_hash, hash_status, file_size, mtime, semantic_analysis_done, subject_analysis_done, added_at, updated_at) VALUES (1, 1, 'p1', 'h1', 'ok', 0, 0, false, false, 0, 0), (2, 1, 'p2', 'h2', 'ok', 0, 0, false, false, 0, 0)")
+        .execute(&pool).await.unwrap();
+
+    // Alice has two face detections in the SAME photo (e.g. duplicate/overlapping
+    // bounding boxes) -- she should still only count as appearing in 1 photo.
+    // Dana has one face in each of two different photos -- she should count as 2.
+    sqlx::query("INSERT INTO faces (id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES \
+        (1, 1, 1, 0,0,1,1,0), \
+        (2, 1, 1, 0,0,1,1,0), \
+        (3, 1, 3, 0,0,1,1,0), \
+        (4, 1, 4, 0,0,1,1,0), \
+        (5, 2, 4, 0,0,1,1,0)")
+        .execute(&pool).await.unwrap();
+
+    let report = crate::reports::repo::get_folder_coverage(&pool, 1, &[1])
+        .await
+        .unwrap();
+
+    assert_eq!(report.summary.total_targets, 2); // Alice and Bob
+    assert_eq!(report.summary.present_targets, 1); // Alice
+
+    assert_eq!(report.missing_targets.len(), 1);
+    assert_eq!(report.missing_targets[0].name, "Bob");
+    assert_eq!(report.missing_targets[0].frequency, 0);
+
+    assert_eq!(report.present_targets.len(), 1);
+    assert_eq!(report.present_targets[0].name, "Alice");
+    assert_eq!(
+        report.present_targets[0].frequency, 1,
+        "two face detections in the same photo must count as 1 photo, not 2"
+    );
+
+    assert_eq!(report.others_found.len(), 2);
+    let charlie = report
+        .others_found
+        .iter()
+        .find(|s| s.name == "Charlie")
+        .unwrap();
+    assert_eq!(charlie.frequency, 1);
+    let dana = report
+        .others_found
+        .iter()
+        .find(|s| s.name == "Dana")
+        .unwrap();
+    assert_eq!(
+        dana.frequency, 2,
+        "appearing in two distinct photos must count as 2"
+    );
+}
+
+#[tokio::test]
+async fn test_saved_report_crud() {
+    let pool = init_test_pool().await;
+
+    // Create a folder and some tags for FK constraints
+    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'path', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    sqlx::query("INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Tag1', 'tag1', 0), (2, 'Tag2', 'tag2', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let report_name = "My Test Report";
+    let folder_id = 1;
+    let tag_ids = vec![1, 2];
+
+    // 1. Create
+    let created =
+        crate::reports::repo::create_saved_report(&pool, report_name, folder_id, &tag_ids)
+            .await
+            .unwrap();
+    assert_eq!(created.name, report_name);
+    assert_eq!(created.folder_id, folder_id);
+    assert_eq!(created.tag_ids, tag_ids);
+
+    // 2. List
+    let reports = crate::reports::repo::list_saved_reports(&pool)
+        .await
+        .unwrap();
+    assert_eq!(reports.len(), 1);
+    let listed = &reports[0];
+    assert_eq!(listed.id, created.id);
+    assert_eq!(listed.name, report_name);
+    assert_eq!(listed.folder_id, folder_id);
+    assert_eq!(listed.tag_ids, tag_ids);
+
+    // 2b. Get by id
+    let fetched = crate::reports::repo::get_saved_report(&pool, created.id)
+        .await
+        .unwrap();
+    assert_eq!(fetched.unwrap().id, created.id);
+    let missing = crate::reports::repo::get_saved_report(&pool, created.id + 999)
+        .await
+        .unwrap();
+    assert!(missing.is_none());
+
+    // 3. Rename
+    crate::reports::repo::update_saved_report_name(&pool, created.id, "Renamed Report")
+        .await
+        .unwrap();
+    let renamed = crate::reports::repo::get_saved_report(&pool, created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.name, "Renamed Report");
+
+    // 4. Delete
+    crate::reports::repo::delete_saved_report(&pool, created.id)
+        .await
+        .unwrap();
+
+    // Verify deletion
+    let reports_after = crate::reports::repo::list_saved_reports(&pool)
+        .await
+        .unwrap();
+    assert!(reports_after.is_empty());
+}
+
+#[tokio::test]
+async fn test_create_saved_report_dedupes_tag_ids() {
+    let pool = init_test_pool().await;
+    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'path', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Tag1', 'tag1', 0), (2, 'Tag2', 'tag2', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Duplicate tag ids must not violate the (report_id, tag_id) primary key.
+    let created = crate::reports::repo::create_saved_report(&pool, "Dup Tags", 1, &[1, 1, 2])
+        .await
+        .unwrap();
+    assert_eq!(created.tag_ids, vec![1, 2]);
+
+    let reports = crate::reports::repo::list_saved_reports(&pool)
+        .await
+        .unwrap();
+    assert_eq!(reports[0].tag_ids, vec![1, 2]);
+}
+
+#[tokio::test]
+async fn test_saved_report_name_validation() {
+    let pool = init_test_pool().await;
+    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'path', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = crate::reports::repo::create_saved_report(&pool, "   ", 1, &[])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("empty"));
+
+    let created = crate::reports::repo::create_saved_report(&pool, "Valid Name", 1, &[])
+        .await
+        .unwrap();
+
+    let err = crate::reports::repo::update_saved_report_name(&pool, created.id, "  ")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("empty"));
+}

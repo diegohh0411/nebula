@@ -22,6 +22,7 @@ export class SubjectPersonCardComponent implements OnInit {
   private router = inject(Router);
 
   readonly match = input.required<SubjectMatch>();
+  readonly subtitle = input<string>();
 
   readonly tagAdded = output<Tag>();
   readonly tagRemoved = output<number>();

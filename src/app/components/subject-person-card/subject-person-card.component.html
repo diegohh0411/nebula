@@ -23,6 +23,9 @@
         displayClass="person-card-name"
         (commit)="tagging.saveName($event)"
       />
+      @if (subtitle()) {
+        <span class="person-card-subtitle">{{ subtitle() }}</span>
+      }
     </div>
   </div>
 
