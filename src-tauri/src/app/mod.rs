@@ -147,6 +147,12 @@ pub fn run() {
             crate::settings::commands::get_available_subject_models,
             crate::settings::commands::get_setting,
             crate::settings::commands::update_setting,
+            crate::reports::commands::get_folder_coverage,
+            crate::reports::commands::create_saved_report,
+            crate::reports::commands::list_saved_reports,
+            crate::reports::commands::get_saved_report,
+            crate::reports::commands::delete_saved_report,
+            crate::reports::commands::update_saved_report_name,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

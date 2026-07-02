@@ -167,6 +167,19 @@ CREATE TABLE IF NOT EXISTS face_edges (
     weight  REAL NOT NULL,
     PRIMARY KEY (face_a, face_b)
 );
+
+CREATE TABLE IF NOT EXISTS saved_reports (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT NOT NULL,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    added_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS saved_report_tags (
+    report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
+    tag_id    INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (report_id, tag_id)
+);
 "#;
 
 const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
@@ -177,6 +190,10 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
         "CREATE INDEX IF NOT EXISTS idx_queue_image ON embedding_queue(image_id)",
+    ),
+    (
+        3,
+        "CREATE TABLE IF NOT EXISTS saved_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE, added_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS saved_report_tags (report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE, tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE, PRIMARY KEY (report_id, tag_id));"
     ),
 ];
 

@@ -56,6 +56,10 @@ export class SidebarComponent {
     return this.router.url === '/tags';
   }
 
+  protected isReportsActive(): boolean {
+    return this.router.url.startsWith('/reports');
+  }
+
   protected isSettingsActive(): boolean {
     return this.router.url === '/settings';
   }

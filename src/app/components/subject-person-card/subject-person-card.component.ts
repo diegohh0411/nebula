@@ -19,6 +19,7 @@ export class SubjectPersonCardComponent implements OnInit {
   readonly match = input.required<SubjectMatch>();
   readonly removable = input(false);
   readonly remove = output<number>();
+  readonly subtitle = input<string>();
 
   protected readonly cropUrl = signal<string | null>(null);
 

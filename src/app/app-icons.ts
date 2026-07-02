@@ -2,6 +2,7 @@ import {
   Search, Info, X, ChevronLeft, ChevronRight, ChevronDown, ArrowLeft, Pencil, Star,
   EllipsisVertical, Plus, Settings, Cpu, AlertTriangle, Sparkles, ScanFace, HardDrive,
   Download, Folder, Image, Images, Tag, Users,
+  FileBarChart, Trash2,
 } from 'lucide-angular';
 
 /**
@@ -17,4 +18,5 @@ export const APP_ICONS = {
   Search, Info, X, ChevronLeft, ChevronRight, ChevronDown, ArrowLeft, Pencil, Star,
   EllipsisVertical, Plus, Settings, Cpu, AlertTriangle, Sparkles, ScanFace, HardDrive,
   Download, Folder, Image, Images, Tag, Users,
+  FileBarChart, Trash2,
 };

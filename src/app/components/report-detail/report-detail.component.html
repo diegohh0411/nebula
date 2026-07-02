@@ -1,0 +1,66 @@
+<div class="report-detail">
+  <div class="header">
+    <a routerLink="/reports" class="back-link"><lucide-icon name="arrow-left" size="16"></lucide-icon> Back</a>
+    @if (report(); as rep) {
+      @if (isEditingName()) {
+        <input
+          class="name-edit-input"
+          type="text"
+          [ngModel]="editNameValue()"
+          (ngModelChange)="editNameValue.set($event)"
+          (keydown.enter)="confirmEditName()"
+          (keydown.escape)="cancelEditName()"
+        />
+        <div class="header-actions">
+          <button class="btn" (click)="confirmEditName()">Save</button>
+          <button class="btn" (click)="cancelEditName()">Cancel</button>
+        </div>
+      } @else {
+        <h2>{{ rep.name }}</h2>
+        <div class="header-actions">
+          <button class="btn" (click)="startEditName()">Edit Name</button>
+          <button class="btn btn-danger" (click)="deleteReport()">Delete</button>
+        </div>
+      }
+    }
+  </div>
+
+  @if (error()) {
+    <div class="error-msg">{{ error() }}</div>
+  } @else if (coverage(); as cov) {
+    <div class="summary">
+      <strong>Coverage Summary:</strong> {{ cov.summary.present_targets }} of {{ cov.summary.total_targets }} target subjects present.
+    </div>
+
+    <div class="sections">
+      <div class="section">
+        <h3>Missing Targets ({{ cov.missing_targets.length }})</h3>
+        <div class="cards-grid">
+          @for (item of missingMatches(); track item.match.subject.id) {
+            <app-subject-person-card [match]="item.match" [subtitle]="'Appears in ' + item.frequency + ' photo' + (item.frequency === 1 ? '' : 's')" />
+          }
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Present Targets ({{ cov.present_targets.length }})</h3>
+        <div class="cards-grid">
+          @for (item of presentMatches(); track item.match.subject.id) {
+            <app-subject-person-card [match]="item.match" [subtitle]="'Appears in ' + item.frequency + ' photo' + (item.frequency === 1 ? '' : 's')" />
+          }
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Others Found ({{ cov.others_found.length }})</h3>
+        <div class="cards-grid">
+          @for (item of othersMatches(); track item.match.subject.id) {
+            <app-subject-person-card [match]="item.match" [subtitle]="'Appears in ' + item.frequency + ' photo' + (item.frequency === 1 ? '' : 's')" />
+          }
+        </div>
+      </div>
+    </div>
+  } @else {
+    <div class="loading">Generating report...</div>
+  }
+</div>
