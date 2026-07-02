@@ -1,17 +1,7 @@
 .person-card {
-  @apply relative flex flex-col w-56 rounded-2xl overflow-hidden flex-shrink-0
+  @apply relative flex flex-col w-56 aspect-[3/4] rounded-2xl overflow-hidden flex-shrink-0
          border border-white/10 shadow-lg bg-muted text-left
-         transition-transform duration-150 ease-out
          focus:outline-none focus-visible:ring-2 focus-visible:ring-ring;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .person-card:hover { transform: translateY(-4px); }
-  .person-card:hover .person-card-img { transform: scale(1.05); }
-}
-
-.person-card-photo {
-  @apply relative w-full aspect-[3/4];
 }
 
 .person-card-img {
@@ -25,12 +15,17 @@
 .person-card-scrim {
   @apply absolute inset-0 pointer-events-none;
   background: linear-gradient(to top,
-    rgba(8, 8, 11, 0.92) 0%, rgba(8, 8, 11, 0.45) 28%, transparent 55%);
+    rgba(8, 8, 11, 0.95) 0%,
+    rgba(8, 8, 11, 0.75) 35%,
+    rgba(8, 8, 11, 0.25) 60%,
+    transparent 80%);
 }
 
-.person-card-meta {
-  @apply absolute left-3 right-3 bottom-3;
+.person-card-content {
+  @apply absolute inset-x-0 bottom-0 flex flex-col gap-1.5 p-3;
 }
+
+.person-card-meta { @apply flex flex-col; }
 
 .person-card-name {
   @apply text-[15px] font-semibold text-white tracking-tight truncate block;
@@ -40,25 +35,21 @@
   @apply text-[12px] text-white/70 tracking-tight truncate;
 }
 
-.person-card-tags-footer {
-  @apply flex flex-col gap-1.5 px-3 py-2.5 bg-card border-t border-white/10;
-}
-
 .person-card-tags { @apply flex flex-wrap gap-1.5; }
 
 .person-card-tag {
-  @apply inline-flex items-center gap-1 text-[11px] font-medium text-secondary-foreground
-         px-2 py-0.5 rounded-full bg-secondary;
+  @apply inline-flex items-center gap-1 text-[11px] font-medium text-white
+         px-2 py-0.5 rounded-full bg-white/15 backdrop-blur-sm border border-white/20;
 }
 
 .person-card-tag-remove {
-  @apply text-muted-foreground hover:text-destructive leading-none;
+  @apply text-white/70 hover:text-destructive leading-none;
 }
 
 .person-card-add-tag { @apply flex items-center gap-1.5; }
 
 .person-card-add-tag-btn {
-  @apply text-[11px] text-primary hover:underline shrink-0;
+  @apply text-[11px] text-white hover:text-white/80 shrink-0;
 }
 
 .person-card-tag-error { @apply text-[11px] text-destructive; }
