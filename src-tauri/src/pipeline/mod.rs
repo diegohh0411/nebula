@@ -135,6 +135,39 @@ async fn save_faces(
     vectorized
 }
 
+/// Resolve the `subject_model` setting to its preset, falling back to Blitz
+/// for an unset or unrecognized value. Delegates to the settings slice's
+/// resolution so the pipeline and the settings command agree on what "the
+/// active preset" means.
+async fn resolve_subject_preset(
+    pool: &sqlx::SqlitePool,
+) -> &'static crate::models::registry::FaceIdPreset {
+    let value = crate::settings::repo::get_setting(pool, "subject_model")
+        .await
+        .ok()
+        .flatten();
+    crate::settings::commands::resolve_subject_preset(value.as_deref())
+}
+
+/// Ensure a preset's three models are downloaded and return its (cached or
+/// freshly built) `FaceAnalyzer`. `VisionEngine::get_face_analyzer` already
+/// caches by `preset.id` internally, so calling this repeatedly with the same
+/// preset is cheap — only a preset change triggers a real rebuild.
+async fn ensure_face_preset(
+    app: &tauri::AppHandle,
+    engine: &crate::vision::engine::VisionEngine,
+    manager: &crate::models::ModelManager,
+    preset: &'static crate::models::registry::FaceIdPreset,
+) -> anyhow::Result<Arc<face_id::analyzer::FaceAnalyzer>> {
+    for face_spec in [preset.detector, preset.embedder, preset.gender_age] {
+        manager
+            .ensure_ready(app, face_spec)
+            .await
+            .map_err(|e| anyhow::anyhow!("face model not ready ({}): {e}", face_spec.id))?;
+    }
+    engine.get_face_analyzer(manager, preset).await
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_pipeline(
     pool: sqlx::SqlitePool,
@@ -159,7 +192,6 @@ pub async fn run_pipeline(
         );
         &crate::models::registry::SIGLIP_BASE
     };
-    let preset = &crate::models::registry::BUFFALO_S_PRESET;
 
     info!("[pipeline] Ensuring embed model is ready...");
     if let Err(e) = manager.ensure_ready(&app, spec).await {
@@ -168,23 +200,17 @@ pub async fn run_pipeline(
     }
     info!("[pipeline] Embed model ready.");
 
-    for face_spec in [preset.detector, preset.embedder, preset.gender_age] {
-        info!("[pipeline] Ensuring face model is ready ({})", face_spec.id);
-        if let Err(e) = manager.ensure_ready(&app, face_spec).await {
-            error!("[pipeline] face model not ready ({}): {e}", face_spec.id);
-            return;
-        }
-    }
-    info!("[pipeline] Face models ready.");
-
-    let analyzer = match engine.get_face_analyzer(&manager, preset).await {
+    let initial_preset = resolve_subject_preset(&pool).await;
+    let initial_analyzer = match ensure_face_preset(&app, &engine, &manager, initial_preset).await {
         Ok(a) => a,
         Err(e) => {
             error!("[pipeline] face analyzer init failed: {e}");
             return;
         }
     };
-    info!("[pipeline] Face analyzer initialized.");
+    info!("[pipeline] Face analyzer initialized ('{}').", initial_preset.id);
+    let mut subject_preset = initial_preset;
+    let mut face_tx = face_actor::spawn_face_actor(initial_analyzer, config.infer_channel_depth);
 
     let embed_tx = embed_actor::spawn_embed_actor(
         engine.clone(),
@@ -193,7 +219,6 @@ pub async fn run_pipeline(
         config.batch_size,
         config.infer_channel_depth,
     );
-    let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
     info!("[pipeline] Pipeline background loop started, awaiting tasks...");
 
@@ -209,6 +234,27 @@ pub async fn run_pipeline(
     info!("[pipeline] clustering state recovered: dirty={clustering_dirty}");
 
     loop {
+        // Per-batch preset resolution (§1 wiring fix): a mid-session
+        // subject_model change takes effect on the next iteration with no
+        // restart or signalling machinery. The analyzer is only rebuilt when
+        // the resolved preset id actually differs from the one already loaded.
+        let resolved_preset = resolve_subject_preset(&pool).await;
+        if resolved_preset.id != subject_preset.id {
+            match ensure_face_preset(&app, &engine, &manager, resolved_preset).await {
+                Ok(analyzer) => {
+                    face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
+                    subject_preset = resolved_preset;
+                    info!("[pipeline] subject_model switched to '{}'", subject_preset.id);
+                }
+                Err(e) => {
+                    error!(
+                        "[pipeline] failed to switch subject preset to '{}', keeping '{}': {e}",
+                        resolved_preset.id, subject_preset.id
+                    );
+                }
+            }
+        }
+
         // Pull both queues
         let sem_batch = match crate::pipeline::queue::get_queue_batch(
             &pool,
