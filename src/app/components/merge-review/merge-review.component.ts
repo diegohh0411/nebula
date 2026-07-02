@@ -15,6 +15,7 @@ import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, SubjectPhotoFace, Subject } from '../../models/models';
 import { MergePhotoGridComponent } from '../merge-photo-grid/merge-photo-grid.component';
+import { prefersReducedMotion } from '../../utils/motion';
 
 interface MergeTarget {
   target: Subject;
@@ -135,9 +136,7 @@ export class MergeReviewComponent {
   }
 
   protected async runMergeAnimation(target: MergeTarget) {
-    if (typeof window !== 'undefined' &&
-        typeof window.matchMedia === 'function' &&
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (prefersReducedMotion()) {
       return;
     }
     const colA = this.colARef?.nativeElement;

@@ -9,6 +9,7 @@ import { EditableTextComponent } from '../editable-text/editable-text.component'
 import { ConfirmMergeDialogComponent } from '../confirm-merge-dialog/confirm-merge-dialog.component';
 import { injectSubjectTagging } from '../../composables/subject-tagging.composable';
 import { HlmInput } from '@spartan-ng/helm/input';
+import { prefersReducedMotion } from '../../utils/motion';
 
 @Component({
   selector: 'app-subject-person-card',
@@ -78,7 +79,7 @@ export class SubjectPersonCardComponent implements OnInit {
     if (!el) return;
     const { gsap } = await import('gsap');
     gsap.killTweensOf(el);
-    gsap.to(el, { height: 'auto', opacity: 1, duration: this.reducedMotion() ? 0 : 0.2, ease: 'power2.out' });
+    gsap.to(el, { height: 'auto', opacity: 1, duration: prefersReducedMotion() ? 0 : 0.2, ease: 'power2.out' });
   }
 
   private async hideAddTagRow(): Promise<void> {
@@ -86,11 +87,6 @@ export class SubjectPersonCardComponent implements OnInit {
     if (!el) return;
     const { gsap } = await import('gsap');
     gsap.killTweensOf(el);
-    gsap.to(el, { height: 0, opacity: 0, duration: this.reducedMotion() ? 0 : 0.15, ease: 'power2.in' });
-  }
-
-  private reducedMotion(): boolean {
-    return typeof window.matchMedia === 'function'
-      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    gsap.to(el, { height: 0, opacity: 0, duration: prefersReducedMotion() ? 0 : 0.15, ease: 'power2.in' });
   }
 }
