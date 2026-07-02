@@ -53,3 +53,17 @@
 }
 
 .person-card-tag-error { @apply text-[11px] text-destructive; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .person-card {
+    transition: box-shadow 150ms ease-out;
+  }
+  .person-card:hover,
+  .person-card:focus-visible {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 0 2px rgba(255, 255, 255, 0.2);
+  }
+  .person-card:hover .person-card-img,
+  .person-card:focus-visible .person-card-img {
+    transform: scale(1.05);
+  }
+}
