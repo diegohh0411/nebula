@@ -101,6 +101,7 @@ async fn save_faces(
             (rel_x, rel_y, rel_w, rel_h),
             Some(detection.score as f64),
             Some(quality as f64),
+            crate::models::registry::BUFFALO_S_PRESET.embedder.id,
         )
         .await
         {

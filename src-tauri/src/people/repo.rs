@@ -29,11 +29,12 @@ pub async fn insert_face(
     bbox: (f64, f64, f64, f64),
     det_score: Option<f64>,
     quality_score: Option<f64>,
+    embedder_id: &str,
 ) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
     let result = sqlx::query(
-        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score, embedder_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(image_id)
     .bind(subject_id)
@@ -44,6 +45,7 @@ pub async fn insert_face(
     .bind(now)
     .bind(det_score)
     .bind(quality_score)
+    .bind(embedder_id)
     .execute(pool)
     .await?;
     Ok(result.last_insert_rowid())
@@ -298,6 +300,47 @@ pub async fn update_face_subject(
 ) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
         .bind(subject_id)
+        .bind(face_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Overwrite an existing face row's detection output in place — bbox, scores,
+/// and the embedder that produced its (separately updated) vector — while
+/// preserving `id`, `subject_id`, and `added_at`. Used when a re-detected face
+/// IoU-matches an existing row across a model switch, so `subject_id`,
+/// `constraints`, and `thumbnail_face_id` references all survive untouched.
+pub async fn update_face_detection(
+    pool: &SqlitePool,
+    face_id: i64,
+    bbox: (f64, f64, f64, f64),
+    det_score: f64,
+    quality_score: f64,
+    embedder_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE faces SET bbox_x = ?, bbox_y = ?, bbox_w = ?, bbox_h = ?, det_score = ?, quality_score = ?, embedder_id = ?
+         WHERE id = ?",
+    )
+    .bind(bbox.0)
+    .bind(bbox.1)
+    .bind(bbox.2)
+    .bind(bbox.3)
+    .bind(det_score)
+    .bind(quality_score)
+    .bind(embedder_id)
+    .bind(face_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Delete a face row. FK `ON DELETE CASCADE` removes its `constraints` and
+/// `face_edges` rows, but NOT its `face_vectors` row (a `vec0` virtual table
+/// has no FK support) — callers must also call `face_store::delete_vector`.
+pub async fn delete_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM faces WHERE id = ?")
         .bind(face_id)
         .execute(pool)
         .await?;
