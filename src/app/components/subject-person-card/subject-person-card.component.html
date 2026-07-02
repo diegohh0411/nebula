@@ -1,30 +1,72 @@
-<button type="button" class="person-card group" (click)="navigate()">
-  @if (cropUrl(); as url) {
-    <img [src]="url" [alt]="displayName" loading="lazy" decoding="async" class="person-card-img" />
-  } @else {
-    <span class="person-card-placeholder">👤</span>
-  }
+<div
+  class="person-card group"
+  role="button"
+  tabindex="0"
+  (click)="navigate()"
+  (keydown.enter)="navigate()"
+  (keydown.space)="navigate()"
+>
+  <div class="person-card-photo">
+    @if (cropUrl(); as url) {
+      <img [src]="url" [alt]="tagging.name() ?? 'Unnamed'" loading="lazy" decoding="async" class="person-card-img" />
+    } @else {
+      <span class="person-card-placeholder">👤</span>
+    }
 
-  <div class="person-card-scrim"></div>
+    <div class="person-card-scrim"></div>
 
-  <div class="person-card-meta">
-    @if (match().tags.length > 0) {
+    <div class="person-card-meta" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
+      <app-editable-text
+        [value]="tagging.name()"
+        placeholder="Unnamed"
+        placeholderClass="opacity-70"
+        displayClass="person-card-name"
+        (commit)="tagging.saveName($event)"
+      />
+      @if (subtitle()) {
+        <span class="person-card-subtitle">{{ subtitle() }}</span>
+      }
+    </div>
+  </div>
+
+  <div class="person-card-tags-footer" (click)="$event.stopPropagation()" (keydown)="$event.stopPropagation()">
+    @if (tagging.tags().length > 0) {
       <div class="person-card-tags">
-        @for (tag of match().tags.slice(0, 2); track tag.id) {
-          <span class="person-card-tag">{{ tag.name }}</span>
-        }
-        @if (match().tags.length > 2) {
-          <span class="person-card-tag">+{{ match().tags.length - 2 }}</span>
+        @for (tag of tagging.tags(); track tag.id) {
+          <span class="person-card-tag">
+            {{ tag.name }}
+            <button type="button" class="person-card-tag-remove" (click)="tagging.removeTag(tag.id)" title="Remove tag">×</button>
+          </span>
         }
       </div>
     }
-    <span class="person-card-name">{{ displayName }}</span>
-    @if (subtitle()) {
-      <span class="person-card-subtitle">{{ subtitle() }}</span>
+    <div class="person-card-add-tag">
+      <input
+        hlmInput
+        class="h-6 flex-1 text-[11px] px-2 py-0.5"
+        placeholder="Add tag…"
+        [attr.list]="'person-card-tags-list-' + match().subject.id"
+        [value]="tagging.newTagName()"
+        (input)="tagging.newTagName.set($any($event.target).value)"
+        (focus)="tagging.onTagFocus()"
+        (keydown.enter)="tagging.addTag()"
+      />
+      <datalist [id]="'person-card-tags-list-' + match().subject.id">
+        @for (t of tagging.allTags(); track t.id) {
+          <option [value]="t.name"></option>
+        }
+      </datalist>
+      <button type="button" class="person-card-add-tag-btn" (click)="tagging.addTag()">Add</button>
+    </div>
+    @if (tagging.tagError()) {
+      <span class="person-card-tag-error">{{ tagging.tagError() }}</span>
     }
   </div>
+</div>
 
-  @if (removable()) {
-    <span class="person-card-remove" role="button" tabindex="0" (click)="onRemove($event)" (keydown.enter)="onRemove($event)" (keydown.space)="onRemove($event)">Remove</span>
-  }
-</button>
+<app-confirm-merge-dialog
+  [open]="tagging.nameConflict() !== null"
+  [error]="tagging.mergeError()"
+  (merge)="tagging.confirmMerge()"
+  (cancel)="tagging.cancelMerge()"
+/>

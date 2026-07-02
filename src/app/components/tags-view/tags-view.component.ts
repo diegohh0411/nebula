@@ -1,5 +1,7 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
+import { ActivatedRoute, Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
 import { TagWithCount, SubjectMatch } from '../../models/models';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
@@ -17,6 +19,9 @@ import { PageHeaderComponent } from '../page-header/page-header.component';
 })
 export class TagsViewComponent implements OnInit {
   protected photos = inject(PhotoService);
+  private route = inject(ActivatedRoute);
+  private router = inject(Router);
+  private destroyRef = inject(DestroyRef);
 
   protected tags = signal<TagWithCount[]>([]);
   protected selectedTag = signal<TagWithCount | null>(null);
@@ -26,7 +31,13 @@ export class TagsViewComponent implements OnInit {
   protected renameError = signal<string | null>(null);
 
   ngOnInit() {
-    void this.loadTags();
+    void this.loadTags().then(() => {
+      this.route.queryParamMap
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe((params) => {
+          void this.applyTagFromUrl(params.get('tag'));
+        });
+    });
   }
 
   private async loadTags(): Promise<void> {
@@ -35,12 +46,27 @@ export class TagsViewComponent implements OnInit {
     } catch { /* ignore */ }
   }
 
-  protected async selectTag(tag: TagWithCount): Promise<void> {
+  private async applyTagFromUrl(tagIdParam: string | null): Promise<void> {
+    const tagId = tagIdParam ? Number(tagIdParam) : null;
+    const tag = tagId !== null ? this.tags().find((t) => t.id === tagId) ?? null : null;
     this.selectedTag.set(tag);
     this.renameError.set(null);
+    if (!tag) {
+      this.tagSubjects.set([]);
+      return;
+    }
     try {
       this.tagSubjects.set(await this.photos.getTagSubjects(tag.id));
     } catch { /* ignore */ }
+  }
+
+  protected selectTag(tag: TagWithCount): void {
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { tag: tag.id },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
 
   protected async createTag(): Promise<void> {
@@ -75,21 +101,35 @@ export class TagsViewComponent implements OnInit {
     if (!confirm(`Delete tag "${tag.name}"? Subjects are not affected.`)) return;
     try {
       await this.photos.deleteTag(tag.id);
-      if (this.selectedTag()?.id === tag.id) {
-        this.selectedTag.set(null);
-        this.tagSubjects.set([]);
-      }
       await this.loadTags();
+      if (this.selectedTag()?.id === tag.id) {
+        void this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { tag: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+      }
     } catch { /* ignore */ }
   }
 
-  protected async removeSubjectFromTag(subjectId: number): Promise<void> {
+  protected async onTagAdded(): Promise<void> {
+    await this.loadTags();
+  }
+
+  protected async onTagRemoved(subjectId: number, tagId: number): Promise<void> {
+    if (this.selectedTag()?.id === tagId) {
+      this.tagSubjects.update((ss) => ss.filter((s) => s.subject.id !== subjectId));
+    }
+    await this.loadTags();
+  }
+
+  protected async onMerged(): Promise<void> {
+    await this.loadTags();
     const tag = this.selectedTag();
     if (!tag) return;
     try {
-      await this.photos.removeSubjectTag(subjectId, tag.id);
-      this.tagSubjects.update((ss) => ss.filter((s) => s.subject.id !== subjectId));
-      await this.loadTags();
+      this.tagSubjects.set(await this.photos.getTagSubjects(tag.id));
     } catch { /* ignore */ }
   }
 }

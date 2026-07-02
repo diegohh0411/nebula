@@ -9,12 +9,14 @@ import {
 import { CommonModule, Location } from '@angular/common';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
-import { SearchResult, VirtualRow, SubjectDetail, MergeSuggestion, Tag, TagWithCount } from '../../models/models';
+import { SearchResult, VirtualRow, SubjectDetail, MergeSuggestion } from '../../models/models';
 import { LucideAngularModule } from 'lucide-angular';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { buildJustifiedRows } from '../../utils/justified-layout';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
+import { ConfirmMergeDialogComponent } from '../confirm-merge-dialog/confirm-merge-dialog.component';
+import { injectSubjectTagging } from '../../composables/subject-tagging.composable';
 import { HlmInput } from '@spartan-ng/helm/input';
 
 @Component({
@@ -28,6 +30,7 @@ import { HlmInput } from '@spartan-ng/helm/input';
     PhotoGridComponent,
     LightboxComponent,
     EditableTextComponent,
+    ConfirmMergeDialogComponent,
     HlmInput,
   ],
   templateUrl: './subject-detail.component.html',
@@ -48,13 +51,14 @@ export class SubjectDetailComponent implements OnInit {
 
   protected similarSubjects = signal<MergeSuggestion[]>([]);
   protected similarCropUrls = signal<Record<number, string>>({});
-  protected showNameConflict = signal(false);
-  protected conflictingSubjectId = signal<number | null>(null);
 
-  protected tags = signal<Tag[]>([]);
-  protected allTags = signal<TagWithCount[]>([]);
-  protected newTagName = signal('');
-  protected tagError = signal<string | null>(null);
+  protected readonly tagging = injectSubjectTagging(this.subjectId, {
+    onNameSaved: (name) =>
+      this.detail.update((d) => (d ? { ...d, subject: { ...d.subject, name } } : d)),
+    onMerged: (id) => {
+      this.router.navigate(['/subject', id]);
+    },
+  });
 
   protected readonly virtualRows = computed<VirtualRow[]>(() => {
     const images = this.subjectPhotos();
@@ -94,7 +98,7 @@ export class SubjectDetailComponent implements OnInit {
 
       void this.loadSimilarSubjects(id);
       const tags = await this.photos.getSubjectTags(id);
-      this.tags.set(tags);
+      this.tagging.tags.set(tags);
     } catch (e) {
       console.error('Failed to load subject detail', e);
       this.location.back();
@@ -137,40 +141,6 @@ export class SubjectDetailComponent implements OnInit {
     this.location.back();
   }
 
-  protected async saveName(value: string): Promise<void> {
-    const id = this.subjectId();
-    if (id === null) return;
-    const name = value || null;
-    try {
-      const result = await this.photos.nameSubject(id, name);
-      this.detail.update((d) =>
-        d ? { ...d, subject: { ...d.subject, name } } : d,
-      );
-      if (result.duplicate_subject_id) {
-        this.conflictingSubjectId.set(result.duplicate_subject_id);
-        this.showNameConflict.set(true);
-      }
-    } catch (e) {
-      console.error('Failed to save name', e);
-    }
-  }
-
-  protected async confirmMerge() {
-    const id = this.subjectId();
-    const conflictId = this.conflictingSubjectId();
-    if (id !== null && conflictId !== null) {
-      await this.photos.mergeSubjects(id, conflictId);
-      this.showNameConflict.set(false);
-      this.conflictingSubjectId.set(null);
-      this.router.navigate(['/subject', id]);
-    }
-  }
-
-  protected cancelMerge() {
-    this.showNameConflict.set(false);
-    this.conflictingSubjectId.set(null);
-  }
-
   protected async mergeSimilar(suggestion: MergeSuggestion) {
     const id = this.subjectId();
     if (id === null) return;
@@ -207,36 +177,5 @@ export class SubjectDetailComponent implements OnInit {
 
   protected closeMenu() {
     this.isMenuOpen.set(false);
-  }
-
-  protected async onTagFocus(): Promise<void> {
-    try {
-      const all = await this.photos.listTags();
-      this.allTags.set(all);
-    } catch { /* ignore */ }
-  }
-
-  protected async addTag(): Promise<void> {
-    const id = this.subjectId();
-    const name = this.newTagName().trim();
-    if (!name || id === null) return;
-    try {
-      this.tagError.set(null);
-      await this.photos.addSubjectTag(id, name);
-      this.newTagName.set('');
-      const tags = await this.photos.getSubjectTags(id);
-      this.tags.set(tags);
-    } catch (e: unknown) {
-      this.tagError.set(typeof e === 'string' ? e : 'Failed to add tag');
-    }
-  }
-
-  protected async removeTag(tagId: number): Promise<void> {
-    const id = this.subjectId();
-    if (id === null) return;
-    try {
-      await this.photos.removeSubjectTag(id, tagId);
-      this.tags.update((ts) => ts.filter((t) => t.id !== tagId));
-    } catch { /* ignore */ }
   }
 }

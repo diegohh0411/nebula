@@ -22,7 +22,7 @@
               placeholder="Unnamed Person"
               placeholderClass="opacity-50"
               displayClass="text-2xl font-bold tracking-tight"
-              (commit)="saveName($event)"
+              (commit)="tagging.saveName($event)"
             />
           </div>
           <div class="text-sm text-muted-foreground flex items-center gap-3">
@@ -32,10 +32,10 @@
           </div>
           <!-- Tag chips -->
           <div class="flex flex-wrap gap-1.5 mt-2">
-            @for (tag of tags(); track tag.id) {
+            @for (tag of tagging.tags(); track tag.id) {
               <span class="inline-flex items-center gap-1 text-xs bg-secondary text-secondary-foreground rounded-full px-2 py-0.5">
                 {{ tag.name }}
-                <button class="hover:text-destructive" (click)="removeTag(tag.id)" title="Remove tag">×</button>
+                <button class="hover:text-destructive" (click)="tagging.removeTag(tag.id)" title="Remove tag">×</button>
               </span>
             }
             <div class="flex flex-col gap-1">
@@ -45,20 +45,20 @@
                   class="h-7 w-32 text-xs px-2 py-0.5"
                   placeholder="Add tag…"
                   list="subject-tags-list"
-                  [value]="newTagName()"
-                  (input)="newTagName.set($any($event.target).value)"
-                  (focus)="onTagFocus()"
-                  (keydown.enter)="addTag()"
+                  [value]="tagging.newTagName()"
+                  (input)="tagging.newTagName.set($any($event.target).value)"
+                  (focus)="tagging.onTagFocus()"
+                  (keydown.enter)="tagging.addTag()"
                 />
                 <datalist id="subject-tags-list">
-                  @for (t of allTags(); track t.id) {
+                  @for (t of tagging.allTags(); track t.id) {
                     <option [value]="t.name"></option>
                   }
                 </datalist>
-                <button class="text-xs text-primary hover:underline" (click)="addTag()">Add</button>
+                <button class="text-xs text-primary hover:underline" (click)="tagging.addTag()">Add</button>
               </div>
-              @if (tagError()) {
-                <span class="text-xs text-destructive">{{ tagError() }}</span>
+              @if (tagging.tagError()) {
+                <span class="text-xs text-destructive">{{ tagging.tagError() }}</span>
               }
             </div>
           </div>
@@ -144,31 +144,12 @@
     }
   </main>
 
-  <!-- Name Conflict Dialog -->
-  @if (showNameConflict()) {
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div class="bg-card border border-border rounded-lg p-6 max-w-sm mx-4 shadow-xl">
-        <h3 class="text-lg font-semibold mb-2">Duplicate Name</h3>
-        <p class="text-sm text-muted-foreground mb-4">
-          A subject with this name already exists. Would you like to merge them?
-        </p>
-        <div class="flex justify-end gap-2">
-          <button
-            class="px-4 py-2 text-sm rounded-md border border-border hover:bg-muted transition-colors"
-            (click)="cancelMerge()"
-          >
-            Keep Separate
-          </button>
-          <button
-            class="px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            (click)="confirmMerge()"
-          >
-            Merge
-          </button>
-        </div>
-      </div>
-    </div>
-  }
+  <app-confirm-merge-dialog
+    [open]="tagging.nameConflict() !== null"
+    [error]="tagging.mergeError()"
+    (merge)="tagging.confirmMerge()"
+    (cancel)="tagging.cancelMerge()"
+  />
 
   <app-lightbox [image]="photos.selectedImage()" />
 </div>
