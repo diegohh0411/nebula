@@ -1,11 +1,12 @@
 import {
-  Component, ChangeDetectionStrategy, inject, input, output, signal, OnInit,
+  Component, ChangeDetectionStrategy, computed, inject, input, output, signal, OnInit,
 } from '@angular/core';
 import { Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
-import { SubjectMatch, Tag, TagWithCount } from '../../models/models';
+import { SubjectMatch, Tag } from '../../models/models';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
 import { ConfirmMergeDialogComponent } from '../confirm-merge-dialog/confirm-merge-dialog.component';
+import { injectSubjectTagging } from '../../composables/subject-tagging.composable';
 import { HlmInput } from '@spartan-ng/helm/input';
 
 @Component({
@@ -27,18 +28,18 @@ export class SubjectPersonCardComponent implements OnInit {
   readonly merged = output<void>();
 
   protected readonly cropUrl = signal<string | null>(null);
-  protected readonly name = signal<string | null>(null);
-  protected readonly tags = signal<Tag[]>([]);
-  protected readonly allTags = signal<TagWithCount[]>([]);
-  protected readonly newTagName = signal('');
-  protected readonly tagError = signal<string | null>(null);
-  protected readonly showNameConflict = signal(false);
-  protected readonly conflictingSubjectId = signal<number | null>(null);
+
+  private readonly subjectId = computed(() => this.match().subject.id);
+  protected readonly tagging = injectSubjectTagging(this.subjectId, {
+    onMerged: () => this.merged.emit(),
+    onTagAdded: (t) => this.tagAdded.emit(t),
+    onTagRemoved: (id) => this.tagRemoved.emit(id),
+  });
 
   async ngOnInit(): Promise<void> {
     const subject = this.match().subject;
-    this.name.set(subject.name);
-    this.tags.set(this.match().tags);
+    this.tagging.name.set(subject.name);
+    this.tagging.tags.set(this.match().tags);
     if (!subject.thumbnail_face_id) return;
     try {
       const path = await this.photos.getFaceCrop(subject.thumbnail_face_id);
@@ -50,65 +51,5 @@ export class SubjectPersonCardComponent implements OnInit {
 
   protected navigate(): void {
     void this.router.navigate(['/subject', this.match().subject.id]);
-  }
-
-  protected async saveName(value: string): Promise<void> {
-    const id = this.match().subject.id;
-    const name = value || null;
-    try {
-      const result = await this.photos.nameSubject(id, name);
-      this.name.set(name);
-      if (result.duplicate_subject_id) {
-        this.conflictingSubjectId.set(result.duplicate_subject_id);
-        this.showNameConflict.set(true);
-      }
-    } catch (e) {
-      console.error('Failed to save name', e);
-    }
-  }
-
-  protected async confirmMerge(): Promise<void> {
-    const id = this.match().subject.id;
-    const conflictId = this.conflictingSubjectId();
-    if (conflictId === null) return;
-    await this.photos.mergeSubjects(id, conflictId);
-    this.showNameConflict.set(false);
-    this.conflictingSubjectId.set(null);
-    this.merged.emit();
-  }
-
-  protected cancelMerge(): void {
-    this.showNameConflict.set(false);
-    this.conflictingSubjectId.set(null);
-  }
-
-  protected async onTagFocus(): Promise<void> {
-    try {
-      this.allTags.set(await this.photos.listTags());
-    } catch { /* ignore */ }
-  }
-
-  protected async addTag(): Promise<void> {
-    const id = this.match().subject.id;
-    const name = this.newTagName().trim();
-    if (!name) return;
-    try {
-      this.tagError.set(null);
-      const tag = await this.photos.addSubjectTag(id, name);
-      this.newTagName.set('');
-      this.tags.set(await this.photos.getSubjectTags(id));
-      this.tagAdded.emit(tag);
-    } catch (e: unknown) {
-      this.tagError.set(typeof e === 'string' ? e : 'Failed to add tag');
-    }
-  }
-
-  protected async removeTag(tagId: number): Promise<void> {
-    const id = this.match().subject.id;
-    try {
-      await this.photos.removeSubjectTag(id, tagId);
-      this.tags.update((ts) => ts.filter((t) => t.id !== tagId));
-      this.tagRemoved.emit(tagId);
-    } catch { /* ignore */ }
   }
 }

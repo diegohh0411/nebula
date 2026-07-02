@@ -1,4 +1,5 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { PhotoService } from '../../services/photo.service';
@@ -20,6 +21,7 @@ export class TagsViewComponent implements OnInit {
   protected photos = inject(PhotoService);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
+  private destroyRef = inject(DestroyRef);
 
   protected tags = signal<TagWithCount[]>([]);
   protected selectedTag = signal<TagWithCount | null>(null);
@@ -30,9 +32,11 @@ export class TagsViewComponent implements OnInit {
 
   ngOnInit() {
     void this.loadTags().then(() => {
-      this.route.queryParamMap.subscribe((params) => {
-        void this.applyTagFromUrl(params.get('tag'));
-      });
+      this.route.queryParamMap
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe((params) => {
+          void this.applyTagFromUrl(params.get('tag'));
+        });
     });
   }
 

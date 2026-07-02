@@ -166,4 +166,53 @@ describe('SubjectPersonCardComponent', () => {
     expect(navigateSpy).not.toHaveBeenCalled();
     expect(fixture.nativeElement.textContent).not.toContain('Old Tag');
   });
+
+  it('surfaces an error and keeps the tag when removeSubjectTag fails', async () => {
+    stub.removeSubjectTag = vi.fn().mockRejectedValue('boom');
+    const fixture = TestBed.createComponent(SubjectPersonCardComponent);
+    fixture.componentRef.setInput('match', match({}, [{ id: 5, name: 'Old Tag', added_at: 0 }]));
+    const tagRemovedSpy = vi.fn();
+    fixture.componentInstance.tagRemoved.subscribe(tagRemovedSpy);
+    fixture.detectChanges();
+
+    const removeBtn = fixture.nativeElement.querySelector('.person-card-tag-remove') as HTMLButtonElement;
+    removeBtn.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(tagRemovedSpy).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).toContain('Old Tag');
+    expect(fixture.nativeElement.querySelector('.person-card-tag-error')?.textContent).toContain('boom');
+  });
+
+  it('shows an error and closes the dialog without emitting merged when mergeSubjects fails', async () => {
+    stub.nameSubject = vi.fn().mockResolvedValue({ duplicate_subject_id: 42 });
+    stub.mergeSubjects = vi.fn().mockRejectedValue('merge failed');
+    const fixture = TestBed.createComponent(SubjectPersonCardComponent);
+    fixture.componentRef.setInput('match', match());
+    const mergedSpy = vi.fn();
+    fixture.componentInstance.merged.subscribe(mergedSpy);
+    fixture.detectChanges();
+
+    const nameEl = fixture.nativeElement.querySelector('.person-card-name') as HTMLElement;
+    nameEl.click();
+    fixture.detectChanges();
+    const input = fixture.nativeElement.querySelector('.person-card-meta input') as HTMLInputElement;
+    input.value = 'Sofía Duplicate';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
+    const mergeButton = buttons.find((b) => b.textContent?.trim() === 'Merge')!;
+    mergeButton.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(stub.mergeSubjects).toHaveBeenCalledWith(1, 42);
+    expect(mergedSpy).not.toHaveBeenCalled();
+    expect(fixture.nativeElement.textContent).toContain('Duplicate Name');
+    expect(fixture.nativeElement.textContent).toContain('merge failed');
+  });
 });

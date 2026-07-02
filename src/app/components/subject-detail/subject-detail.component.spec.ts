@@ -1,8 +1,14 @@
 import { TestBed } from '@angular/core/testing';
+import { importProvidersFrom, signal } from '@angular/core';
 import { Subject as RxSubject } from 'rxjs';
+import { provideRouter, Router } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { LucideAngularModule } from 'lucide-angular';
 import { PhotoService } from '../../services/photo.service';
 import { TauriEventsService } from '../../services/tauri-events.service';
-import { Tag } from '../../models/models';
+import { Tag, SubjectDetail } from '../../models/models';
+import { SubjectDetailComponent } from './subject-detail.component';
+import { APP_ICONS } from '../../app-icons';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue([]),
@@ -50,5 +56,162 @@ describe('SubjectDetail — tag chips (service-level)', () => {
     vi.spyOn(photoService, 'removeSubjectTag').mockResolvedValue(undefined);
     await photoService.removeSubjectTag(1, 42);
     expect(photoService.removeSubjectTag).toHaveBeenCalledWith(1, 42);
+  });
+});
+
+class SubjectDetailPhotoServiceStub {
+  viewportWidth = signal(1000);
+  targetRowHeight = signal(220);
+  selectedImage = signal(null);
+
+  getSubjectDetail = vi.fn();
+  getSubjectPhotos = vi.fn().mockResolvedValue([]);
+  getMergeSuggestions = vi.fn().mockResolvedValue([]);
+  dismissMergeSuggestion = vi.fn().mockResolvedValue(undefined);
+  getFaceCrop = vi.fn().mockResolvedValue('/cache/face-1.png');
+  thumbnailUrl = vi.fn((p: string | null) => (p ? `asset://${p}` : null));
+  getSubjectTags = vi.fn().mockResolvedValue([]);
+  nameSubject = vi.fn().mockResolvedValue({ duplicate_subject_id: null });
+  mergeSubjects = vi.fn().mockResolvedValue(undefined);
+  addSubjectTag = vi.fn().mockResolvedValue({ id: 9, name: 'New Tag', added_at: 0 });
+  removeSubjectTag = vi.fn().mockResolvedValue(undefined);
+  listTags = vi.fn().mockResolvedValue([]);
+}
+
+function subjectDetail(over: Partial<SubjectDetail['subject']> = {}): SubjectDetail {
+  return {
+    subject: { id: 1, name: 'Sofía', thumbnail_face_id: null, type: 'person', added_at: 0, ...over },
+    photo_count: 0,
+    face_count: 0,
+  };
+}
+
+describe('SubjectDetailComponent — tagging (component-level)', () => {
+  let stub: SubjectDetailPhotoServiceStub;
+
+  beforeEach(() => {
+    stub = new SubjectDetailPhotoServiceStub();
+    stub.getSubjectDetail.mockResolvedValue(subjectDetail());
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: 'subject/:id', component: SubjectDetailComponent }]),
+        importProvidersFrom(LucideAngularModule.pick(APP_ICONS)),
+        { provide: PhotoService, useValue: stub },
+        { provide: TauriEventsService, useValue: mockTauriEvents },
+      ],
+    });
+  });
+
+  it('commits a new name via nameSubject and reflects it in the detail header', async () => {
+    const harness = await RouterTestingHarness.create('/subject/1');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const nameEl = harness.routeNativeElement!.querySelector('.tracking-tight') as HTMLElement;
+    nameEl.click();
+    harness.detectChanges();
+
+    const input = harness.routeNativeElement!.querySelector('input') as HTMLInputElement;
+    input.value = 'Renamed';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(stub.nameSubject).toHaveBeenCalledWith(1, 'Renamed');
+    expect(harness.routeNativeElement!.textContent).toContain('Renamed');
+  });
+
+  it('shows the merge dialog on a duplicate-name conflict and navigates to /subject/:id on confirm', async () => {
+    stub.nameSubject.mockResolvedValue({ duplicate_subject_id: 42 });
+    const harness = await RouterTestingHarness.create('/subject/1');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const nameEl = harness.routeNativeElement!.querySelector('.tracking-tight') as HTMLElement;
+    nameEl.click();
+    harness.detectChanges();
+    const input = harness.routeNativeElement!.querySelector('input') as HTMLInputElement;
+    input.value = 'Sofía Duplicate';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement!.textContent).toContain('Duplicate Name');
+
+    const router = TestBed.inject(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate');
+    const buttons = Array.from(harness.routeNativeElement!.querySelectorAll('button')) as HTMLButtonElement[];
+    const mergeButton = buttons.find((b) => b.textContent?.trim() === 'Merge')!;
+    mergeButton.click();
+    await harness.fixture.whenStable();
+
+    expect(stub.mergeSubjects).toHaveBeenCalledWith(1, 42);
+    expect(navigateSpy).toHaveBeenCalledWith(['/subject', 1]);
+  });
+
+  it('keeps the dialog open and shows an error when mergeSubjects fails, without navigating', async () => {
+    stub.nameSubject.mockResolvedValue({ duplicate_subject_id: 42 });
+    stub.mergeSubjects = vi.fn().mockRejectedValue('merge failed');
+    const harness = await RouterTestingHarness.create('/subject/1');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const nameEl = harness.routeNativeElement!.querySelector('.tracking-tight') as HTMLElement;
+    nameEl.click();
+    harness.detectChanges();
+    const input = harness.routeNativeElement!.querySelector('input') as HTMLInputElement;
+    input.value = 'Sofía Duplicate';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const router = TestBed.inject(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate');
+    const buttons = Array.from(harness.routeNativeElement!.querySelectorAll('button')) as HTMLButtonElement[];
+    const mergeButton = buttons.find((b) => b.textContent?.trim() === 'Merge')!;
+    mergeButton.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(harness.routeNativeElement!.textContent).toContain('Duplicate Name');
+    expect(harness.routeNativeElement!.textContent).toContain('merge failed');
+  });
+
+  it('adds and removes a tag via the tag chips', async () => {
+    stub.getSubjectTags.mockResolvedValue([{ id: 5, name: 'Old Tag', added_at: 0 }]);
+    const harness = await RouterTestingHarness.create('/subject/1');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    harness.detectChanges();
+
+    expect(harness.routeNativeElement!.textContent).toContain('Old Tag');
+
+    const input = harness.routeNativeElement!.querySelector('input') as HTMLInputElement;
+    input.value = 'New Tag';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(stub.addSubjectTag).toHaveBeenCalledWith(1, 'New Tag');
+    expect(harness.routeNativeElement!.textContent).toContain('New Tag');
+
+    const removeButtons = Array.from(harness.routeNativeElement!.querySelectorAll('button')) as HTMLButtonElement[];
+    const removeOldTag = removeButtons.find((b) => b.title === 'Remove tag' && b.parentElement?.textContent?.includes('Old Tag'));
+    removeOldTag!.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    expect(stub.removeSubjectTag).toHaveBeenCalledWith(1, 5);
+    expect(harness.routeNativeElement!.textContent).not.toContain('Old Tag');
   });
 });

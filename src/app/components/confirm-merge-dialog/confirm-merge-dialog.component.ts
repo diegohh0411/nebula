@@ -8,6 +8,7 @@ import { Component, ChangeDetectionStrategy, input, output } from '@angular/core
 })
 export class ConfirmMergeDialogComponent {
   readonly open = input(false);
+  readonly error = input<string | null>(null);
   readonly merge = output<void>();
   readonly cancel = output<void>();
 }
