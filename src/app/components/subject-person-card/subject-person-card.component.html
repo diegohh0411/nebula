@@ -19,8 +19,8 @@
       <app-editable-text
         [value]="tagging.name()"
         placeholder="Unnamed"
-        placeholderClass="opacity-70"
-        displayClass="person-card-name"
+        placeholderClass="person-card-name text-[15px] font-semibold text-white tracking-tight truncate block opacity-70"
+        displayClass="person-card-name text-[15px] font-semibold text-white tracking-tight truncate block"
         (commit)="tagging.saveName($event)"
       />
       @if (subtitle()) {
