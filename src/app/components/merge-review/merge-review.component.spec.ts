@@ -1,10 +1,14 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
+import { importProvidersFrom } from '@angular/core';
+import { LucideAngularModule } from 'lucide-angular';
 import { MergeReviewComponent } from './merge-review.component';
+import { MergePhotoGridComponent } from '../merge-photo-grid/merge-photo-grid.component';
 import { PhotoService } from '../../services/photo.service';
 import { TauriEventsService } from '../../services/tauri-events.service';
 import { MergeSuggestion, SubjectPhotoFace, Subject } from '../../models/models';
 import { Subject as RxSubject } from 'rxjs';
+import { APP_ICONS } from '../../app-icons';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue([]),
@@ -39,6 +43,7 @@ describe('MergeReviewComponent', () => {
     await TestBed.configureTestingModule({
       imports: [MergeReviewComponent],
       providers: [
+        importProvidersFrom(LucideAngularModule.pick(APP_ICONS)),
         PhotoService,
         {
           provide: TauriEventsService,
@@ -95,6 +100,55 @@ describe('MergeReviewComponent', () => {
     const b = makeSubject(2, 'Bob');
     component.suggestion = makeSuggestion(a, b);
     expect(component.mergeTarget).toEqual({ target: a, source: b });
+  });
+
+  it('marks only the source subject\'s grid as removable', async () => {
+    const subA = makeSubject(1, 'Alice'); // named -> target
+    const subB = makeSubject(2, null);    // unnamed -> source
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+
+    component.suggestion = makeSuggestion(subA, subB);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    const grids = fixture.debugElement.queryAll(By.directive(MergePhotoGridComponent));
+    expect(grids.length).toBe(2);
+    expect((grids[0].componentInstance as MergePhotoGridComponent).removable).toBe(false); // col A = subject_a = target
+    expect((grids[1].componentInstance as MergePhotoGridComponent).removable).toBe(true);  // col B = subject_b = source
+  });
+
+  it('removing a face from grid A filters it out of photosA', async () => {
+    const subA = makeSubject(1, null);    // unnamed -> source
+    const subB = makeSubject(2, 'Bob');   // named -> target
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockImplementation(async (id: number) =>
+      id === 1 ? [makePhoto(10), makePhoto(20)] : []
+    );
+
+    component.suggestion = makeSuggestion(subA, subB);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    const grids = fixture.debugElement.queryAll(By.directive(MergePhotoGridComponent));
+    (grids[0].componentInstance as MergePhotoGridComponent).removed.emit(10);
+
+    expect(component.photosA().map(f => f.face_id)).toEqual([20]);
+  });
+
+  it('removing a face from grid B filters it out of photosB', async () => {
+    const subA = makeSubject(1, 'Alice'); // named -> target
+    const subB = makeSubject(2, null);    // unnamed -> source
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockImplementation(async (id: number) =>
+      id === 2 ? [makePhoto(30), makePhoto(40)] : []
+    );
+
+    component.suggestion = makeSuggestion(subA, subB);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    const grids = fixture.debugElement.queryAll(By.directive(MergePhotoGridComponent));
+    (grids[1].componentInstance as MergePhotoGridComponent).removed.emit(30);
+
+    expect(component.photosB().map(f => f.face_id)).toEqual([40]);
   });
 
   it('confirm calls mergeSubjects with correct target/source then emits confirmed', async () => {

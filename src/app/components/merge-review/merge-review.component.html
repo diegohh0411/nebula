@@ -18,7 +18,12 @@
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
           } @else {
-            <app-merge-photo-grid class="subject-photos" [images]="photosA()" />
+            <app-merge-photo-grid
+              class="subject-photos"
+              [images]="photosA()"
+              [removable]="mergeTarget?.source?.id === suggestion.subject_a.id"
+              (removed)="onFaceRemovedA($event)"
+            />
           }
         </div>
 
@@ -33,7 +38,12 @@
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
           } @else {
-            <app-merge-photo-grid class="subject-photos" [images]="photosB()" />
+            <app-merge-photo-grid
+              class="subject-photos"
+              [images]="photosB()"
+              [removable]="mergeTarget?.source?.id === suggestion.subject_b.id"
+              (removed)="onFaceRemovedB($event)"
+            />
           }
         </div>
       </div>
