@@ -6,7 +6,7 @@ mod tests;
 
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{Acquire, SqlitePool};
 use std::path::Path;
 use std::sync::Once;
 
@@ -255,13 +255,21 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let mut conn = pool.acquire().await?;
     for &(version, sql) in VERSIONED_MIGRATIONS {
         if current < version {
+            // foreign_keys can't be toggled inside a transaction (SQLite ignores it),
+            // so it's set on the bare connection before BEGIN.
             sqlx::query("PRAGMA foreign_keys=OFF;")
                 .execute(&mut *conn)
                 .await?;
+
+            // Migrations like the subjects/faces rebuild use non-idempotent DDL
+            // (DROP TABLE, bare CREATE TABLE). Wrapping the run in a transaction
+            // means a crash mid-migration rolls back instead of leaving the DB
+            // half-migrated with schema_version stuck below the failed version.
+            let mut tx = conn.begin().await?;
             for stmt in sql.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    match sqlx::query(s).execute(&mut *conn).await {
+                    match sqlx::query(s).execute(&mut *tx).await {
                         Ok(_) => {}
                         Err(e) if e.to_string().contains("duplicate column name") => {}
                         Err(e) => return Err(e.into()),
@@ -270,8 +278,10 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
             }
             sqlx::query("UPDATE schema_version SET version = ? WHERE rowid = 1")
                 .bind(version)
-                .execute(&mut *conn)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
+
             sqlx::query("PRAGMA foreign_keys=ON;")
                 .execute(&mut *conn)
                 .await?;
