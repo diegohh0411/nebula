@@ -845,7 +845,10 @@ pub async fn get_face_ids_for_subject(pool: &SqlitePool, subject_id: i64) -> Res
     Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
 }
 
-pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool, embedder_id: &str) -> Result<Vec<i64>> {
+pub async fn get_all_face_ids_with_vectors(
+    pool: &SqlitePool,
+    embedder_id: &str,
+) -> Result<Vec<i64>> {
     let rows = sqlx::query(
         "SELECT fv.rowid AS id FROM face_vectors fv
          JOIN faces f ON f.id = fv.rowid

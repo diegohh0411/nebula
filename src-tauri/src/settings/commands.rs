@@ -90,7 +90,9 @@ pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Stri
 /// defaulting to Blitz — the preset actually used for every face embedded
 /// before the §1 wiring fix, regardless of what the setting said. Also the
 /// fallback for a value that no longer matches a known preset id.
-pub(crate) fn resolve_subject_preset(value: Option<&str>) -> &'static crate::models::registry::FaceIdPreset {
+pub(crate) fn resolve_subject_preset(
+    value: Option<&str>,
+) -> &'static crate::models::registry::FaceIdPreset {
     value
         .and_then(crate::models::registry::FaceIdPreset::find_by_id)
         .unwrap_or(&crate::models::registry::BUFFALO_S_PRESET)
@@ -185,7 +187,6 @@ mod tests {
             .map(|m| m.id);
         assert_eq!(first, Some("onnx-community/siglip2-base-patch32-256-ONNX"));
     }
-
 
     #[test]
     fn resolve_subject_preset_defaults_to_blitz_when_unset() {

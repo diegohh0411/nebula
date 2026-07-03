@@ -912,7 +912,9 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None)
+            .await
+            .unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(face_f)
@@ -1021,7 +1023,9 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None)
+            .await
+            .unwrap();
 
         let subjects: Vec<Option<i64>> =
             sqlx::query_scalar("SELECT subject_id FROM faces ORDER BY id")
@@ -1224,7 +1228,9 @@ mod tests {
         // A new, unassigned face inside the cluster.
         let new_face = insert_face_with_vector(&pool, None, &[1.0, 0.01, 0.0]).await;
 
-        update_edges_incremental(&pool, &[new_face], "buffalo_s_recognition").await.unwrap();
+        update_edges_incremental(&pool, &[new_face], "buffalo_s_recognition")
+            .await
+            .unwrap();
 
         // An edge between the new face and an Alex face must have been upserted.
         let edge_count: i64 =
@@ -1240,7 +1246,9 @@ mod tests {
         );
 
         // And relabel must then assign it to Alex.
-        relabel_from_edges(&pool, "buffalo_s_recognition").await.unwrap();
+        relabel_from_edges(&pool, "buffalo_s_recognition")
+            .await
+            .unwrap();
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(new_face)
             .fetch_one(&pool)
@@ -1261,13 +1269,23 @@ mod tests {
         let inc = make_integration_pool().await;
         let f1 = insert_face_with_vector(&inc, None, &va1).await;
         let f2 = insert_face_with_vector(&inc, None, &va2).await;
-        update_edges_incremental(&inc, &[f1, f2], "buffalo_s_recognition").await.unwrap();
-        relabel_from_edges(&inc, "buffalo_s_recognition").await.unwrap();
+        update_edges_incremental(&inc, &[f1, f2], "buffalo_s_recognition")
+            .await
+            .unwrap();
+        relabel_from_edges(&inc, "buffalo_s_recognition")
+            .await
+            .unwrap();
         let f3 = insert_face_with_vector(&inc, None, &vb1).await;
         let f4 = insert_face_with_vector(&inc, None, &vb2).await;
-        update_edges_incremental(&inc, &[f3, f4], "buffalo_s_recognition").await.unwrap();
-        relabel_from_edges(&inc, "buffalo_s_recognition").await.unwrap();
-        cluster_unassigned_faces(&inc, "buffalo_s_recognition", None).await.unwrap();
+        update_edges_incremental(&inc, &[f3, f4], "buffalo_s_recognition")
+            .await
+            .unwrap();
+        relabel_from_edges(&inc, "buffalo_s_recognition")
+            .await
+            .unwrap();
+        cluster_unassigned_faces(&inc, "buffalo_s_recognition", None)
+            .await
+            .unwrap();
         let inc_partition = subject_partition(&inc).await;
 
         // Pool 2: single full sweep over all four faces.
@@ -1276,7 +1294,9 @@ mod tests {
         insert_face_with_vector(&full, None, &va2).await;
         insert_face_with_vector(&full, None, &vb1).await;
         insert_face_with_vector(&full, None, &vb2).await;
-        cluster_unassigned_faces(&full, "buffalo_s_recognition", None).await.unwrap();
+        cluster_unassigned_faces(&full, "buffalo_s_recognition", None)
+            .await
+            .unwrap();
         let full_partition = subject_partition(&full).await;
 
         assert_eq!(
@@ -1405,7 +1425,9 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None)
+            .await
+            .unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
             .fetch_one(&pool)
@@ -1470,7 +1492,9 @@ mod tests {
             .await
             .unwrap();
 
-        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None).await.unwrap();
+        cluster_unassigned_faces(&pool, "buffalo_s_recognition", None)
+            .await
+            .unwrap();
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")
             .bind(orphan)
@@ -1523,7 +1547,9 @@ mod tests {
             .await
             .unwrap();
 
-        let result = relabel_from_edges(&pool, "buffalo_s_recognition").await.unwrap();
+        let result = relabel_from_edges(&pool, "buffalo_s_recognition")
+            .await
+            .unwrap();
         assert_eq!(result.noise, 0);
 
         let assigned: Option<i64> = sqlx::query_scalar("SELECT subject_id FROM faces WHERE id = ?")

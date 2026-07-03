@@ -68,8 +68,15 @@ pub async fn reprocess_image_faces(
     for (di, ei) in &matches {
         let d = &detections[*di];
         let face_id = existing[*ei].id;
-        people_repo::update_face_detection(pool, face_id, d.bbox, d.det_score, d.quality_score, embedder_id)
-            .await?;
+        people_repo::update_face_detection(
+            pool,
+            face_id,
+            d.bbox,
+            d.det_score,
+            d.quality_score,
+            embedder_id,
+        )
+        .await?;
         crate::people::face_store::upsert_vector(pool, face_id, &d.embedding).await?;
         touched.push(face_id);
     }
@@ -113,17 +120,19 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         crate::db::ensure_sqlite_vec_registered();
-        let tmp = std::env::temp_dir().join(format!("nebula_service_test_{}_{}", std::process::id(), n));
+        let tmp =
+            std::env::temp_dir().join(format!("nebula_service_test_{}_{}", std::process::id(), n));
         std::fs::create_dir_all(&tmp).unwrap();
         crate::db::init_db(&tmp).await.unwrap()
     }
 
     async fn seed_image(pool: &SqlitePool) -> i64 {
-        let folder_id: i64 =
-            sqlx::query_scalar("INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id")
-                .fetch_one(pool)
-                .await
-                .unwrap();
+        let folder_id: i64 = sqlx::query_scalar(
+            "INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
         sqlx::query_scalar(
             "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at)
              VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0) RETURNING id",
@@ -158,7 +167,10 @@ mod tests {
             &pool,
             image_id,
             "buffalo_s_recognition",
-            vec![det((0.1, 0.1, 0.2, 0.2), 1.0), det((0.6, 0.6, 0.2, 0.2), 2.0)],
+            vec![
+                det((0.1, 0.1, 0.2, 0.2), 1.0),
+                det((0.6, 0.6, 0.2, 0.2), 2.0),
+            ],
             vec![],
         )
         .await
@@ -210,9 +222,6 @@ mod tests {
             bbox_w: 0.20,
             bbox_h: 0.20,
             added_at: 0,
-
-
-
         }];
 
         // Slightly shifted bbox from the new model, but same physical face (IoU > 0.5).
@@ -226,7 +235,11 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(touched, vec![face_id], "must reuse the existing face id, not insert a new one");
+        assert_eq!(
+            touched,
+            vec![face_id],
+            "must reuse the existing face id, not insert a new one"
+        );
         let (subject_id, embedder_id, bbox_x): (Option<i64>, String, f64) =
             sqlx::query_as("SELECT subject_id, embedder_id, bbox_x FROM faces WHERE id = ?")
                 .bind(face_id)
@@ -236,12 +249,16 @@ mod tests {
         assert_eq!(subject_id, Some(sid), "subject_id must survive the match");
         assert_eq!(embedder_id, "antelopev2_recognition");
         assert_eq!(bbox_x, 0.11, "bbox must be updated to the new detection");
-        let vec_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors WHERE rowid = ?")
-            .bind(face_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(vec_count, 1, "exactly one vector row must remain for the matched face");
+        let vec_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors WHERE rowid = ?")
+                .bind(face_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            vec_count, 1,
+            "exactly one vector row must remain for the matched face"
+        );
     }
 
     #[tokio::test]
@@ -249,23 +266,62 @@ mod tests {
         let pool = init_test_pool().await;
         let image_id = seed_image(&pool).await;
         let face_a = crate::people::repo::insert_face(
-            &pool, image_id, None, (0.0, 0.0, 0.2, 0.2), Some(0.5), Some(0.4), "buffalo_s_recognition",
-        ).await.unwrap();
+            &pool,
+            image_id,
+            None,
+            (0.0, 0.0, 0.2, 0.2),
+            Some(0.5),
+            Some(0.4),
+            "buffalo_s_recognition",
+        )
+        .await
+        .unwrap();
         let face_b = crate::people::repo::insert_face(
-            &pool, image_id, None, (0.5, 0.5, 0.2, 0.2), Some(0.5), Some(0.4), "buffalo_s_recognition",
-        ).await.unwrap();
-        crate::people::repo::add_must_link(&pool, face_a, face_b, "merge").await.unwrap();
+            &pool,
+            image_id,
+            None,
+            (0.5, 0.5, 0.2, 0.2),
+            Some(0.5),
+            Some(0.4),
+            "buffalo_s_recognition",
+        )
+        .await
+        .unwrap();
+        crate::people::repo::add_must_link(&pool, face_a, face_b, "merge")
+            .await
+            .unwrap();
 
         let existing = vec![
-            Face { id: face_a, image_id, subject_id: None, bbox_x: 0.0, bbox_y: 0.0, bbox_w: 0.2, bbox_h: 0.2, added_at: 0 },
-            Face { id: face_b, image_id, subject_id: None, bbox_x: 0.5, bbox_y: 0.5, bbox_w: 0.2, bbox_h: 0.2, added_at: 0 },
+            Face {
+                id: face_a,
+                image_id,
+                subject_id: None,
+                bbox_x: 0.0,
+                bbox_y: 0.0,
+                bbox_w: 0.2,
+                bbox_h: 0.2,
+                added_at: 0,
+            },
+            Face {
+                id: face_b,
+                image_id,
+                subject_id: None,
+                bbox_x: 0.5,
+                bbox_y: 0.5,
+                bbox_w: 0.2,
+                bbox_h: 0.2,
+                added_at: 0,
+            },
         ];
 
         reprocess_image_faces(
             &pool,
             image_id,
             "antelopev2_recognition",
-            vec![det((0.0, 0.0, 0.2, 0.2), 1.0), det((0.5, 0.5, 0.2, 0.2), 2.0)],
+            vec![
+                det((0.0, 0.0, 0.2, 0.2), 1.0),
+                det((0.5, 0.5, 0.2, 0.2), 2.0),
+            ],
             existing,
         )
         .await
@@ -275,7 +331,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(constraint_count, 1, "must_link between two matched faces must survive by id");
+        assert_eq!(
+            constraint_count, 1,
+            "must_link between two matched faces must survive by id"
+        );
     }
 
     #[tokio::test]
@@ -283,10 +342,29 @@ mod tests {
         let pool = init_test_pool().await;
         let image_id = seed_image(&pool).await;
         let stale_face = crate::people::repo::insert_face(
-            &pool, image_id, None, (0.9, 0.9, 0.05, 0.05), Some(0.5), Some(0.4), "buffalo_s_recognition",
-        ).await.unwrap();
-        crate::people::face_store::upsert_vector(&pool, stale_face, &emb(1.0)).await.unwrap();
-        let existing = vec![Face { id: stale_face, image_id, subject_id: None, bbox_x: 0.9, bbox_y: 0.9, bbox_w: 0.05, bbox_h: 0.05, added_at: 0 }];
+            &pool,
+            image_id,
+            None,
+            (0.9, 0.9, 0.05, 0.05),
+            Some(0.5),
+            Some(0.4),
+            "buffalo_s_recognition",
+        )
+        .await
+        .unwrap();
+        crate::people::face_store::upsert_vector(&pool, stale_face, &emb(1.0))
+            .await
+            .unwrap();
+        let existing = vec![Face {
+            id: stale_face,
+            image_id,
+            subject_id: None,
+            bbox_x: 0.9,
+            bbox_y: 0.9,
+            bbox_w: 0.05,
+            bbox_h: 0.05,
+            added_at: 0,
+        }];
 
         // New detection is nowhere near the stale face's bbox -> no match.
         reprocess_image_faces(
@@ -305,12 +383,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(face_count, 0, "unmatched existing face must be deleted");
-        let vec_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors WHERE rowid = ?")
-            .bind(stale_face)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(vec_count, 0, "its face_vectors row must be deleted explicitly (no FK cascade on vec0)");
+        let vec_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors WHERE rowid = ?")
+                .bind(stale_face)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            vec_count, 0,
+            "its face_vectors row must be deleted explicitly (no FK cascade on vec0)"
+        );
     }
 
     #[tokio::test]
@@ -320,10 +402,29 @@ mod tests {
 
         // Simulate a prior partially-successful attempt: one detection already inserted.
         let already_inserted = crate::people::repo::insert_face(
-            &pool, image_id, None, (0.1, 0.1, 0.2, 0.2), Some(0.9), Some(0.8), "antelopev2_recognition",
-        ).await.unwrap();
-        crate::people::face_store::upsert_vector(&pool, already_inserted, &emb(1.0)).await.unwrap();
-        let existing = vec![Face { id: already_inserted, image_id, subject_id: None, bbox_x: 0.1, bbox_y: 0.1, bbox_w: 0.2, bbox_h: 0.2, added_at: 0 }];
+            &pool,
+            image_id,
+            None,
+            (0.1, 0.1, 0.2, 0.2),
+            Some(0.9),
+            Some(0.8),
+            "antelopev2_recognition",
+        )
+        .await
+        .unwrap();
+        crate::people::face_store::upsert_vector(&pool, already_inserted, &emb(1.0))
+            .await
+            .unwrap();
+        let existing = vec![Face {
+            id: already_inserted,
+            image_id,
+            subject_id: None,
+            bbox_x: 0.1,
+            bbox_y: 0.1,
+            bbox_w: 0.2,
+            bbox_h: 0.2,
+            added_at: 0,
+        }];
 
         // Retry re-runs detection from scratch and finds the same face again.
         let touched = reprocess_image_faces(
@@ -336,7 +437,11 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(touched, vec![already_inserted], "retry must match the already-inserted row, not duplicate it");
+        assert_eq!(
+            touched,
+            vec![already_inserted],
+            "retry must match the already-inserted row, not duplicate it"
+        );
         let face_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces")
             .fetch_one(&pool)
             .await

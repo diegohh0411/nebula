@@ -95,7 +95,8 @@ async fn save_faces(
             );
             let frontality =
                 crate::people::face_quality::frontality(detection.landmarks.as_deref());
-            let quality = crate::people::face_quality::composite(detection.score, frontality, sharp);
+            let quality =
+                crate::people::face_quality::composite(detection.score, frontality, sharp);
             crate::people::service::DetectedFaceInput {
                 bbox: rel,
                 det_score: detection.score as f64,
@@ -116,11 +117,18 @@ async fn save_faces(
         }
     };
 
-    match crate::people::service::reprocess_image_faces(pool, image_id, embedder_id, detections, existing)
-        .await
+    match crate::people::service::reprocess_image_faces(
+        pool,
+        image_id,
+        embedder_id,
+        detections,
+        existing,
+    )
+    .await
     {
         Ok(touched) => {
-            let _ = crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
+            let _ =
+                crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
             touched
         }
         Err(e) => {
@@ -206,7 +214,10 @@ pub async fn run_pipeline(
             return;
         }
     };
-    info!("[pipeline] Face analyzer initialized ('{}').", initial_preset.id);
+    info!(
+        "[pipeline] Face analyzer initialized ('{}').",
+        initial_preset.id
+    );
     let mut subject_preset = initial_preset;
     let mut face_tx = face_actor::spawn_face_actor(initial_analyzer, config.infer_channel_depth);
 
@@ -242,7 +253,10 @@ pub async fn run_pipeline(
                 Ok(analyzer) => {
                     face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
                     subject_preset = resolved_preset;
-                    info!("[pipeline] subject_model switched to '{}'", subject_preset.id);
+                    info!(
+                        "[pipeline] subject_model switched to '{}'",
+                        subject_preset.id
+                    );
                 }
                 Err(e) => {
                     error!(
@@ -561,8 +575,15 @@ pub async fn run_pipeline(
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                let new_ids =
-                                    save_faces(&pool, image_id, sub_qid, sub_attempts, subject_preset.embedder.id, faces).await;
+                                let new_ids = save_faces(
+                                    &pool,
+                                    image_id,
+                                    sub_qid,
+                                    sub_attempts,
+                                    subject_preset.embedder.id,
+                                    faces,
+                                )
+                                .await;
                                 batch_new_face_ids.extend(new_ids);
                                 processed_subject_work = true;
                             }
@@ -637,7 +658,15 @@ pub async fn run_pipeline(
                     Ok(Ok(faces)) => {
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
                             info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                            save_faces(&pool, image_id, sub_qid, sub_attempts, subject_preset.embedder.id, faces).await;
+                            save_faces(
+                                &pool,
+                                image_id,
+                                sub_qid,
+                                sub_attempts,
+                                subject_preset.embedder.id,
+                                faces,
+                            )
+                            .await;
                             processed_subject_work = true;
                         }
                     }
@@ -698,12 +727,17 @@ pub async fn run_pipeline(
         if processed_subject_work {
             let incremental_result: anyhow::Result<()> = async {
                 if !batch_new_face_ids.is_empty() {
-                    crate::people::clustering::update_edges_incremental(&pool, &batch_new_face_ids, subject_preset.embedder.id)
-                        .await?;
+                    crate::people::clustering::update_edges_incremental(
+                        &pool,
+                        &batch_new_face_ids,
+                        subject_preset.embedder.id,
+                    )
+                    .await?;
                 }
                 // Constraints/assignments may have changed even with no new
                 // vectors, so always relabel.
-                crate::people::clustering::relabel_from_edges(&pool, subject_preset.embedder.id).await?;
+                crate::people::clustering::relabel_from_edges(&pool, subject_preset.embedder.id)
+                    .await?;
                 Ok(())
             }
             .await;
