@@ -19,6 +19,18 @@
           <lucide-icon name="image" size="24" class="merge-photo-placeholder-icon"></lucide-icon>
         </div>
       }
+      @if (removable) {
+        <button
+          type="button"
+          class="absolute top-2 right-2 p-1.5 rounded-full bg-background/80 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:bg-destructive enabled:hover:text-white enabled:hover:opacity-100"
+          [disabled]="images.length - removingIds().size <= 1 || removingIds().has(img.face_id)"
+          aria-label="Remove face from subject"
+          title="Remove face from subject"
+          (click)="onRemove($event, img)"
+        >
+          <lucide-icon name="x" [size]="14"></lucide-icon>
+        </button>
+      }
     </div>
   }
 </div>

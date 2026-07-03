@@ -39,11 +39,31 @@ pub async fn add_folder(
 
 #[tauri::command]
 pub async fn remove_folder(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state
+    let deleted_image_ids = state
         .indexer
         .remove_folder(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut idx = state.index.write().unwrap();
+        for img_id in &deleted_image_ids {
+            idx.remove(*img_id);
+        }
+    }
+
+    let snap_path = state.data_dir.join("nebula.idx");
+    let index_snap = std::sync::Arc::clone(&state.index);
+    tokio::task::spawn_blocking(move || {
+        let guard = index_snap.read().unwrap();
+        if let Err(e) = guard.save(&snap_path) {
+            log::error!("failed to save index snapshot during folder removal: {e}");
+        }
+    })
+    .await
+    .ok();
+
+    Ok(())
 }
 
 #[tauri::command]

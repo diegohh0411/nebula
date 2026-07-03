@@ -22,18 +22,87 @@ pub async fn insert_folder(pool: &SqlitePool, path: &str) -> Result<i64> {
     }
 }
 
-pub async fn delete_folder(pool: &SqlitePool, id: i64) -> Result<()> {
-    let now = chrono::Utc::now().timestamp();
-    sqlx::query("UPDATE images SET deleted_at = ? WHERE folder_id = ? AND deleted_at IS NULL")
-        .bind(now)
+pub async fn delete_folder(
+    pool: &SqlitePool,
+    data_dir: &std::path::Path,
+    id: i64,
+) -> Result<Vec<i64>> {
+    let faces = sqlx::query(
+        "SELECT id FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?)",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+    let face_ids: Vec<i64> = faces.iter().map(|r| r.get::<i64, _>("id")).collect();
+
+    let image_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM images WHERE folder_id = ?")
         .bind(id)
-        .execute(pool)
+        .fetch_all(pool)
         .await?;
+
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "UPDATE subjects SET thumbnail_face_id = NULL WHERE thumbnail_face_id IN (SELECT id FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?))"
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM face_vectors WHERE rowid IN (SELECT id FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?))"
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?)")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        "DELETE FROM subjects WHERE id NOT IN (SELECT DISTINCT subject_id FROM faces WHERE subject_id IS NOT NULL)"
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM images WHERE folder_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM folders WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
-    Ok(())
+
+    tx.commit().await?;
+
+    // Cleanup face crop cache files
+    let face_crop_dir = crate::platform::paths::face_crop_cache_dir(data_dir);
+    for face_id in face_ids {
+        let path = face_crop_dir.join(format!("{}.webp", face_id));
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    // Cleanup images thumbnail/preview cache files. Paths are recomputed from
+    // image_id rather than trusting thumbnail_path/preview_path from the DB,
+    // so a corrupted row can't point deletion outside the cache dir.
+    for image_id in &image_ids {
+        let thumb_path = crate::media::thumbnail::thumbnail_path_for(data_dir, *image_id);
+        if thumb_path.exists() {
+            let _ = std::fs::remove_file(thumb_path);
+        }
+        let preview_path = crate::media::thumbnail::preview_path_for(data_dir, *image_id);
+        if preview_path.exists() {
+            let _ = std::fs::remove_file(preview_path);
+        }
+    }
+
+    Ok(image_ids)
 }
 
 pub async fn list_folders_with_counts(pool: &SqlitePool) -> Result<Vec<FolderWithCount>> {

@@ -375,7 +375,7 @@ impl Indexer {
         });
     }
 
-    pub async fn remove_folder(&self, id: i64) -> Result<()> {
+    pub async fn remove_folder(&self, id: i64) -> Result<Vec<i64>> {
         let folders = repo::list_folders_with_counts(&self.pool).await?;
         if let Some(folder) = folders.iter().find(|f| f.id == id) {
             let path = PathBuf::from(&folder.path);
@@ -383,9 +383,9 @@ impl Indexer {
             let _ = w.unwatch(&path);
         }
 
-        repo::delete_folder(&self.pool, id).await?;
+        let deleted_image_ids = repo::delete_folder(&self.pool, &self.data_dir, id).await?;
         self.sync_folder_map().await;
-        Ok(())
+        Ok(deleted_image_ids)
     }
 
     pub async fn handle_event_batch(&self, events: Vec<DebouncedEvent>) {

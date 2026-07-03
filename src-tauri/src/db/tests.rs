@@ -514,6 +514,7 @@ async fn merge_unnamed_into_unnamed_stays_unnamed() {
 #[tokio::test]
 async fn upsert_face_edge_normalizes_order_and_deduplicates() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1,1,0,0,1,1,0),(2,1,0,0,1,1,0)")
         .execute(&pool).await.unwrap();
 
@@ -530,6 +531,7 @@ async fn upsert_face_edge_normalizes_order_and_deduplicates() {
 #[tokio::test]
 async fn clear_all_face_edges_removes_all_rows() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1,1,0,0,1,1,0),(2,1,0,0,1,1,0)")
         .execute(&pool).await.unwrap();
     upsert_face_edge(&pool, 1, 2, 0.7).await.unwrap();
@@ -548,9 +550,32 @@ async fn init_test_pool() -> SqlitePool {
     init_db(&tmp).await.unwrap()
 }
 
+/// Inserts an images row for each given id so faces.image_id (FK to images(id)) is satisfiable.
+async fn insert_test_images(pool: &SqlitePool, ids: &[i64]) {
+    let folder_id: i64 = sqlx::query_scalar(
+        "INSERT INTO folders (path, added_at) VALUES ('/test/photos', 0) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    for &id in ids {
+        sqlx::query(
+            "INSERT INTO images (id, folder_id, path, file_hash, mtime, added_at, updated_at) \
+             VALUES (?, ?, ?, 'hash', 0, 0, 0)",
+        )
+        .bind(id)
+        .bind(folder_id)
+        .bind(format!("/test/photos/img{}.jpg", id))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn constraint_enforces_face_a_less_than_face_b() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (3, 1, 0,0,1,1,0), (5, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
 
     add_cannot_link(&pool, 5, 3, "removal").await.unwrap();
@@ -567,6 +592,7 @@ async fn constraint_enforces_face_a_less_than_face_b() {
 #[tokio::test]
 async fn constraint_insert_or_ignore_deduplicates() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 0,0,1,1,0), (2, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
 
     add_cannot_link(&pool, 1, 2, "removal").await.unwrap();
@@ -582,6 +608,7 @@ async fn constraint_insert_or_ignore_deduplicates() {
 #[tokio::test]
 async fn must_link_and_cannot_link_are_independent_rows() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 0,0,1,1,0), (2, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
 
     add_must_link(&pool, 1, 2, "merge").await.unwrap();
@@ -617,6 +644,7 @@ async fn faces_table_has_quality_columns() {
 #[tokio::test]
 async fn faces_table_has_embedder_id_column_defaulted() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
         .fetch_all(&pool)
         .await
@@ -711,6 +739,7 @@ async fn merge_moves_source_faces_to_target() {
 #[tokio::test]
 async fn merge_subjects_writes_must_link_constraints() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1, 2]).await;
 
     let alice: i64 = sqlx::query_scalar(
         "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
@@ -759,6 +788,7 @@ async fn merge_subjects_writes_must_link_constraints() {
 #[tokio::test]
 async fn merge_subjects_preserves_and_unifies_tags() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1, 2]).await;
 
     let target: i64 = sqlx::query_scalar(
         "INSERT INTO subjects (name, type, added_at) VALUES ('Target', 'person', 0) RETURNING id",
@@ -826,6 +856,7 @@ async fn merge_subjects_preserves_and_unifies_tags() {
 #[tokio::test]
 async fn insert_face_persists_embedder_id() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     let face_id = insert_face(
         &pool,
         1,
@@ -848,6 +879,7 @@ async fn insert_face_persists_embedder_id() {
 #[tokio::test]
 async fn update_face_detection_overwrites_bbox_scores_and_embedder_preserving_id_and_subject() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     let sid: i64 = sqlx::query_scalar(
         "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
     )
@@ -902,6 +934,7 @@ async fn update_face_detection_overwrites_bbox_scores_and_embedder_preserving_id
 #[tokio::test]
 async fn delete_face_removes_row_and_cascades_constraints_and_edges() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 0,0,1,1,0), (2, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
     add_cannot_link(&pool, 1, 2, "removal").await.unwrap();
     upsert_face_edge(&pool, 1, 2, 0.5).await.unwrap();
@@ -934,6 +967,7 @@ async fn delete_face_removes_row_and_cascades_constraints_and_edges() {
 #[tokio::test]
 async fn insert_face_persists_quality_scores() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1]).await;
     let face_id = insert_face(
         &pool,
         1,
@@ -958,6 +992,7 @@ async fn insert_face_persists_quality_scores() {
 #[tokio::test]
 async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
     let pool = init_test_pool().await;
+    insert_test_images(&pool, &[1, 2]).await;
 
     let sid: i64 = sqlx::query_scalar(
         "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",

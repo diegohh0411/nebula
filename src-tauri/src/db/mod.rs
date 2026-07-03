@@ -6,7 +6,7 @@ mod tests;
 
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{Acquire, SqlitePool};
 use std::path::Path;
 use std::sync::Once;
 
@@ -200,6 +200,19 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         4,
         "ALTER TABLE faces ADD COLUMN embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition'",
     ),
+    (
+        5,
+        "CREATE TABLE subjects_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, thumbnail_face_id INTEGER REFERENCES faces(id) ON DELETE SET NULL, type TEXT NOT NULL DEFAULT 'person', added_at INTEGER NOT NULL); \
+         INSERT INTO subjects_new (id, name, thumbnail_face_id, type, added_at) SELECT id, name, thumbnail_face_id, type, added_at FROM subjects; \
+         DROP TABLE subjects; \
+         ALTER TABLE subjects_new RENAME TO subjects; \
+         CREATE TABLE faces_new (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE, subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL, bbox_x REAL NOT NULL, bbox_y REAL NOT NULL, bbox_w REAL NOT NULL, bbox_h REAL NOT NULL, added_at INTEGER NOT NULL, det_score REAL, quality_score REAL, embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition'); \
+         INSERT INTO faces_new (id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score, embedder_id) SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score, embedder_id FROM faces; \
+         DROP TABLE faces; \
+         ALTER TABLE faces_new RENAME TO faces; \
+         CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id); \
+         CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);"
+    ),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -207,7 +220,10 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
     let opts = SqliteConnectOptions::new()
         .filename(&db_path)
-        .create_if_missing(true);
+        .create_if_missing(true)
+        // Applied to every connection the pool opens (not just the first),
+        // so FK-based cascades stay enforced regardless of pool size.
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -218,9 +234,6 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     sqlx::query("PRAGMA synchronous=NORMAL;")
-        .execute(&pool)
-        .await?;
-    sqlx::query("PRAGMA foreign_keys=ON;")
         .execute(&pool)
         .await?;
 
@@ -239,12 +252,24 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         .fetch_one(&pool)
         .await?;
 
+    let mut conn = pool.acquire().await?;
     for &(version, sql) in VERSIONED_MIGRATIONS {
         if current < version {
+            // foreign_keys can't be toggled inside a transaction (SQLite ignores it),
+            // so it's set on the bare connection before BEGIN.
+            sqlx::query("PRAGMA foreign_keys=OFF;")
+                .execute(&mut *conn)
+                .await?;
+
+            // Migrations like the subjects/faces rebuild use non-idempotent DDL
+            // (DROP TABLE, bare CREATE TABLE). Wrapping the run in a transaction
+            // means a crash mid-migration rolls back instead of leaving the DB
+            // half-migrated with schema_version stuck below the failed version.
+            let mut tx = conn.begin().await?;
             for stmt in sql.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    match sqlx::query(s).execute(&pool).await {
+                    match sqlx::query(s).execute(&mut *tx).await {
                         Ok(_) => {}
                         Err(e) if e.to_string().contains("duplicate column name") => {}
                         Err(e) => return Err(e.into()),
@@ -253,7 +278,12 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
             }
             sqlx::query("UPDATE schema_version SET version = ? WHERE rowid = 1")
                 .bind(version)
-                .execute(&pool)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+
+            sqlx::query("PRAGMA foreign_keys=ON;")
+                .execute(&mut *conn)
                 .await?;
         }
     }

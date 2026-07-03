@@ -70,6 +70,14 @@ export class MergeReviewComponent {
       : { target: subject_b, source: subject_a };
   }
 
+  protected onFaceRemovedA(faceId: number): void {
+    this.photosA.update((list) => list.filter((f) => f.face_id !== faceId));
+  }
+
+  protected onFaceRemovedB(faceId: number): void {
+    this.photosB.update((list) => list.filter((f) => f.face_id !== faceId));
+  }
+
   private async loadPhotos(value: MergeSuggestion | null) {
     const gen = ++this._loadGen;
     if (!value) {
