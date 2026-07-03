@@ -83,6 +83,13 @@ async fn save_faces(
     embedder_id: &str,
     faces: Vec<face_actor::FaceResult>,
 ) -> Vec<i64> {
+    if let Ok(None) = crate::library::repo::get_image_by_id(pool, image_id).await {
+        debug!(
+            "[pipeline] image {image_id} no longer exists (deleted mid-pipeline), skipping face save"
+        );
+        return Vec::new();
+    }
+
     let detections: Vec<crate::people::service::DetectedFaceInput> = faces
         .into_iter()
         .map(|(detection, embedding, sharp)| {
@@ -132,13 +139,31 @@ async fn save_faces(
             touched
         }
         Err(e) => {
-            error!("[pipeline] reprocess_image_faces failed for image {image_id}: {e}");
-            let _ =
-                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
-                    .await;
+            if is_missing_image_fk_error(&e) {
+                debug!(
+                    "[pipeline] image {image_id} was deleted mid-pipeline (FK violation on face insert), skipping"
+                );
+            } else {
+                error!("[pipeline] reprocess_image_faces failed for image {image_id}: {e}");
+                let _ = crate::pipeline::queue::mark_failed(
+                    pool,
+                    sub_qid,
+                    sub_attempts,
+                    &e.to_string(),
+                )
+                .await;
+            }
             Vec::new()
         }
     }
+}
+
+/// True if `e` wraps a SQLite "FOREIGN KEY constraint failed" error — the
+/// shape `insert_face` raises when the target image row was deleted (e.g.
+/// via `delete_folder`'s cascade) between `save_faces`'s proactive existence
+/// check and the insert itself.
+fn is_missing_image_fk_error(e: &anyhow::Error) -> bool {
+    e.to_string().contains("FOREIGN KEY constraint failed")
 }
 
 /// Resolve the `subject_model` setting to its preset, falling back to Blitz
@@ -172,6 +197,13 @@ async fn ensure_face_preset(
             .map_err(|e| anyhow::anyhow!("face model not ready ({}): {e}", face_spec.id))?;
     }
     engine.get_face_analyzer(manager, preset).await
+}
+
+/// Distinguishes "the image row was deleted mid-flight" (expected race with
+/// `library::repo::delete_folder`'s cascade) from any other decode error.
+enum DecodeFailure {
+    ImageGone,
+    Other(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -385,9 +417,16 @@ pub async fn run_pipeline(
                 let image = match crate::library::repo::get_image_by_id(&pool_c, image_id).await {
                     Ok(Some(i)) => i,
                     Ok(None) => {
-                        return Err((sem_entry, sub_entry, format!("image {image_id} not found")))
+                        return Err((image_id, sem_entry, sub_entry, DecodeFailure::ImageGone))
                     }
-                    Err(e) => return Err((sem_entry, sub_entry, e.to_string())),
+                    Err(e) => {
+                        return Err((
+                            image_id,
+                            sem_entry,
+                            sub_entry,
+                            DecodeFailure::Other(e.to_string()),
+                        ))
+                    }
                 };
                 let path = image.path.clone();
                 match tokio::task::spawn_blocking(move || {
@@ -396,8 +435,18 @@ pub async fn run_pipeline(
                 .await
                 {
                     Ok(Ok(d)) => Ok((image_id, sem_entry, sub_entry, d)),
-                    Ok(Err(e)) => Err((sem_entry, sub_entry, e.to_string())),
-                    Err(e) => Err((sem_entry, sub_entry, e.to_string())),
+                    Ok(Err(e)) => Err((
+                        image_id,
+                        sem_entry,
+                        sub_entry,
+                        DecodeFailure::Other(e.to_string()),
+                    )),
+                    Err(e) => Err((
+                        image_id,
+                        sem_entry,
+                        sub_entry,
+                        DecodeFailure::Other(e.to_string()),
+                    )),
                 }
             }));
         }
@@ -407,7 +456,12 @@ pub async fn run_pipeline(
                 Ok(Ok(x)) => {
                     decoded.push(x);
                 }
-                Ok(Err((sem_entry, sub_entry, err_msg))) => {
+                Ok(Err((image_id, _sem_entry, _sub_entry, DecodeFailure::ImageGone))) => {
+                    debug!(
+                        "[pipeline] image {image_id} not found (deleted mid-pipeline), skipping decode"
+                    );
+                }
+                Ok(Err((_image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
                     error!("[pipeline] decode failed: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
                         let _ = crate::pipeline::queue::mark_failed(
@@ -752,5 +806,21 @@ pub async fn run_pipeline(
                 Err(e) => error!("[pipeline] incremental clustering failed: {e}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_missing_image_fk_error;
+
+    #[test]
+    fn recognizes_fk_constraint_error_message() {
+        let e = anyhow::anyhow!(
+            "error returned from database: (code: 787) FOREIGN KEY constraint failed"
+        );
+        assert!(is_missing_image_fk_error(&e));
+        assert!(!is_missing_image_fk_error(&anyhow::anyhow!(
+            "some other db error"
+        )));
     }
 }

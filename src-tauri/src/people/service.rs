@@ -159,6 +159,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn insert_face_against_deleted_image_returns_fk_error() {
+        let pool = init_test_pool().await;
+        let image_id = seed_image(&pool).await;
+
+        // Simulate `library::repo::delete_folder`'s cascade racing ahead of
+        // an in-flight subject-analysis pass for this image.
+        sqlx::query("DELETE FROM images WHERE id = ?")
+            .bind(image_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = reprocess_image_faces(
+            &pool,
+            image_id,
+            "buffalo_s_recognition",
+            vec![det((0.1, 0.1, 0.2, 0.2), 1.0)],
+            vec![],
+        )
+        .await;
+
+        let err = result.expect_err("insert against a deleted image must fail, not silently succeed");
+        assert!(
+            err.to_string().contains("FOREIGN KEY constraint failed"),
+            "unexpected error shape: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn first_time_analysis_inserts_all_detections_unassigned() {
         let pool = init_test_pool().await;
         let image_id = seed_image(&pool).await;
