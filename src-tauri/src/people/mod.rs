@@ -1,4 +1,5 @@
 //! People slice: faces, subjects, clustering, merge suggestions.
+pub mod bbox;
 pub mod clustering;
 pub mod commands;
 pub mod face_quality;

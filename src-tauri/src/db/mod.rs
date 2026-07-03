@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_h      REAL NOT NULL,
     added_at    INTEGER NOT NULL,
     det_score      REAL,
-    quality_score  REAL
+    quality_score  REAL,
+    embedder_id    TEXT NOT NULL DEFAULT 'buffalo_s_recognition'
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
@@ -195,6 +196,10 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
         3,
         "CREATE TABLE IF NOT EXISTS saved_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE, added_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS saved_report_tags (report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE, tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE, PRIMARY KEY (report_id, tag_id));"
     ),
+    (
+        4,
+        "ALTER TABLE faces ADD COLUMN embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition'",
+    ),
 ];
 
 pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
@@ -239,7 +244,11 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
             for stmt in sql.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    sqlx::query(s).execute(&pool).await?;
+                    match sqlx::query(s).execute(&pool).await {
+                        Ok(_) => {}
+                        Err(e) if e.to_string().contains("duplicate column name") => {}
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
             sqlx::query("UPDATE schema_version SET version = ? WHERE rowid = 1")

@@ -6,10 +6,10 @@ use crate::library::repo::{
     update_thumbnail_path,
 };
 use crate::people::repo::{
-    add_cannot_link, add_must_link, clear_all_face_edges, dismiss_merge_suggestion,
+    add_cannot_link, add_must_link, clear_all_face_edges, delete_face, dismiss_merge_suggestion,
     get_all_similarity_edges, get_dismissed_pair_set, get_face_with_image, get_merge_suggestions,
-    insert_face, list_faces_for_subject_with_images, merge_subjects, upgrade_subject_thumbnails,
-    upsert_face_edge,
+    insert_face, list_faces_for_subject_with_images, merge_subjects, update_face_detection,
+    upgrade_subject_thumbnails, upsert_face_edge,
 };
 use crate::search::text::{like_pattern, normalize};
 use crate::tags::repo::{
@@ -615,6 +615,34 @@ async fn faces_table_has_quality_columns() {
 }
 
 #[tokio::test]
+async fn faces_table_has_embedder_id_column_defaulted() {
+    let pool = init_test_pool().await;
+    let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('faces')")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(
+        cols.contains(&"embedder_id".to_string()),
+        "faces must have embedder_id; got {cols:?}"
+    );
+
+    sqlx::query(
+        "INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (100, 1, 0, 0, 1, 1, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let embedder_id: String = sqlx::query_scalar("SELECT embedder_id FROM faces WHERE id = 100")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        embedder_id, "buffalo_s_recognition",
+        "legacy rows (and any row inserted without an explicit embedder_id) must default to buffalo_s_recognition"
+    );
+}
+
+#[tokio::test]
 async fn sqlite_vec_extension_loads() {
     crate::db::ensure_sqlite_vec_registered();
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -796,11 +824,127 @@ async fn merge_subjects_preserves_and_unifies_tags() {
 }
 
 #[tokio::test]
-async fn insert_face_persists_quality_scores() {
+async fn insert_face_persists_embedder_id() {
     let pool = init_test_pool().await;
-    let face_id = insert_face(&pool, 1, None, (0.1, 0.1, 0.2, 0.2), Some(0.9), Some(0.75))
+    let face_id = insert_face(
+        &pool,
+        1,
+        None,
+        (0.1, 0.1, 0.2, 0.2),
+        Some(0.9),
+        Some(0.75),
+        "antelopev2_recognition",
+    )
+    .await
+    .unwrap();
+    let embedder_id: String = sqlx::query_scalar("SELECT embedder_id FROM faces WHERE id = ?")
+        .bind(face_id)
+        .fetch_one(&pool)
         .await
         .unwrap();
+    assert_eq!(embedder_id, "antelopev2_recognition");
+}
+
+#[tokio::test]
+async fn update_face_detection_overwrites_bbox_scores_and_embedder_preserving_id_and_subject() {
+    let pool = init_test_pool().await;
+    let sid: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let face_id = insert_face(
+        &pool,
+        1,
+        Some(sid),
+        (0.0, 0.0, 0.2, 0.2),
+        Some(0.5),
+        Some(0.4),
+        "buffalo_s_recognition",
+    )
+    .await
+    .unwrap();
+
+    update_face_detection(
+        &pool,
+        face_id,
+        (0.05, 0.06, 0.25, 0.26),
+        0.95,
+        0.88,
+        "antelopev2_recognition",
+    )
+    .await
+    .unwrap();
+
+    let row: (f64, f64, f64, f64, f64, f64, String, Option<i64>) = sqlx::query_as(
+        "SELECT bbox_x, bbox_y, bbox_w, bbox_h, det_score, quality_score, embedder_id, subject_id FROM faces WHERE id = ?",
+    )
+    .bind(face_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        row,
+        (
+            0.05,
+            0.06,
+            0.25,
+            0.26,
+            0.95,
+            0.88,
+            "antelopev2_recognition".to_string(),
+            Some(sid)
+        )
+    );
+}
+
+#[tokio::test]
+async fn delete_face_removes_row_and_cascades_constraints_and_edges() {
+    let pool = init_test_pool().await;
+    sqlx::query("INSERT INTO faces (id, image_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES (1, 1, 0,0,1,1,0), (2, 1, 0,0,1,1,0)").execute(&pool).await.unwrap();
+    add_cannot_link(&pool, 1, 2, "removal").await.unwrap();
+    upsert_face_edge(&pool, 1, 2, 0.5).await.unwrap();
+
+    delete_face(&pool, 1).await.unwrap();
+
+    let face_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(face_count, 0);
+    let constraint_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM constraints")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        constraint_count, 0,
+        "FK cascade must remove constraints referencing the deleted face"
+    );
+    let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_edges")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        edge_count, 0,
+        "FK cascade must remove face_edges referencing the deleted face"
+    );
+}
+
+#[tokio::test]
+async fn insert_face_persists_quality_scores() {
+    let pool = init_test_pool().await;
+    let face_id = insert_face(
+        &pool,
+        1,
+        None,
+        (0.1, 0.1, 0.2, 0.2),
+        Some(0.9),
+        Some(0.75),
+        "buffalo_s_recognition",
+    )
+    .await
+    .unwrap();
     let (det, qual): (Option<f64>, Option<f64>) =
         sqlx::query_as("SELECT det_score, quality_score FROM faces WHERE id = ?")
             .bind(face_id)
@@ -808,7 +952,7 @@ async fn insert_face_persists_quality_scores() {
             .await
             .unwrap();
     assert_eq!(det, Some(0.9));
-    assert_eq!(qual, Some(0.75));
+    assert_eq!(qual, Some(0.75), "buffalo_s_recognition");
 }
 
 #[tokio::test]
@@ -828,6 +972,7 @@ async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
         (0.0, 0.0, 0.2, 0.2),
         Some(0.5),
         Some(0.2),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -849,6 +994,7 @@ async fn upgrade_subject_thumbnails_picks_best_and_upgrades_never_nulls() {
         (0.0, 0.0, 0.3, 0.3),
         Some(0.9),
         Some(0.9),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -893,6 +1039,7 @@ async fn get_face_with_image_returns_bbox_and_path() {
         (0.1, 0.2, 0.3, 0.4),
         Some(0.8),
         Some(0.7),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -1330,6 +1477,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
         (0.1, 0.1, 0.2, 0.2),
         Some(0.9),
         Some(0.9),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -1340,6 +1488,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
         (0.5, 0.5, 0.3, 0.3),
         Some(0.9),
         Some(0.9),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -1350,6 +1499,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
         (0.4, 0.6, 0.1, 0.1),
         Some(0.9),
         Some(0.9),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -1361,6 +1511,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
         (0.0, 0.0, 0.1, 0.1),
         Some(0.9),
         Some(0.9),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -1371,6 +1522,7 @@ async fn list_faces_for_subject_with_images_flattens_orders_and_filters() {
         (0.0, 0.0, 0.1, 0.1),
         Some(0.9),
         Some(0.9),
+        "buffalo_s_recognition",
     )
     .await
     .unwrap();
@@ -1603,4 +1755,181 @@ async fn test_saved_report_name_validation() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("empty"));
+}
+
+#[tokio::test]
+async fn mark_subject_data_stale_preserves_people_data_clears_edges_and_requeues() {
+    let pool = init_test_pool().await;
+
+    let folder_id: i64 =
+        sqlx::query_scalar("INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let img_id: i64 = sqlx::query_scalar(
+        "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at, subject_analysis_done)
+         VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0, 1) RETURNING id",
+    )
+    .bind(folder_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let sid: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let sid2: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let f1 = insert_face(
+        &pool,
+        img_id,
+        Some(sid),
+        (0.0, 0.0, 0.2, 0.2),
+        Some(0.9),
+        Some(0.9),
+        "buffalo_s_recognition",
+    )
+    .await
+    .unwrap();
+    let f2 = insert_face(
+        &pool,
+        img_id,
+        Some(sid),
+        (0.3, 0.3, 0.2, 0.2),
+        Some(0.9),
+        Some(0.9),
+        "buffalo_s_recognition",
+    )
+    .await
+    .unwrap();
+    let vec_bytes: Vec<u8> = vec![0.0f32; 512]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+        .bind(f1)
+        .bind(&vec_bytes)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+        .bind(f2)
+        .bind(&vec_bytes)
+        .execute(&pool)
+        .await
+        .unwrap();
+    add_must_link(&pool, f1, f2, "merge").await.unwrap();
+    upsert_face_edge(&pool, f1, f2, 0.9).await.unwrap();
+    sqlx::query("INSERT INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) VALUES (?, ?, 0.5, 0)")
+        .bind(sid)
+        .bind(sid2)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    crate::people::repo::mark_subject_data_stale(&pool)
+        .await
+        .unwrap();
+
+    let subject_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subjects")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(subject_count, 2, "subjects (Alice + Bob) must be preserved");
+    let face_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(face_count, 2, "faces must be preserved");
+    let constraint_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM constraints")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(constraint_count, 1, "constraints must be preserved");
+    let vector_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM face_vectors WHERE rowid IN (?, ?)")
+            .bind(f1)
+            .bind(f2)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(vector_count, 2, "face_vectors rows must be preserved");
+
+    let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM face_edges")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(edge_count, 0, "face_edges must be cleared");
+    let suggestion_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(suggestion_count, 0, "merge_suggestions must be cleared");
+
+    let done: i64 = sqlx::query_scalar("SELECT subject_analysis_done FROM images WHERE id = ?")
+        .bind(img_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        done, 0,
+        "image must be marked not-yet-analyzed for the subject pipeline"
+    );
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM embedding_queue WHERE image_id = ? AND pipeline = 'subject'",
+    )
+    .bind(img_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        queued, 1,
+        "image must be re-enqueued on the subject pipeline"
+    );
+}
+
+#[tokio::test]
+async fn mark_subject_data_stale_does_not_duplicate_existing_queue_rows() {
+    let pool = init_test_pool().await;
+    let folder_id: i64 =
+        sqlx::query_scalar("INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let img_id: i64 = sqlx::query_scalar(
+        "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at)
+         VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0) RETURNING id",
+    )
+    .bind(folder_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at) VALUES (?, 'subject', 0, 0)")
+        .bind(img_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    crate::people::repo::mark_subject_data_stale(&pool)
+        .await
+        .unwrap();
+
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM embedding_queue WHERE image_id = ? AND pipeline = 'subject'",
+    )
+    .bind(img_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        queued, 1,
+        "an already-queued image must not get a duplicate queue row"
+    );
 }

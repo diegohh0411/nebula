@@ -80,58 +80,98 @@ async fn save_faces(
     image_id: i64,
     sub_qid: i64,
     sub_attempts: i32,
+    embedder_id: &str,
     faces: Vec<face_actor::FaceResult>,
 ) -> Vec<i64> {
-    let mut all_ok = true;
-    let mut vectorized: Vec<i64> = Vec::new();
-    for (detection, face_emb, sharp) in faces {
-        let bbox = detection.bbox;
-        let rel_x = bbox.x1 as f64;
-        let rel_y = bbox.y1 as f64;
-        let rel_w = (bbox.x2 - bbox.x1) as f64;
-        let rel_h = (bbox.y2 - bbox.y1) as f64;
-
-        let frontality = crate::people::face_quality::frontality(detection.landmarks.as_deref());
-        let quality = crate::people::face_quality::composite(detection.score, frontality, sharp);
-
-        match crate::people::repo::insert_face(
-            pool,
-            image_id,
-            None,
-            (rel_x, rel_y, rel_w, rel_h),
-            Some(detection.score as f64),
-            Some(quality as f64),
-        )
-        .await
-        {
-            Ok(face_id) => {
-                if let Err(e) =
-                    crate::people::face_store::upsert_vector(pool, face_id, &face_emb).await
-                {
-                    error!("[pipeline] upsert_vector failed for face {face_id}: {e}");
-                    all_ok = false;
-                } else {
-                    vectorized.push(face_id);
-                }
+    let detections: Vec<crate::people::service::DetectedFaceInput> = faces
+        .into_iter()
+        .map(|(detection, embedding, sharp)| {
+            let bbox = detection.bbox;
+            let rel = (
+                bbox.x1 as f64,
+                bbox.y1 as f64,
+                (bbox.x2 - bbox.x1) as f64,
+                (bbox.y2 - bbox.y1) as f64,
+            );
+            let frontality =
+                crate::people::face_quality::frontality(detection.landmarks.as_deref());
+            let quality =
+                crate::people::face_quality::composite(detection.score, frontality, sharp);
+            crate::people::service::DetectedFaceInput {
+                bbox: rel,
+                det_score: detection.score as f64,
+                quality_score: quality as f64,
+                embedding,
             }
-            Err(e) => {
-                error!("[pipeline] insert_face failed for image {image_id}: {e}");
-                all_ok = false;
-            }
+        })
+        .collect();
+
+    let existing = match crate::people::repo::list_faces_for_image(pool, image_id).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("[pipeline] list_faces_for_image failed for image {image_id}: {e}");
+            let _ =
+                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
+                    .await;
+            return Vec::new();
+        }
+    };
+
+    match crate::people::service::reprocess_image_faces(
+        pool,
+        image_id,
+        embedder_id,
+        detections,
+        existing,
+    )
+    .await
+    {
+        Ok(touched) => {
+            let _ =
+                crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
+            touched
+        }
+        Err(e) => {
+            error!("[pipeline] reprocess_image_faces failed for image {image_id}: {e}");
+            let _ =
+                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
+                    .await;
+            Vec::new()
         }
     }
-    if all_ok {
-        let _ = crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
-    } else {
-        let _ = crate::pipeline::queue::mark_failed(
-            pool,
-            sub_qid,
-            sub_attempts,
-            "one or more face inserts failed",
-        )
-        .await;
+}
+
+/// Resolve the `subject_model` setting to its preset, falling back to Blitz
+/// for an unset or unrecognized value. Delegates to the settings slice's
+/// resolution so the pipeline and the settings command agree on what "the
+/// active preset" means.
+async fn resolve_subject_preset(
+    pool: &sqlx::SqlitePool,
+) -> &'static crate::models::registry::FaceIdPreset {
+    let value = crate::settings::repo::get_setting(pool, "subject_model")
+        .await
+        .ok()
+        .flatten();
+    crate::settings::commands::resolve_subject_preset(value.as_deref())
+}
+
+/// Ensure a preset's three models are downloaded and return its (cached or
+/// freshly built) `FaceAnalyzer`. `VisionEngine::get_face_analyzer` already
+/// caches by `preset.id` internally, so calling this repeatedly with the same
+/// preset is cheap — only a preset change triggers a real rebuild.
+async fn ensure_face_preset(
+    app: &tauri::AppHandle,
+    engine: &crate::vision::engine::VisionEngine,
+    manager: &crate::models::ModelManager,
+    preset: &'static crate::models::registry::FaceIdPreset,
+) -> anyhow::Result<Arc<face_id::analyzer::FaceAnalyzer>> {
+    for face_spec in [preset.detector, preset.embedder, preset.gender_age] {
+        manager
+            .ensure_ready(app, face_spec)
+            .await
+            .map_err(|e| anyhow::anyhow!("face model not ready ({}): {e}", face_spec.id))?;
     }
-    vectorized
+    engine.get_face_analyzer(manager, preset).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -158,7 +198,6 @@ pub async fn run_pipeline(
         );
         &crate::models::registry::SIGLIP_BASE
     };
-    let preset = &crate::models::registry::BUFFALO_S_PRESET;
 
     info!("[pipeline] Ensuring embed model is ready...");
     if let Err(e) = manager.ensure_ready(&app, spec).await {
@@ -167,23 +206,20 @@ pub async fn run_pipeline(
     }
     info!("[pipeline] Embed model ready.");
 
-    for face_spec in [preset.detector, preset.embedder, preset.gender_age] {
-        info!("[pipeline] Ensuring face model is ready ({})", face_spec.id);
-        if let Err(e) = manager.ensure_ready(&app, face_spec).await {
-            error!("[pipeline] face model not ready ({}): {e}", face_spec.id);
-            return;
-        }
-    }
-    info!("[pipeline] Face models ready.");
-
-    let analyzer = match engine.get_face_analyzer(&manager, preset).await {
+    let initial_preset = resolve_subject_preset(&pool).await;
+    let initial_analyzer = match ensure_face_preset(&app, &engine, &manager, initial_preset).await {
         Ok(a) => a,
         Err(e) => {
             error!("[pipeline] face analyzer init failed: {e}");
             return;
         }
     };
-    info!("[pipeline] Face analyzer initialized.");
+    info!(
+        "[pipeline] Face analyzer initialized ('{}').",
+        initial_preset.id
+    );
+    let mut subject_preset = initial_preset;
+    let mut face_tx = face_actor::spawn_face_actor(initial_analyzer, config.infer_channel_depth);
 
     let embed_tx = embed_actor::spawn_embed_actor(
         engine.clone(),
@@ -192,7 +228,6 @@ pub async fn run_pipeline(
         config.batch_size,
         config.infer_channel_depth,
     );
-    let face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
 
     info!("[pipeline] Pipeline background loop started, awaiting tasks...");
 
@@ -208,6 +243,30 @@ pub async fn run_pipeline(
     info!("[pipeline] clustering state recovered: dirty={clustering_dirty}");
 
     loop {
+        // Per-batch preset resolution (§1 wiring fix): a mid-session
+        // subject_model change takes effect on the next iteration with no
+        // restart or signalling machinery. The analyzer is only rebuilt when
+        // the resolved preset id actually differs from the one already loaded.
+        let resolved_preset = resolve_subject_preset(&pool).await;
+        if resolved_preset.id != subject_preset.id {
+            match ensure_face_preset(&app, &engine, &manager, resolved_preset).await {
+                Ok(analyzer) => {
+                    face_tx = face_actor::spawn_face_actor(analyzer, config.infer_channel_depth);
+                    subject_preset = resolved_preset;
+                    info!(
+                        "[pipeline] subject_model switched to '{}'",
+                        subject_preset.id
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "[pipeline] failed to switch subject preset to '{}', keeping '{}': {e}",
+                        resolved_preset.id, subject_preset.id
+                    );
+                }
+            }
+        }
+
         // Pull both queues
         let sem_batch = match crate::pipeline::queue::get_queue_batch(
             &pool,
@@ -262,6 +321,7 @@ pub async fn run_pipeline(
                 });
                 let result = crate::people::clustering::cluster_unassigned_faces(
                     &pool,
+                    subject_preset.embedder.id,
                     Some(cancel_flag.as_ref()),
                 )
                 .await;
@@ -515,8 +575,15 @@ pub async fn run_pipeline(
                         Ok(Ok(faces)) => {
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                let new_ids =
-                                    save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                                let new_ids = save_faces(
+                                    &pool,
+                                    image_id,
+                                    sub_qid,
+                                    sub_attempts,
+                                    subject_preset.embedder.id,
+                                    faces,
+                                )
+                                .await;
                                 batch_new_face_ids.extend(new_ids);
                                 processed_subject_work = true;
                             }
@@ -591,7 +658,15 @@ pub async fn run_pipeline(
                     Ok(Ok(faces)) => {
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
                             info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                            save_faces(&pool, image_id, sub_qid, sub_attempts, faces).await;
+                            save_faces(
+                                &pool,
+                                image_id,
+                                sub_qid,
+                                sub_attempts,
+                                subject_preset.embedder.id,
+                                faces,
+                            )
+                            .await;
                             processed_subject_work = true;
                         }
                     }
@@ -652,12 +727,17 @@ pub async fn run_pipeline(
         if processed_subject_work {
             let incremental_result: anyhow::Result<()> = async {
                 if !batch_new_face_ids.is_empty() {
-                    crate::people::clustering::update_edges_incremental(&pool, &batch_new_face_ids)
-                        .await?;
+                    crate::people::clustering::update_edges_incremental(
+                        &pool,
+                        &batch_new_face_ids,
+                        subject_preset.embedder.id,
+                    )
+                    .await?;
                 }
                 // Constraints/assignments may have changed even with no new
                 // vectors, so always relabel.
-                crate::people::clustering::relabel_from_edges(&pool).await?;
+                crate::people::clustering::relabel_from_edges(&pool, subject_preset.embedder.id)
+                    .await?;
                 Ok(())
             }
             .await;
