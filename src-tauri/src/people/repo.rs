@@ -865,52 +865,12 @@ pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-pub async fn reset_all_subject_data(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin().await?;
-
-    sqlx::query("DELETE FROM constraints")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM merge_suggestions")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM face_vectors")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM faces").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM subjects")
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("UPDATE images SET subject_analysis_done = 0 WHERE deleted_at IS NULL")
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("DELETE FROM embedding_queue WHERE pipeline = 'subject'")
-        .execute(&mut *tx)
-        .await?;
-
-    let now = chrono::Utc::now().timestamp();
-    sqlx::query(
-        "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
-         SELECT id, 'subject', 0, ? FROM images WHERE deleted_at IS NULL",
-    )
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-    Ok(())
-}
-
 /// Invalidate only the data that is genuinely stale after an embedder switch:
 /// clustering edges and cross-subject merge suggestions computed from the old
 /// model's vectors, plus a re-enqueue of every non-deleted image on the
-/// `'subject'` pipeline so it gets re-detected and re-embedded. Unlike
-/// `reset_all_subject_data`, this never touches `subjects`, `faces`,
-/// `face_vectors`, or `constraints` — those survive by id (see
-/// `people::service::reprocess_image_faces`).
+/// `'subject'` pipeline so it gets re-detected and re-embedded. Never touches
+/// `subjects`, `faces`, `face_vectors`, or `constraints` — those survive by id
+/// (see `people::service::reprocess_image_faces`).
 pub async fn mark_subject_data_stale(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
 
