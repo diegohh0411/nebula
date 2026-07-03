@@ -3,11 +3,17 @@ use sqlx::{Row, SqlitePool};
 
 pub async fn upsert_vector(pool: &SqlitePool, face_id: i64, embedding: &[f32]) -> Result<()> {
     let bytes: Vec<u8> = embedding.iter().flat_map(|v| v.to_le_bytes()).collect();
-    sqlx::query("INSERT OR REPLACE INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM face_vectors WHERE rowid = ?")
+        .bind(face_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
         .bind(face_id)
         .bind(&bytes)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 

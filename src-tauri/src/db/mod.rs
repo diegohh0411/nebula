@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS faces (
     bbox_h      REAL NOT NULL,
     added_at    INTEGER NOT NULL,
     det_score      REAL,
-    quality_score  REAL
+    quality_score  REAL,
+    embedder_id    TEXT NOT NULL DEFAULT 'buffalo_s_recognition'
 );
 
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id);
@@ -197,12 +198,16 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
     ),
     (
         4,
+        "ALTER TABLE faces ADD COLUMN embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition'",
+    ),
+    (
+        5,
         "CREATE TABLE subjects_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, thumbnail_face_id INTEGER REFERENCES faces(id) ON DELETE SET NULL, type TEXT NOT NULL DEFAULT 'person', added_at INTEGER NOT NULL); \
          INSERT INTO subjects_new (id, name, thumbnail_face_id, type, added_at) SELECT id, name, thumbnail_face_id, type, added_at FROM subjects; \
          DROP TABLE subjects; \
          ALTER TABLE subjects_new RENAME TO subjects; \
-         CREATE TABLE faces_new (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE, subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL, bbox_x REAL NOT NULL, bbox_y REAL NOT NULL, bbox_w REAL NOT NULL, bbox_h REAL NOT NULL, added_at INTEGER NOT NULL, det_score REAL, quality_score REAL); \
-         INSERT INTO faces_new (id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score) SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score FROM faces; \
+         CREATE TABLE faces_new (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE, subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL, bbox_x REAL NOT NULL, bbox_y REAL NOT NULL, bbox_w REAL NOT NULL, bbox_h REAL NOT NULL, added_at INTEGER NOT NULL, det_score REAL, quality_score REAL, embedder_id TEXT NOT NULL DEFAULT 'buffalo_s_recognition'); \
+         INSERT INTO faces_new (id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score, embedder_id) SELECT id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score, embedder_id FROM faces; \
          DROP TABLE faces; \
          ALTER TABLE faces_new RENAME TO faces; \
          CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id); \
@@ -254,7 +259,11 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
             for stmt in sql.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    sqlx::query(s).execute(&mut *conn).await?;
+                    match sqlx::query(s).execute(&mut *conn).await {
+                        Ok(_) => {}
+                        Err(e) if e.to_string().contains("duplicate column name") => {}
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
             sqlx::query("UPDATE schema_version SET version = ? WHERE rowid = 1")

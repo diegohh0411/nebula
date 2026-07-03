@@ -29,11 +29,12 @@ pub async fn insert_face(
     bbox: (f64, f64, f64, f64),
     det_score: Option<f64>,
     quality_score: Option<f64>,
+    embedder_id: &str,
 ) -> Result<i64> {
     let now = chrono::Utc::now().timestamp();
     let result = sqlx::query(
-        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at, det_score, quality_score, embedder_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(image_id)
     .bind(subject_id)
@@ -44,6 +45,7 @@ pub async fn insert_face(
     .bind(now)
     .bind(det_score)
     .bind(quality_score)
+    .bind(embedder_id)
     .execute(pool)
     .await?;
     Ok(result.last_insert_rowid())
@@ -298,6 +300,47 @@ pub async fn update_face_subject(
 ) -> Result<()> {
     sqlx::query("UPDATE faces SET subject_id = ? WHERE id = ?")
         .bind(subject_id)
+        .bind(face_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Overwrite an existing face row's detection output in place — bbox, scores,
+/// and the embedder that produced its (separately updated) vector — while
+/// preserving `id`, `subject_id`, and `added_at`. Used when a re-detected face
+/// IoU-matches an existing row across a model switch, so `subject_id`,
+/// `constraints`, and `thumbnail_face_id` references all survive untouched.
+pub async fn update_face_detection(
+    pool: &SqlitePool,
+    face_id: i64,
+    bbox: (f64, f64, f64, f64),
+    det_score: f64,
+    quality_score: f64,
+    embedder_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE faces SET bbox_x = ?, bbox_y = ?, bbox_w = ?, bbox_h = ?, det_score = ?, quality_score = ?, embedder_id = ?
+         WHERE id = ?",
+    )
+    .bind(bbox.0)
+    .bind(bbox.1)
+    .bind(bbox.2)
+    .bind(bbox.3)
+    .bind(det_score)
+    .bind(quality_score)
+    .bind(embedder_id)
+    .bind(face_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Delete a face row. FK `ON DELETE CASCADE` removes its `constraints` and
+/// `face_edges` rows, but NOT its `face_vectors` row (a `vec0` virtual table
+/// has no FK support) — callers must also call `face_store::delete_vector`.
+pub async fn delete_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM faces WHERE id = ?")
         .bind(face_id)
         .execute(pool)
         .await?;
@@ -802,11 +845,19 @@ pub async fn get_face_ids_for_subject(pool: &SqlitePool, subject_id: i64) -> Res
     Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
 }
 
-pub async fn get_all_face_ids_with_vectors(pool: &SqlitePool) -> Result<Vec<i64>> {
-    let rows = sqlx::query("SELECT rowid FROM face_vectors")
-        .fetch_all(pool)
-        .await?;
-    Ok(rows.into_iter().map(|r| r.get::<i64, _>("rowid")).collect())
+pub async fn get_all_face_ids_with_vectors(
+    pool: &SqlitePool,
+    embedder_id: &str,
+) -> Result<Vec<i64>> {
+    let rows = sqlx::query(
+        "SELECT fv.rowid AS id FROM face_vectors fv
+         JOIN faces f ON f.id = fv.rowid
+         WHERE f.embedder_id = ?",
+    )
+    .bind(embedder_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("id")).collect())
 }
 
 pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
@@ -817,35 +868,31 @@ pub async fn unassign_face(pool: &SqlitePool, face_id: i64) -> Result<()> {
     Ok(())
 }
 
-pub async fn reset_all_subject_data(pool: &SqlitePool) -> Result<()> {
+/// Invalidate only the data that is genuinely stale after an embedder switch:
+/// clustering edges and cross-subject merge suggestions computed from the old
+/// model's vectors, plus a re-enqueue of every non-deleted image on the
+/// `'subject'` pipeline so it gets re-detected and re-embedded. Never touches
+/// `subjects`, `faces`, `face_vectors`, or `constraints` — those survive by id
+/// (see `people::service::reprocess_image_faces`).
+pub async fn mark_subject_data_stale(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM constraints")
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("DELETE FROM merge_suggestions")
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM face_vectors")
+    sqlx::query("DELETE FROM face_edges")
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM faces").execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM subjects")
-        .execute(&mut *tx)
-        .await?;
-
     sqlx::query("UPDATE images SET subject_analysis_done = 0 WHERE deleted_at IS NULL")
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("DELETE FROM embedding_queue WHERE pipeline = 'subject'")
         .execute(&mut *tx)
         .await?;
 
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
         "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
-         SELECT id, 'subject', 0, ? FROM images WHERE deleted_at IS NULL",
+         SELECT id, 'subject', 0, ? FROM images
+         WHERE deleted_at IS NULL
+           AND id NOT IN (SELECT image_id FROM embedding_queue WHERE pipeline = 'subject')",
     )
     .bind(now)
     .execute(&mut *tx)
