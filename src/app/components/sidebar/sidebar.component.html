@@ -69,7 +69,7 @@
         <button
           class="folder-remove"
           title="Remove folder"
-          (click)="removeFolder(folder.id, $event)"
+          (click)="removeFolder(folder.id, folder.path, $event)"
         >
           <lucide-icon name="x" size="12"></lucide-icon>
         </button>
@@ -98,4 +98,11 @@
       <span class="folder-name">Settings</span>
     </app-sidebar-item>
   </div>
+
+  <app-confirm-remove-folder-dialog
+    [open]="isRemoveDialogOpen()"
+    [folderName]="folderToRemoveName()"
+    (confirm)="onConfirmRemove()"
+    (cancel)="onCancelRemove()"
+  ></app-confirm-remove-folder-dialog>
 </aside>

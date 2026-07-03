@@ -2,24 +2,30 @@ import {
   Component,
   ChangeDetectionStrategy,
   inject,
+  signal,
 } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { open } from '@tauri-apps/plugin-dialog';
 import { LucideAngularModule } from 'lucide-angular';
 import { PhotoService } from '../../services/photo.service';
 import { SidebarItemComponent } from '../ui/sidebar-item/sidebar-item.component';
+import { ConfirmRemoveFolderDialogComponent } from '../confirm-remove-folder-dialog/confirm-remove-folder-dialog.component';
 
 @Component({
   selector: 'app-sidebar',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, LucideAngularModule, SidebarItemComponent],
+  imports: [RouterLink, LucideAngularModule, SidebarItemComponent, ConfirmRemoveFolderDialogComponent],
   templateUrl: './sidebar.component.html',
   styleUrl: './sidebar.component.css',
 })
 export class SidebarComponent {
   protected photos = inject(PhotoService);
   protected router = inject(Router);
+
+  protected isRemoveDialogOpen = signal(false);
+  protected folderToRemoveId = signal<number | null>(null);
+  protected folderToRemoveName = signal<string>('');
 
   protected folderBasename(path: string): string {
     return path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path;
@@ -32,9 +38,25 @@ export class SidebarComponent {
     }
   }
 
-  protected async removeFolder(id: number, event: MouseEvent): Promise<void> {
+  protected removeFolder(id: number, name: string, event: MouseEvent): void {
     event.stopPropagation();
-    await this.photos.removeFolder(id);
+    this.folderToRemoveId.set(id);
+    this.folderToRemoveName.set(name);
+    this.isRemoveDialogOpen.set(true);
+  }
+
+  protected async onConfirmRemove(): Promise<void> {
+    const id = this.folderToRemoveId();
+    if (id !== null) {
+      this.isRemoveDialogOpen.set(false);
+      await this.photos.removeFolder(id);
+      this.folderToRemoveId.set(null);
+    }
+  }
+
+  protected onCancelRemove(): void {
+    this.isRemoveDialogOpen.set(false);
+    this.folderToRemoveId.set(null);
   }
 
   protected selectFolder(id: number | null): void {
