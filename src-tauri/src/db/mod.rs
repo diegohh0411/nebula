@@ -255,7 +255,9 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let mut conn = pool.acquire().await?;
     for &(version, sql) in VERSIONED_MIGRATIONS {
         if current < version {
-            sqlx::query("PRAGMA foreign_keys=OFF;").execute(&mut *conn).await?;
+            sqlx::query("PRAGMA foreign_keys=OFF;")
+                .execute(&mut *conn)
+                .await?;
             for stmt in sql.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
@@ -270,7 +272,9 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
                 .bind(version)
                 .execute(&mut *conn)
                 .await?;
-            sqlx::query("PRAGMA foreign_keys=ON;").execute(&mut *conn).await?;
+            sqlx::query("PRAGMA foreign_keys=ON;")
+                .execute(&mut *conn)
+                .await?;
         }
     }
 

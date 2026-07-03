@@ -22,11 +22,17 @@ pub async fn insert_folder(pool: &SqlitePool, path: &str) -> Result<i64> {
     }
 }
 
-pub async fn delete_folder(pool: &SqlitePool, data_dir: &std::path::Path, id: i64) -> Result<Vec<i64>> {
-    let faces = sqlx::query("SELECT id FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?)")
-        .bind(id)
-        .fetch_all(pool)
-        .await?;
+pub async fn delete_folder(
+    pool: &SqlitePool,
+    data_dir: &std::path::Path,
+    id: i64,
+) -> Result<Vec<i64>> {
+    let faces = sqlx::query(
+        "SELECT id FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?)",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
     let face_ids: Vec<i64> = faces.iter().map(|r| r.get::<i64, _>("id")).collect();
 
     let image_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM images WHERE folder_id = ?")
@@ -50,12 +56,10 @@ pub async fn delete_folder(pool: &SqlitePool, data_dir: &std::path::Path, id: i6
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(
-        "DELETE FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?)"
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM faces WHERE image_id IN (SELECT id FROM images WHERE folder_id = ?)")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
 
     sqlx::query(
         "DELETE FROM subjects WHERE id NOT IN (SELECT DISTINCT subject_id FROM faces WHERE subject_id IS NOT NULL)"
@@ -63,19 +67,15 @@ pub async fn delete_folder(pool: &SqlitePool, data_dir: &std::path::Path, id: i6
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query(
-        "DELETE FROM images WHERE folder_id = ?"
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM images WHERE folder_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
 
-    sqlx::query(
-        "DELETE FROM folders WHERE id = ?"
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM folders WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
