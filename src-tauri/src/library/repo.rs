@@ -29,12 +29,10 @@ pub async fn delete_folder(pool: &SqlitePool, data_dir: &std::path::Path, id: i6
         .await?;
     let face_ids: Vec<i64> = faces.iter().map(|r| r.get::<i64, _>("id")).collect();
 
-    let images = sqlx::query("SELECT id, thumbnail_path, preview_path FROM images WHERE folder_id = ?")
+    let image_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM images WHERE folder_id = ?")
         .bind(id)
         .fetch_all(pool)
         .await?;
-
-    let image_ids: Vec<i64> = images.iter().map(|r| r.get::<i64, _>("id")).collect();
 
     let mut tx = pool.begin().await?;
 
@@ -90,19 +88,17 @@ pub async fn delete_folder(pool: &SqlitePool, data_dir: &std::path::Path, id: i6
         }
     }
 
-    // Cleanup images thumbnail/preview cache files
-    for row in images {
-        if let Some(thumb) = row.get::<Option<String>, _>("thumbnail_path") {
-            let path = std::path::PathBuf::from(thumb);
-            if path.exists() {
-                let _ = std::fs::remove_file(path);
-            }
+    // Cleanup images thumbnail/preview cache files. Paths are recomputed from
+    // image_id rather than trusting thumbnail_path/preview_path from the DB,
+    // so a corrupted row can't point deletion outside the cache dir.
+    for image_id in &image_ids {
+        let thumb_path = crate::media::thumbnail::thumbnail_path_for(data_dir, *image_id);
+        if thumb_path.exists() {
+            let _ = std::fs::remove_file(thumb_path);
         }
-        if let Some(prev) = row.get::<Option<String>, _>("preview_path") {
-            let path = std::path::PathBuf::from(prev);
-            if path.exists() {
-                let _ = std::fs::remove_file(path);
-            }
+        let preview_path = crate::media::thumbnail::preview_path_for(data_dir, *image_id);
+        if preview_path.exists() {
+            let _ = std::fs::remove_file(preview_path);
         }
     }
 

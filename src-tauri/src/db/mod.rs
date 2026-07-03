@@ -215,7 +215,10 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
     let db_path = data_dir.join("nebula.db");
     let opts = SqliteConnectOptions::new()
         .filename(&db_path)
-        .create_if_missing(true);
+        .create_if_missing(true)
+        // Applied to every connection the pool opens (not just the first),
+        // so FK-based cascades stay enforced regardless of pool size.
+        .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -226,9 +229,6 @@ pub async fn init_db(data_dir: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     sqlx::query("PRAGMA synchronous=NORMAL;")
-        .execute(&pool)
-        .await?;
-    sqlx::query("PRAGMA foreign_keys=ON;")
         .execute(&pool)
         .await?;
 
