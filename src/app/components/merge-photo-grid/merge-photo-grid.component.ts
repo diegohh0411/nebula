@@ -43,7 +43,16 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['images'] && !changes['images'].firstChange) {
-      this.cropUrls.set(new Map());
+      const liveIds = new Set(this.images.map((img) => img.face_id));
+      const current = this.cropUrls();
+      let pruned: Map<number, string> | null = null;
+      for (const faceId of current.keys()) {
+        if (!liveIds.has(faceId)) {
+          if (!pruned) pruned = new Map(current);
+          pruned.delete(faceId);
+        }
+      }
+      if (pruned) this.cropUrls.set(pruned);
       queueMicrotask(() => this.observeCells());
     }
   }
@@ -104,7 +113,11 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
 
   protected async onRemove(event: MouseEvent, img: SubjectPhotoFace): Promise<void> {
     event.stopPropagation();
-    if (this.images.length <= 1 || this.removingIds().has(img.face_id)) return;
+    if (
+      this.images.length - this.removingIds().size <= 1 ||
+      this.removingIds().has(img.face_id)
+    )
+      return;
 
     this.removingIds.update((ids) => new Set(ids).add(img.face_id));
     try {

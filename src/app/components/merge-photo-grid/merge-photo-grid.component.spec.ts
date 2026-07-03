@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
-import { importProvidersFrom } from '@angular/core';
+import { importProvidersFrom, SimpleChange } from '@angular/core';
 import { LucideAngularModule } from 'lucide-angular';
 import { MergePhotoGridComponent } from './merge-photo-grid.component';
 import { PhotoService } from '../../services/photo.service';
@@ -150,5 +150,59 @@ describe('MergePhotoGridComponent', () => {
     expect(errorSpy).toHaveBeenCalled();
     expect(removedSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it('refuses a concurrent removal on a sibling face that would empty the grid while one removal is still in flight', async () => {
+    let resolveFirst!: () => void;
+    unassignFace.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+
+    const imgA = makePhoto(1, 100);
+    const imgB = makePhoto(2, 200);
+    component.images = [imgA, imgB];
+    component.removable = true;
+    fixture.detectChanges();
+
+    const event = { stopPropagation: () => {} } as MouseEvent;
+
+    // Start removing A; its unassignFace call is left pending.
+    const firstRemoval = component['onRemove'](event, imgA);
+
+    // Before A resolves, attempt to remove sibling B too. With only 2 faces
+    // and 1 already in flight, the effective remaining count is 1, so this
+    // second removal must be refused up front.
+    await component['onRemove'](event, imgB);
+
+    expect(unassignFace).toHaveBeenCalledTimes(1);
+    expect(unassignFace).toHaveBeenCalledWith(1);
+    expect(unassignFace).not.toHaveBeenCalledWith(2);
+
+    resolveFirst();
+    await firstRemoval;
+  });
+
+  it('prunes only departed face ids from the crop cache on partial image changes, keeping survivors cached', () => {
+    const cropUrls = (component as unknown as { cropUrls: { set: (m: Map<number, string>) => void; (): Map<number, string> } }).cropUrls;
+    cropUrls.set(
+      new Map([
+        [1, '/crops/1.webp'],
+        [2, '/crops/2.webp'],
+      ])
+    );
+
+    const survivor = makePhoto(2, 200);
+    component.images = [survivor];
+
+    component.ngOnChanges({
+      images: new SimpleChange([makePhoto(1, 100), survivor], [survivor], false),
+    });
+
+    const after = cropUrls();
+    expect(after.get(2)).toBe('/crops/2.webp');
+    expect(after.has(1)).toBe(false);
   });
 });
