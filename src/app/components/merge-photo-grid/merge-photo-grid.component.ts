@@ -1,6 +1,8 @@
 import {
   Component,
   Input,
+  Output,
+  EventEmitter,
   ChangeDetectionStrategy,
   inject,
   ElementRef,
@@ -33,6 +35,11 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
   protected cropUrls = signal<Map<number, string>>(new Map());
 
   @Input() images: SubjectPhotoFace[] = [];
+  @Input() removable = false;
+  @Output() removed = new EventEmitter<number>();
+
+  /** Face ids with an in-flight unassign request, so the badge can't be double-clicked. */
+  protected removingIds = signal<Set<number>>(new Set());
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['images'] && !changes['images'].firstChange) {
@@ -93,6 +100,25 @@ export class MergePhotoGridComponent implements AfterViewInit, OnDestroy, OnChan
     const list = this.images.map((i) => this.toLightboxImage(i));
     const clicked = list.find((i) => i.image_id === img.image_id) ?? this.toLightboxImage(img);
     this.photos.openLightbox(clicked, list);
+  }
+
+  protected async onRemove(event: MouseEvent, img: SubjectPhotoFace): Promise<void> {
+    event.stopPropagation();
+    if (this.images.length <= 1 || this.removingIds().has(img.face_id)) return;
+
+    this.removingIds.update((ids) => new Set(ids).add(img.face_id));
+    try {
+      await this.photos.unassignFace(img.face_id);
+      this.removed.emit(img.face_id);
+    } catch (e) {
+      console.error(`MergePhotoGrid: failed to remove face ${img.face_id}`, e);
+    } finally {
+      this.removingIds.update((ids) => {
+        const next = new Set(ids);
+        next.delete(img.face_id);
+        return next;
+      });
+    }
   }
 
   private toLightboxImage(img: SubjectPhotoFace): SearchResult {
