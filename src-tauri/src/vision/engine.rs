@@ -11,14 +11,18 @@ use crate::models::manager::ModelManager;
 use crate::models::registry::{FaceIdPreset, ModelSpec};
 use crate::pipeline::ComputePlacement;
 
-/// GPU execution providers for the current platform. DirectML is Windows-only;
-/// elsewhere GPU placement silently falls back to the CPU EP.
+/// GPU execution providers for the current platform: DirectML on Windows,
+/// CoreML on macOS; elsewhere GPU placement silently falls back to the CPU EP.
 fn gpu_execution_providers() -> Vec<ort::ep::ExecutionProviderDispatch> {
     #[cfg(windows)]
     {
         vec![ort::ep::DirectML::default().build()]
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        vec![ort::ep::CoreML::default().build()]
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         vec![]
     }

@@ -49,7 +49,10 @@ half = "2"
 ort = "2.0.0-rc.12"
 tokenizers = "0.21"
 
-# DirectML is Windows-only; macOS/Linux builds fall back to the CPU EP.
+# DirectML is Windows-only; Linux builds fall back to the CPU EP.
 [target.'cfg(windows)'.dependencies]
 face_id = { version = "0.4.1", features = ["directml"] }
 ort = { version = "2.0.0-rc.12", features = ["directml"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.12", features = ["coreml"] }
