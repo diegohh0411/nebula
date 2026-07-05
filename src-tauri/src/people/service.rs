@@ -180,7 +180,8 @@ mod tests {
         )
         .await;
 
-        let err = result.expect_err("insert against a deleted image must fail, not silently succeed");
+        let err =
+            result.expect_err("insert against a deleted image must fail, not silently succeed");
         assert!(
             err.to_string().contains("FOREIGN KEY constraint failed"),
             "unexpected error shape: {err}"
