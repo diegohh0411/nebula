@@ -11,6 +11,19 @@ use crate::models::manager::ModelManager;
 use crate::models::registry::{FaceIdPreset, ModelSpec};
 use crate::pipeline::ComputePlacement;
 
+/// GPU execution providers for the current platform. DirectML is Windows-only;
+/// elsewhere GPU placement silently falls back to the CPU EP.
+fn gpu_execution_providers() -> Vec<ort::ep::ExecutionProviderDispatch> {
+    #[cfg(windows)]
+    {
+        vec![ort::ep::DirectML::default().build()]
+    }
+    #[cfg(not(windows))]
+    {
+        vec![]
+    }
+}
+
 pub struct VisionEngine {
     pub data_dir: PathBuf,
     pub placement: ComputePlacement,
@@ -55,7 +68,7 @@ impl VisionEngine {
 
         let dml_eps: Vec<ort::ep::ExecutionProviderDispatch> =
             if self.placement == ComputePlacement::Gpu {
-                vec![ort::ep::DirectML::default().build()]
+                gpu_execution_providers()
             } else {
                 vec![]
             };
@@ -111,8 +124,8 @@ impl VisionEngine {
 
         if placement == ComputePlacement::Gpu {
             builder = builder
-                .with_execution_providers([ort::ep::DirectML::default().build()])
-                .map_err(|e| anyhow!("failed to register DirectML EP: {e}"))?;
+                .with_execution_providers(gpu_execution_providers())
+                .map_err(|e| anyhow!("failed to register GPU EP: {e}"))?;
         }
 
         builder

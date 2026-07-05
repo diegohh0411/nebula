@@ -1,4 +1,4 @@
-name: Release Windows
+name: Release
 
 on:
   push:
@@ -49,3 +49,36 @@ jobs:
           # NSIS only: it runs vc_redist via an installer hook (see
           # src-tauri/nsis/hooks.nsh). MSI would not, so we don't ship it.
           args: --bundles nsis --config src-tauri/tauri.ci.conf.json
+
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write          # upload bundles to the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Universal binary: runs on both Apple Silicon and Intel Macs.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Nebula ${{ github.ref_name }}"
+          releaseDraft: true
+          prerelease: false
+          # No tauri.ci.conf.json here: it only adds the Windows vc_redist
+          # resource, which doesn't exist (and isn't needed) on macOS.
+          args: --target universal-apple-darwin --bundles app,dmg
