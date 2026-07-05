@@ -65,8 +65,10 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # Universal binary: runs on both Apple Silicon and Intel Macs.
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          # Apple Silicon only: ort (ONNX Runtime bindings) dropped prebuilt
+          # binaries for x86_64-apple-darwin in 2.0.0-rc.11, so a universal
+          # binary can no longer be built without vendoring ONNX Runtime.
+          targets: aarch64-apple-darwin
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -81,4 +83,4 @@ jobs:
           prerelease: false
           # No tauri.ci.conf.json here: it only adds the Windows vc_redist
           # resource, which doesn't exist (and isn't needed) on macOS.
-          args: --target universal-apple-darwin --bundles app,dmg
+          args: --target aarch64-apple-darwin --bundles app,dmg
