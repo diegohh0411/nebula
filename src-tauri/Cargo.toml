@@ -1,6 +1,6 @@
 [package]
 name = "nebula"
-version = "0.4.1"
+version = "0.4.2"
 description = "Nebula Photo Manager"
 authors = ["Diego Hernández Herrera <diegohh0411@gmail.com>"]
 edition = "2021"
