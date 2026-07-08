@@ -206,6 +206,95 @@ enum DecodeFailure {
     Other(String),
 }
 
+/// A batch image whose embed and face requests were both dispatched to their
+/// actors in Phase A. Phase B awaits `erx`/`frx` and persists the results.
+/// A receiver is `None` when that image had no corresponding queue slot, or the
+/// actor's channel was already closed when we tried to send.
+struct Pending {
+    image_id: i64,
+    sem_entry: Option<(i64, i32)>,
+    sub_entry: Option<(i64, i32)>,
+    erx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Vec<f32>>>>,
+    frx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Vec<face_actor::FaceResult>>>>,
+}
+
+/// Phase A: pre-dispatch every image's embed *and* face request before any
+/// reply is awaited. Filling both actor channels up front lets the embed actor
+/// drain a real batch, and lets face inference for image N+1 begin while image
+/// N's results are still being persisted in Phase B — instead of gating each
+/// face dispatch behind the previous image's `join!`.
+///
+/// Deadlock-free by construction: the batch is at most `batch_size` and each
+/// channel has depth `infer_channel_depth` (>= `batch_size`), so every
+/// `send().await` returns without waiting on a reply. On a closed channel the
+/// affected queue slot is marked failed and its receiver is left `None`.
+async fn dispatch_batch(
+    pool: &sqlx::SqlitePool,
+    decoded: Vec<(i64, WorkSlot, WorkSlot, DecodedImage)>,
+    embed_tx: &tokio::sync::mpsc::Sender<embed_actor::EmbedRequest>,
+    face_tx: &tokio::sync::mpsc::Sender<face_actor::FaceRequest>,
+) -> Vec<Pending> {
+    let mut pending: Vec<Pending> = Vec::with_capacity(decoded.len());
+    for (image_id, sem_entry, sub_entry, d) in decoded {
+        let erx = if let Some((sem_qid, sem_attempts)) = sem_entry {
+            let (etx, erx) = tokio::sync::oneshot::channel();
+            if embed_tx
+                .send(embed_actor::EmbedRequest {
+                    decoded: d.clone(),
+                    reply: etx,
+                })
+                .await
+                .is_ok()
+            {
+                Some(erx)
+            } else {
+                let _ = crate::pipeline::queue::mark_failed(
+                    pool,
+                    sem_qid,
+                    sem_attempts,
+                    "embed actor closed",
+                )
+                .await;
+                None
+            }
+        } else {
+            None
+        };
+        let frx = if let Some((sub_qid, sub_attempts)) = sub_entry {
+            let (ftx, frx) = tokio::sync::oneshot::channel();
+            if face_tx
+                .send(face_actor::FaceRequest {
+                    decoded: d.clone(),
+                    reply: ftx,
+                })
+                .await
+                .is_ok()
+            {
+                Some(frx)
+            } else {
+                let _ = crate::pipeline::queue::mark_failed(
+                    pool,
+                    sub_qid,
+                    sub_attempts,
+                    "face actor closed",
+                )
+                .await;
+                None
+            }
+        } else {
+            None
+        };
+        pending.push(Pending {
+            image_id,
+            sem_entry,
+            sub_entry,
+            erx,
+            frx,
+        });
+    }
+    pending
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_pipeline(
     pool: sqlx::SqlitePool,
@@ -499,87 +588,24 @@ pub async fn run_pipeline(
         // edge update without relying on face-id ordering.
         let mut batch_new_face_ids: Vec<i64> = Vec::new();
 
-        // Phase A — pre-dispatch all embed requests before awaiting any reply.
-        // This fills the embed actor's channel so its try_recv loop drains a
-        // real batch (up to batch_size) instead of processing images one-by-one.
-        struct Pending {
-            image_id: i64,
-            sem_entry: Option<(i64, i32)>,
-            sub_entry: Option<(i64, i32)>,
-            d: DecodedImage,
-            erx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<Vec<f32>>>>,
-        }
-        let mut pending: Vec<Pending> = Vec::with_capacity(decoded.len());
-        for (image_id, sem_entry, sub_entry, d) in decoded {
-            let erx = if let Some((sem_qid, sem_attempts)) = sem_entry {
-                let (etx, erx) = tokio::sync::oneshot::channel();
-                if embed_tx
-                    .send(embed_actor::EmbedRequest {
-                        decoded: d.clone(),
-                        reply: etx,
-                    })
-                    .await
-                    .is_ok()
-                {
-                    Some(erx)
-                } else {
-                    let _ = crate::pipeline::queue::mark_failed(
-                        &pool,
-                        sem_qid,
-                        sem_attempts,
-                        "embed actor closed",
-                    )
-                    .await;
-                    None
-                }
-            } else {
-                None
-            };
-            pending.push(Pending {
-                image_id,
-                sem_entry,
-                sub_entry,
-                d,
-                erx,
-            });
-        }
+        // Phase A — pre-dispatch every image's embed AND face request before
+        // awaiting any reply. This fills the embed actor's channel so its
+        // try_recv loop drains a real batch, and queues all face work so the
+        // single face worker never idles waiting for Phase B to hand it the next
+        // image. See dispatch_batch for the deadlock-free argument.
+        let pending = dispatch_batch(&pool, decoded, &embed_tx, &face_tx).await;
 
-        // Phase B — for each image: dispatch face then join!(embed_result, face_result).
-        // This restores the embed/face overlap that the old serial CPU path dropped,
-        // while the pre-dispatched embed batch is processed by the actor.
+        // Phase B — await both replies per image and persist results. Dispatch
+        // already happened in Phase A (dispatch_batch), so this loop no longer
+        // gates the next image's face work behind the current image's writes.
         for Pending {
             image_id,
             sem_entry,
             sub_entry,
-            d,
             erx,
+            frx,
         } in pending
         {
-            let frx = if let Some((sub_qid, sub_attempts)) = sub_entry {
-                let (ftx, frx) = tokio::sync::oneshot::channel();
-                if face_tx
-                    .send(face_actor::FaceRequest {
-                        decoded: d.clone(),
-                        reply: ftx,
-                    })
-                    .await
-                    .is_ok()
-                {
-                    Some(frx)
-                } else {
-                    let _ = crate::pipeline::queue::mark_failed(
-                        &pool,
-                        sub_qid,
-                        sub_attempts,
-                        "face actor closed",
-                    )
-                    .await;
-                    None
-                }
-            } else {
-                None
-            };
-
             match (erx, frx) {
                 (Some(erx), Some(frx)) => {
                     let (emb_result, face_result) = tokio::join!(erx, frx);
@@ -822,5 +848,57 @@ mod tests {
         assert!(!is_missing_image_fk_error(&anyhow::anyhow!(
             "some other db error"
         )));
+    }
+
+    use super::{dispatch_batch, embed_actor, face_actor};
+    use crate::pipeline::DecodedImage;
+    use std::sync::Arc;
+
+    /// Regression guard for TT-94: `dispatch_batch` must enqueue *every* image's
+    /// embed and face request before returning, without awaiting any reply.
+    /// Under the old Phase-B dispatch, only image 1's face request would be sent
+    /// until its reply came back — here no reply is ever produced, so a
+    /// per-image-gated dispatch would enqueue at most one face request.
+    #[tokio::test]
+    async fn dispatch_batch_enqueues_all_requests_without_awaiting_replies() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        // Depth (4) >= batch (3), mirroring prod's infer_channel_depth >= batch_size.
+        // We keep the receivers so nothing consumes/replies during dispatch.
+        let (embed_tx, mut embed_rx) =
+            tokio::sync::mpsc::channel::<embed_actor::EmbedRequest>(4);
+        let (face_tx, mut face_rx) =
+            tokio::sync::mpsc::channel::<face_actor::FaceRequest>(4);
+
+        let mk = |id: i64| DecodedImage {
+            image_id: id,
+            full: Arc::new(image::DynamicImage::new_rgb8(1, 1)),
+        };
+        // Three images, each with both a semantic and a subject queue slot.
+        let decoded = vec![
+            (1i64, Some((10, 0)), Some((20, 0)), mk(1)),
+            (2i64, Some((11, 0)), Some((21, 0)), mk(2)),
+            (3i64, Some((12, 0)), Some((22, 0)), mk(3)),
+        ];
+
+        let pending = dispatch_batch(&pool, decoded, &embed_tx, &face_tx).await;
+
+        assert_eq!(pending.len(), 3);
+        assert!(
+            pending.iter().all(|p| p.erx.is_some() && p.frx.is_some()),
+            "every image should hold both reply receivers"
+        );
+
+        // Both channels received all three requests up front.
+        let mut embed_count = 0;
+        while embed_rx.try_recv().is_ok() {
+            embed_count += 1;
+        }
+        let mut face_count = 0;
+        while face_rx.try_recv().is_ok() {
+            face_count += 1;
+        }
+        assert_eq!(embed_count, 3, "all embed requests dispatched in Phase A");
+        assert_eq!(face_count, 3, "all face requests dispatched in Phase A");
     }
 }
