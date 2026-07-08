@@ -224,10 +224,11 @@ struct Pending {
 /// N's results are still being persisted in Phase B — instead of gating each
 /// face dispatch behind the previous image's `join!`.
 ///
-/// Deadlock-free by construction: the batch is at most `batch_size` and each
-/// channel has depth `infer_channel_depth` (>= `batch_size`), so every
-/// `send().await` returns without waiting on a reply. On a closed channel the
-/// affected queue slot is marked failed and its receiver is left `None`.
+/// Deadlock-free as long as each channel's depth (`infer_channel_depth`) is at
+/// least the batch size — `run_pipeline` enforces this with a `debug_assert!`
+/// before spawning the actors. Under that invariant, every `send().await`
+/// here returns without waiting on a reply. On a closed channel the affected
+/// queue slot is marked failed and its receiver is left `None`.
 async fn dispatch_batch(
     pool: &sqlx::SqlitePool,
     decoded: Vec<(i64, WorkSlot, WorkSlot, DecodedImage)>,
@@ -340,6 +341,19 @@ pub async fn run_pipeline(
         initial_preset.id
     );
     let mut subject_preset = initial_preset;
+
+    // dispatch_batch's deadlock-freedom depends on this holding: every batch
+    // (bounded by batch_size) must fit in each actor channel's depth without
+    // a send ever waiting on a reply. Catch a misconfiguration loudly here
+    // rather than have it surface as a hang deep inside the pipeline loop.
+    debug_assert!(
+        config.batch_size <= config.infer_channel_depth,
+        "PipelineConfig.batch_size ({}) must be <= infer_channel_depth ({}) \
+         or Phase A pre-dispatch can deadlock",
+        config.batch_size,
+        config.infer_channel_depth
+    );
+
     let mut face_tx = face_actor::spawn_face_actor(initial_analyzer, config.infer_channel_depth);
 
     let embed_tx = embed_actor::spawn_embed_actor(
@@ -879,7 +893,14 @@ mod tests {
             (3i64, Some((12, 0)), Some((22, 0)), mk(3)),
         ];
 
-        let pending = dispatch_batch(&pool, decoded, &embed_tx, &face_tx).await;
+        // Bounded so a regression that awaits a reply inside dispatch_batch
+        // fails fast with a clear panic instead of hanging the test / CI job.
+        let pending = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            dispatch_batch(&pool, decoded, &embed_tx, &face_tx),
+        )
+        .await
+        .expect("dispatch_batch must return without awaiting any reply");
 
         assert_eq!(pending.len(), 3);
         assert!(
