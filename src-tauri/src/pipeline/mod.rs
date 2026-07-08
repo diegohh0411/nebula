@@ -865,10 +865,8 @@ mod tests {
 
         // Depth (4) >= batch (3), mirroring prod's infer_channel_depth >= batch_size.
         // We keep the receivers so nothing consumes/replies during dispatch.
-        let (embed_tx, mut embed_rx) =
-            tokio::sync::mpsc::channel::<embed_actor::EmbedRequest>(4);
-        let (face_tx, mut face_rx) =
-            tokio::sync::mpsc::channel::<face_actor::FaceRequest>(4);
+        let (embed_tx, mut embed_rx) = tokio::sync::mpsc::channel::<embed_actor::EmbedRequest>(4);
+        let (face_tx, mut face_rx) = tokio::sync::mpsc::channel::<face_actor::FaceRequest>(4);
 
         let mk = |id: i64| DecodedImage {
             image_id: id,
