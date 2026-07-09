@@ -117,9 +117,8 @@ async fn save_faces(
         Ok(rows) => rows,
         Err(e) => {
             error!("[pipeline] list_faces_for_image failed for image {image_id}: {e}");
-            let _ =
-                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
-                    .await;
+            record_queue_failure(pool, "subject", image_id, sub_qid, sub_attempts, &e.to_string())
+                .await;
             return Vec::new();
         }
     };
@@ -134,8 +133,13 @@ async fn save_faces(
     .await
     {
         Ok(touched) => {
-            let _ =
-                crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
+            if let Err(e) =
+                crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await
+            {
+                error!(
+                    "[pipeline] failed to mark subject analysis done for image {image_id}: {e:#}"
+                );
+            }
             touched
         }
         Err(e) => {
@@ -145,8 +149,10 @@ async fn save_faces(
                 );
             } else {
                 error!("[pipeline] reprocess_image_faces failed for image {image_id}: {e}");
-                let _ = crate::pipeline::queue::mark_failed(
+                record_queue_failure(
                     pool,
+                    "subject",
+                    image_id,
                     sub_qid,
                     sub_attempts,
                     &e.to_string(),
@@ -164,6 +170,30 @@ async fn save_faces(
 /// check and the insert itself.
 fn is_missing_image_fk_error(e: &anyhow::Error) -> bool {
     e.to_string().contains("FOREIGN KEY constraint failed")
+}
+
+/// Record a failed queue attempt without ever swallowing the outcome: a
+/// dead-letter is warned, an exhausted-but-rescheduled retry is silent, and a
+/// DB write failure is logged so an entry can never get stuck invisibly.
+/// `stage` names the pipeline ("semantic"/"subject") for the log line.
+async fn record_queue_failure(
+    pool: &sqlx::SqlitePool,
+    stage: &str,
+    image_id: i64,
+    queue_id: i64,
+    attempts: i32,
+    error: &str,
+) {
+    use crate::pipeline::queue::FailureOutcome;
+    match crate::pipeline::queue::mark_failed(pool, queue_id, attempts, error).await {
+        Ok(FailureOutcome::DeadLettered) => warn!(
+            "[pipeline] image {image_id} {stage} entry dead-lettered after repeated failures"
+        ),
+        Ok(FailureOutcome::Retrying) => {}
+        Err(e) => error!(
+            "[pipeline] failed to record {stage} failure for image {image_id}: {e:#}"
+        ),
+    }
 }
 
 /// Resolve the `subject_model` setting to its preset, falling back to Blitz
@@ -491,42 +521,17 @@ pub async fn run_pipeline(
                 }
                 Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
                     error!("[pipeline] decode failed for image {image_id}: {err_msg}");
-                    use crate::pipeline::queue::FailureOutcome;
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
-                        match crate::pipeline::queue::mark_failed(
-                            &pool,
-                            sem_qid,
-                            sem_attempts,
-                            &err_msg,
+                        record_queue_failure(
+                            &pool, "semantic", image_id, sem_qid, sem_attempts, &err_msg,
                         )
-                        .await
-                        {
-                            Ok(FailureOutcome::DeadLettered) => warn!(
-                                "[pipeline] image {image_id} semantic entry dead-lettered after repeated decode failures"
-                            ),
-                            Ok(FailureOutcome::Retrying) => {}
-                            Err(e) => error!(
-                                "[pipeline] failed to record decode failure for semantic entry of image {image_id}: {e:#}"
-                            ),
-                        }
+                        .await;
                     }
                     if let Some((sub_qid, sub_attempts)) = sub_entry {
-                        match crate::pipeline::queue::mark_failed(
-                            &pool,
-                            sub_qid,
-                            sub_attempts,
-                            &err_msg,
+                        record_queue_failure(
+                            &pool, "subject", image_id, sub_qid, sub_attempts, &err_msg,
                         )
-                        .await
-                        {
-                            Ok(FailureOutcome::DeadLettered) => warn!(
-                                "[pipeline] image {image_id} subject entry dead-lettered after repeated decode failures"
-                            ),
-                            Ok(FailureOutcome::Retrying) => {}
-                            Err(e) => error!(
-                                "[pipeline] failed to record decode failure for subject entry of image {image_id}: {e:#}"
-                            ),
-                        }
+                        .await;
                     }
                 }
                 Err(e) => error!("[pipeline] decode task panicked: {e}"),
@@ -569,11 +574,8 @@ pub async fn run_pipeline(
                 {
                     Some(erx)
                 } else {
-                    let _ = crate::pipeline::queue::mark_failed(
-                        &pool,
-                        sem_qid,
-                        sem_attempts,
-                        "embed actor closed",
+                    record_queue_failure(
+                        &pool, "semantic", image_id, sem_qid, sem_attempts, "embed actor closed",
                     )
                     .await;
                     None
@@ -613,11 +615,8 @@ pub async fn run_pipeline(
                 {
                     Some(frx)
                 } else {
-                    let _ = crate::pipeline::queue::mark_failed(
-                        &pool,
-                        sub_qid,
-                        sub_attempts,
-                        "face actor closed",
+                    record_queue_failure(
+                        &pool, "subject", image_id, sub_qid, sub_attempts, "face actor closed",
                     )
                     .await;
                     None
@@ -626,33 +625,46 @@ pub async fn run_pipeline(
                 None
             };
 
+            // Persist a successful semantic embedding, logging any DB write
+            // failure instead of silently discarding it (which would leave the
+            // queue entry to be retried forever with no signal).
+            async fn save_semantic(
+                pool: &sqlx::SqlitePool,
+                index: &crate::search::vector_index::IndexStore,
+                sem_entry: WorkSlot,
+                image_id: i64,
+                emb: &[f32],
+            ) {
+                if let Some((sem_qid, _)) = sem_entry {
+                    let blob = crate::search::math::f32_slice_to_bytes(emb);
+                    match crate::pipeline::queue::mark_semantic_analysis_done(
+                        pool, sem_qid, image_id, &blob,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            index.write().unwrap().add(image_id, emb);
+                            info!("[pipeline] Saved semantic embedding for image {image_id}");
+                        }
+                        Err(e) => error!(
+                            "[pipeline] failed to save semantic embedding for image {image_id}: {e:#}"
+                        ),
+                    }
+                }
+            }
+
             match (erx, frx) {
                 (Some(erx), Some(frx)) => {
                     let (emb_result, face_result) = tokio::join!(erx, frx);
                     match emb_result {
                         Ok(Ok(emb)) => {
-                            let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                            if let Some((sem_qid, _)) = sem_entry {
-                                if crate::pipeline::queue::mark_semantic_analysis_done(
-                                    &pool, sem_qid, image_id, &blob,
-                                )
-                                .await
-                                .is_ok()
-                                {
-                                    index.write().unwrap().add(image_id, &emb);
-                                    info!(
-                                        "[pipeline] Saved semantic embedding for image {image_id}"
-                                    );
-                                }
-                            }
+                            save_semantic(&pool, &index, sem_entry, image_id, &emb).await;
                         }
                         Ok(Err(e)) => {
                             error!("[pipeline] Embedding error for image {image_id}: {e}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
-                                    &pool,
-                                    sem_qid,
-                                    sem_attempts,
+                                record_queue_failure(
+                                    &pool, "semantic", image_id, sem_qid, sem_attempts,
                                     &e.to_string(),
                                 )
                                 .await;
@@ -661,10 +673,8 @@ pub async fn run_pipeline(
                         Err(_) => {
                             error!("[pipeline] Embed reply channel dropped for image {image_id}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
-                                    &pool,
-                                    sem_qid,
-                                    sem_attempts,
+                                record_queue_failure(
+                                    &pool, "semantic", image_id, sem_qid, sem_attempts,
                                     "embed reply channel dropped",
                                 )
                                 .await;
@@ -691,10 +701,8 @@ pub async fn run_pipeline(
                         Ok(Err(e)) => {
                             error!("[pipeline] Face analysis error for image {image_id}: {e}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
-                                    &pool,
-                                    sub_qid,
-                                    sub_attempts,
+                                record_queue_failure(
+                                    &pool, "subject", image_id, sub_qid, sub_attempts,
                                     &e.to_string(),
                                 )
                                 .await;
@@ -703,10 +711,8 @@ pub async fn run_pipeline(
                         Err(_) => {
                             error!("[pipeline] Face reply channel dropped for image {image_id}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
-                                    &pool,
-                                    sub_qid,
-                                    sub_attempts,
+                                record_queue_failure(
+                                    &pool, "subject", image_id, sub_qid, sub_attempts,
                                     "face reply channel dropped",
                                 )
                                 .await;
@@ -716,27 +722,13 @@ pub async fn run_pipeline(
                 }
                 (Some(erx), None) => match erx.await {
                     Ok(Ok(emb)) => {
-                        let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                        if let Some((sem_qid, _)) = sem_entry {
-                            if crate::pipeline::queue::mark_semantic_analysis_done(
-                                &pool, sem_qid, image_id, &blob,
-                            )
-                            .await
-                            .is_ok()
-                            {
-                                index.write().unwrap().add(image_id, &emb);
-                                info!("[pipeline] Saved semantic embedding for image {image_id}");
-                            }
-                        }
+                        save_semantic(&pool, &index, sem_entry, image_id, &emb).await;
                     }
                     Ok(Err(e)) => {
                         error!("[pipeline] Embedding error for image {image_id}: {e}");
                         if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
-                                &pool,
-                                sem_qid,
-                                sem_attempts,
-                                &e.to_string(),
+                            record_queue_failure(
+                                &pool, "semantic", image_id, sem_qid, sem_attempts, &e.to_string(),
                             )
                             .await;
                         }
@@ -744,10 +736,8 @@ pub async fn run_pipeline(
                     Err(_) => {
                         error!("[pipeline] Embed reply channel dropped for image {image_id}");
                         if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
-                                &pool,
-                                sem_qid,
-                                sem_attempts,
+                            record_queue_failure(
+                                &pool, "semantic", image_id, sem_qid, sem_attempts,
                                 "embed reply channel dropped",
                             )
                             .await;
@@ -773,11 +763,8 @@ pub async fn run_pipeline(
                     Ok(Err(e)) => {
                         error!("[pipeline] Face analysis error for image {image_id}: {e}");
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
-                                &pool,
-                                sub_qid,
-                                sub_attempts,
-                                &e.to_string(),
+                            record_queue_failure(
+                                &pool, "subject", image_id, sub_qid, sub_attempts, &e.to_string(),
                             )
                             .await;
                         }
@@ -785,10 +772,8 @@ pub async fn run_pipeline(
                     Err(_) => {
                         error!("[pipeline] Face reply channel dropped for image {image_id}");
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
-                                &pool,
-                                sub_qid,
-                                sub_attempts,
+                            record_queue_failure(
+                                &pool, "subject", image_id, sub_qid, sub_attempts,
                                 "face reply channel dropped",
                             )
                             .await;
