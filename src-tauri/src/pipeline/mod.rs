@@ -432,26 +432,26 @@ pub async fn run_pipeline(
                     }
                 };
                 let path = image.path.clone();
-                let decode_path = path.clone();
                 match tokio::task::spawn_blocking(move || {
-                    decoded_image::load_decoded(image_id, std::path::Path::new(&decode_path))
+                    // Classify inside the blocking context: a file moved or
+                    // deleted after indexing can never be decoded, so the caller
+                    // drops it immediately instead of retrying forever. The
+                    // existence check is filesystem IO, so it belongs here rather
+                    // than on the async runtime thread. Use the alternate
+                    // formatter (`{:#}`) to keep the full cause chain;
+                    // `to_string()` would only show the outer context.
+                    match decoded_image::load_decoded(image_id, std::path::Path::new(&path)) {
+                        Ok(d) => Ok(d),
+                        Err(_) if !std::path::Path::new(&path).exists() => {
+                            Err(DecodeFailure::Missing(path))
+                        }
+                        Err(e) => Err(DecodeFailure::Other(format!("{e:#}"))),
+                    }
                 })
                 .await
                 {
                     Ok(Ok(d)) => Ok((image_id, sem_entry, sub_entry, d)),
-                    Ok(Err(e)) => {
-                        // A file that was moved or deleted after indexing can
-                        // never be decoded — classify it so the caller drops it
-                        // immediately instead of retrying it forever. Use the
-                        // alternate formatter (`{:#}`) to keep the full cause
-                        // chain; `to_string()` would only show the outer context.
-                        let failure = if !std::path::Path::new(&path).exists() {
-                            DecodeFailure::Missing(path)
-                        } else {
-                            DecodeFailure::Other(format!("{e:#}"))
-                        };
-                        Err((image_id, sem_entry, sub_entry, failure))
-                    }
+                    Ok(Err(failure)) => Err((image_id, sem_entry, sub_entry, failure)),
                     Err(e) => Err((
                         image_id,
                         sem_entry,
@@ -479,42 +479,53 @@ pub async fn run_pipeline(
                         "[pipeline] image {image_id} file missing on disk, dropping from queue: {path}"
                     );
                     if let Some((sem_qid, _)) = sem_entry {
-                        let _ = crate::pipeline::queue::dead_letter(&pool, sem_qid).await;
+                        if let Err(e) = crate::pipeline::queue::dead_letter(&pool, sem_qid).await {
+                            error!("[pipeline] failed to drop semantic entry for missing image {image_id}: {e:#}");
+                        }
                     }
                     if let Some((sub_qid, _)) = sub_entry {
-                        let _ = crate::pipeline::queue::dead_letter(&pool, sub_qid).await;
+                        if let Err(e) = crate::pipeline::queue::dead_letter(&pool, sub_qid).await {
+                            error!("[pipeline] failed to drop subject entry for missing image {image_id}: {e:#}");
+                        }
                     }
                 }
                 Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
                     error!("[pipeline] decode failed for image {image_id}: {err_msg}");
+                    use crate::pipeline::queue::FailureOutcome;
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
-                        if let Ok(crate::pipeline::queue::FailureOutcome::DeadLettered) =
-                            crate::pipeline::queue::mark_failed(
-                                &pool,
-                                sem_qid,
-                                sem_attempts,
-                                &err_msg,
-                            )
-                            .await
+                        match crate::pipeline::queue::mark_failed(
+                            &pool,
+                            sem_qid,
+                            sem_attempts,
+                            &err_msg,
+                        )
+                        .await
                         {
-                            warn!(
+                            Ok(FailureOutcome::DeadLettered) => warn!(
                                 "[pipeline] image {image_id} semantic entry dead-lettered after repeated decode failures"
-                            );
+                            ),
+                            Ok(FailureOutcome::Retrying) => {}
+                            Err(e) => error!(
+                                "[pipeline] failed to record decode failure for semantic entry of image {image_id}: {e:#}"
+                            ),
                         }
                     }
                     if let Some((sub_qid, sub_attempts)) = sub_entry {
-                        if let Ok(crate::pipeline::queue::FailureOutcome::DeadLettered) =
-                            crate::pipeline::queue::mark_failed(
-                                &pool,
-                                sub_qid,
-                                sub_attempts,
-                                &err_msg,
-                            )
-                            .await
+                        match crate::pipeline::queue::mark_failed(
+                            &pool,
+                            sub_qid,
+                            sub_attempts,
+                            &err_msg,
+                        )
+                        .await
                         {
-                            warn!(
+                            Ok(FailureOutcome::DeadLettered) => warn!(
                                 "[pipeline] image {image_id} subject entry dead-lettered after repeated decode failures"
-                            );
+                            ),
+                            Ok(FailureOutcome::Retrying) => {}
+                            Err(e) => error!(
+                                "[pipeline] failed to record decode failure for subject entry of image {image_id}: {e:#}"
+                            ),
                         }
                     }
                 }
