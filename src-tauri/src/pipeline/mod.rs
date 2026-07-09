@@ -202,7 +202,12 @@ async fn ensure_face_preset(
 /// Distinguishes "the image row was deleted mid-flight" (expected race with
 /// `library::repo::delete_folder`'s cascade) from any other decode error.
 enum DecodeFailure {
+    /// The `images` row was deleted mid-pipeline (FK/lookup miss).
     ImageGone,
+    /// The source file no longer exists on disk (moved/deleted after indexing).
+    /// Carries the path for logging. Permanent — dead-lettered immediately.
+    Missing(String),
+    /// Any other decode error, carrying the full cause chain for logging.
     Other(String),
 }
 
@@ -397,10 +402,8 @@ pub async fn run_pipeline(
             .map(|(image_id, (sem, sub))| (image_id, sem, sub))
             .collect();
 
-        info!(
-            "[pipeline] Processing batch of {} distinct images",
-            batch.len()
-        );
+        let batch_size = batch.len();
+        info!("[pipeline] Processing batch of {batch_size} distinct images");
 
         // Stage 1: bounded-parallel decode
         let sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
@@ -429,23 +432,31 @@ pub async fn run_pipeline(
                     }
                 };
                 let path = image.path.clone();
+                let decode_path = path.clone();
                 match tokio::task::spawn_blocking(move || {
-                    decoded_image::load_decoded(image_id, std::path::Path::new(&path))
+                    decoded_image::load_decoded(image_id, std::path::Path::new(&decode_path))
                 })
                 .await
                 {
                     Ok(Ok(d)) => Ok((image_id, sem_entry, sub_entry, d)),
-                    Ok(Err(e)) => Err((
-                        image_id,
-                        sem_entry,
-                        sub_entry,
-                        DecodeFailure::Other(e.to_string()),
-                    )),
+                    Ok(Err(e)) => {
+                        // A file that was moved or deleted after indexing can
+                        // never be decoded — classify it so the caller drops it
+                        // immediately instead of retrying it forever. Use the
+                        // alternate formatter (`{:#}`) to keep the full cause
+                        // chain; `to_string()` would only show the outer context.
+                        let failure = if !std::path::Path::new(&path).exists() {
+                            DecodeFailure::Missing(path)
+                        } else {
+                            DecodeFailure::Other(format!("{e:#}"))
+                        };
+                        Err((image_id, sem_entry, sub_entry, failure))
+                    }
                     Err(e) => Err((
                         image_id,
                         sem_entry,
                         sub_entry,
-                        DecodeFailure::Other(e.to_string()),
+                        DecodeFailure::Other(format!("decode task failed: {e}")),
                     )),
                 }
             }));
@@ -461,25 +472,50 @@ pub async fn run_pipeline(
                         "[pipeline] image {image_id} not found (deleted mid-pipeline), skipping decode"
                     );
                 }
-                Ok(Err((_image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
-                    error!("[pipeline] decode failed: {err_msg}");
+                Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Missing(path)))) => {
+                    // File is gone from disk — permanent. Drop both queue
+                    // entries now so they stop dominating every batch.
+                    warn!(
+                        "[pipeline] image {image_id} file missing on disk, dropping from queue: {path}"
+                    );
+                    if let Some((sem_qid, _)) = sem_entry {
+                        let _ = crate::pipeline::queue::dead_letter(&pool, sem_qid).await;
+                    }
+                    if let Some((sub_qid, _)) = sub_entry {
+                        let _ = crate::pipeline::queue::dead_letter(&pool, sub_qid).await;
+                    }
+                }
+                Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
+                    error!("[pipeline] decode failed for image {image_id}: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
-                        let _ = crate::pipeline::queue::mark_failed(
-                            &pool,
-                            sem_qid,
-                            sem_attempts,
-                            &err_msg,
-                        )
-                        .await;
+                        if let Ok(crate::pipeline::queue::FailureOutcome::DeadLettered) =
+                            crate::pipeline::queue::mark_failed(
+                                &pool,
+                                sem_qid,
+                                sem_attempts,
+                                &err_msg,
+                            )
+                            .await
+                        {
+                            warn!(
+                                "[pipeline] image {image_id} semantic entry dead-lettered after repeated decode failures"
+                            );
+                        }
                     }
                     if let Some((sub_qid, sub_attempts)) = sub_entry {
-                        let _ = crate::pipeline::queue::mark_failed(
-                            &pool,
-                            sub_qid,
-                            sub_attempts,
-                            &err_msg,
-                        )
-                        .await;
+                        if let Ok(crate::pipeline::queue::FailureOutcome::DeadLettered) =
+                            crate::pipeline::queue::mark_failed(
+                                &pool,
+                                sub_qid,
+                                sub_attempts,
+                                &err_msg,
+                            )
+                            .await
+                        {
+                            warn!(
+                                "[pipeline] image {image_id} subject entry dead-lettered after repeated decode failures"
+                            );
+                        }
                     }
                 }
                 Err(e) => error!("[pipeline] decode task panicked: {e}"),
@@ -489,8 +525,7 @@ pub async fn run_pipeline(
         let images_processed_this_iter = decoded.len();
         debug!(
             "[pipeline] Decoded {}/{} images for inference",
-            images_processed_this_iter,
-            decoded.len()
+            images_processed_this_iter, batch_size
         );
 
         // Stage 2: dispatch embed + face, write results
