@@ -376,7 +376,7 @@ pub async fn run_pipeline(
                 let poller = tauri::async_runtime::spawn(async move {
                     loop {
                         tokio::time::sleep(Duration::from_millis(500)).await;
-                        if crate::pipeline::queue::count_pending_inference(&poll_pool)
+                        if crate::pipeline::queue::count_due_inference(&poll_pool)
                             .await
                             .unwrap_or(0)
                             > 0
