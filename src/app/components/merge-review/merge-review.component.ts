@@ -15,6 +15,7 @@ import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, SubjectPhotoFace, Subject } from '../../models/models';
 import { MergePhotoGridComponent } from '../merge-photo-grid/merge-photo-grid.component';
+import { EditableTextComponent } from '../editable-text/editable-text.component';
 import { prefersReducedMotion } from '../../utils/motion';
 
 interface MergeTarget {
@@ -26,7 +27,7 @@ interface MergeTarget {
   selector: 'app-merge-review',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, MergePhotoGridComponent, CdkTrapFocus],
+  imports: [CommonModule, MergePhotoGridComponent, CdkTrapFocus, EditableTextComponent],
   templateUrl: './merge-review.component.html',
   styleUrl: './merge-review.component.css',
 })
@@ -60,6 +61,8 @@ export class MergeReviewComponent {
   photosB = signal<SubjectPhotoFace[]>([]);
   protected loading = signal(false);
   protected submitting = signal(false);
+  protected nameErrorA = signal<string | null>(null);
+  protected nameErrorB = signal<string | null>(null);
 
   get mergeTarget(): MergeTarget | null {
     const subjectA = this.subjectA();
@@ -81,6 +84,40 @@ export class MergeReviewComponent {
 
   protected onFaceRemovedB(faceId: number): void {
     this.photosB.update((list) => list.filter((f) => f.face_id !== faceId));
+  }
+
+  protected async onNameCommit(which: 'a' | 'b', rawValue: string): Promise<void> {
+    const subjSig = which === 'a' ? this.subjectA : this.subjectB;
+    const otherSig = which === 'a' ? this.subjectB : this.subjectA;
+    const errorSig = which === 'a' ? this.nameErrorA : this.nameErrorB;
+    const subject = subjSig();
+    if (!subject) return;
+    errorSig.set(null);
+
+    const typed = rawValue.trim();
+    const newName = typed || null;
+
+    // Case 3: matches a DIFFERENT existing subject (not either column in this modal) → block.
+    if (typed) {
+      const other = otherSig();
+      const conflict = this.photoService.subjects().find(
+        (s) =>
+          s.id !== subject.id &&
+          s.id !== other?.id &&
+          (s.name ?? '').toLowerCase() === typed.toLowerCase(),
+      );
+      if (conflict) {
+        errorSig.set(`A subject named "${typed}" already exists.`);
+        return; // no backend write; EditableText re-displays the unchanged signal value
+      }
+    }
+
+    try {
+      await this.photoService.nameSubject(subject.id, newName);
+      subjSig.set({ ...subject, name: newName });
+    } catch (e) {
+      console.error('MergeReview: rename failed', e);
+    }
   }
 
   private async loadPhotos(value: MergeSuggestion | null) {

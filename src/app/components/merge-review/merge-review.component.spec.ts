@@ -211,4 +211,63 @@ describe('MergeReviewComponent', () => {
     expect(photoService.dismissMergeSuggestion).not.toHaveBeenCalled();
     expect(dismissedSpy).toHaveBeenCalled();
   });
+
+  it('Case 1: committing a new unique name calls nameSubject and updates the signal', async () => {
+    const subA = makeSubject(1, null);
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
+    photoService.subjects.set([subA, subB]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', 'Charlie');
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, 'Charlie');
+    expect(component.subjectA()?.name).toBe('Charlie');
+    expect(component.nameErrorA()).toBeNull();
+  });
+
+  it('Case 2: naming a column the OTHER column\'s name is allowed (no error)', async () => {
+    const subA = makeSubject(1, null);
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 2 });
+    photoService.subjects.set([subA, subB]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', 'bob'); // case-insensitive match of other column
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, 'bob');
+    expect(component.nameErrorA()).toBeNull();
+  });
+
+  it('Case 3: naming a column after a THIRD subject is blocked (no backend call, error shown)', async () => {
+    const subA = makeSubject(1, null);
+    const subB = makeSubject(2, 'Bob');
+    const third = makeSubject(3, 'Jane');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const nameSpy = vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 3 });
+    photoService.subjects.set([subA, subB, third]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', 'jane'); // case-insensitive match of third subject
+
+    expect(nameSpy).not.toHaveBeenCalled();
+    expect(component.subjectA()?.name).toBeNull(); // reverted / unchanged
+    expect(component.nameErrorA()).toContain('already exists');
+  });
+
+  it('committing an empty value clears the name', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
+    photoService.subjects.set([subA, subB]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', '   ');
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, null);
+    expect(component.subjectA()?.name).toBeNull();
+  });
 });

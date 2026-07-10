@@ -8,12 +8,21 @@
 
       <div class="subjects-grid" #subjectsGrid>
         <div class="subject-col" #colA>
-          <div class="subject-name" [class.opacity-50]="!subjectA()?.name">
-            {{ subjectA()?.name || 'Unnamed' }}
+          <div class="subject-name">
+            <app-editable-text
+              [value]="subjectA()?.name ?? null"
+              placeholder="Unnamed"
+              placeholderClass="opacity-50"
+              displayClass="font-semibold"
+              (commit)="onNameCommit('a', $event)"
+            />
             @if (mergeTarget?.target?.id === subjectA()?.id) {
               <span class="keep-badge">keep</span>
             }
           </div>
+          @if (nameErrorA()) {
+            <p class="text-xs text-destructive mb-1">{{ nameErrorA() }}</p>
+          }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosA().length }} faces</div>
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
@@ -28,12 +37,21 @@
         </div>
 
         <div class="subject-col" #colB>
-          <div class="subject-name" [class.opacity-50]="!subjectB()?.name">
-            {{ subjectB()?.name || 'Unnamed' }}
+          <div class="subject-name">
+            <app-editable-text
+              [value]="subjectB()?.name ?? null"
+              placeholder="Unnamed"
+              placeholderClass="opacity-50"
+              displayClass="font-semibold"
+              (commit)="onNameCommit('b', $event)"
+            />
             @if (mergeTarget?.target?.id === subjectB()?.id) {
               <span class="keep-badge">keep</span>
             }
           </div>
+          @if (nameErrorB()) {
+            <p class="text-xs text-destructive mb-1">{{ nameErrorB() }}</p>
+          }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosB().length }} faces</div>
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
