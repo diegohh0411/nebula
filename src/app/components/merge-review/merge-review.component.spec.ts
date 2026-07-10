@@ -271,6 +271,25 @@ describe('MergeReviewComponent', () => {
     expect(dismissSpy).not.toHaveBeenCalled();
   });
 
+  it('with canDismiss=false, dismiss() emits dismissed directly even when names are identical (no exit confirm)', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'Noah');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const dismissedSpy = vi.fn();
+    component.dismissed.subscribe(dismissedSpy);
+
+    component.canDismiss = false;
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.dismiss();
+
+    expect(component.namesIdentical()).toBe(true);
+    expect(component.showExitConfirm()).toBe(false);
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(dismissedSpy).toHaveBeenCalled();
+  });
+
   it('keepSeparate() closes without calling dismissMergeSuggestion (no cannot_link)', async () => {
     const subA = makeSubject(1, 'Noah');
     const subB = makeSubject(2, 'Noah');

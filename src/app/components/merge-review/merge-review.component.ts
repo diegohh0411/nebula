@@ -166,7 +166,7 @@ export class MergeReviewComponent {
   }
 
   async dismiss() {
-    if (this.namesIdentical() && !this.submitting()) {
+    if (this.canDismiss && this.namesIdentical() && !this.submitting()) {
       this.showExitConfirm.set(true);
       return;
     }
@@ -191,7 +191,7 @@ export class MergeReviewComponent {
   }
 
   close() {
-    if (this.namesIdentical() && !this.submitting()) {
+    if (this.canDismiss && this.namesIdentical() && !this.submitting()) {
       this.showExitConfirm.set(true);
       return;
     }
