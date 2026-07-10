@@ -257,6 +257,50 @@ describe('MergeReviewComponent', () => {
     expect(component.nameErrorA()).toContain('already exists');
   });
 
+  it('dismiss() shows the exit confirm instead of dismissing when names are identical', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'noah'); // case-insensitive identical
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    component.dismiss();
+
+    expect(component.namesIdentical()).toBe(true);
+    expect(component.showExitConfirm()).toBe(true);
+    expect(dismissSpy).not.toHaveBeenCalled();
+  });
+
+  it('keepSeparate() closes without calling dismissMergeSuggestion (no cannot_link)', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'Noah');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const closedSpy = vi.fn();
+    component.closed.subscribe(closedSpy);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    component.dismiss();          // opens the guard
+    component.keepSeparate();     // choose "Keep separate"
+
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(closedSpy).toHaveBeenCalled();
+    expect(component.showExitConfirm()).toBe(false);
+  });
+
+  it('dismiss() still dismisses directly when names differ', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.dismiss();
+
+    expect(component.showExitConfirm()).toBe(false);
+    expect(dismissSpy).toHaveBeenCalledWith(1);
+  });
+
   it('committing an empty value clears the name', async () => {
     const subA = makeSubject(1, 'Alice');
     const subB = makeSubject(2, 'Bob');

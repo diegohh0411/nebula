@@ -67,6 +67,23 @@
       </div>
 
       <div class="modal-actions">
+        @if (showExitConfirm()) {
+          <div class="flex items-center gap-3 mr-auto text-sm">
+            <span class="text-muted-foreground">Both named "{{ mergeTarget?.target?.name }}".</span>
+            <button
+              class="px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+              (click)="keepSeparate()"
+            >
+              Keep separate
+            </button>
+            <button
+              class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              (click)="confirmFromGuard()"
+            >
+              Merge
+            </button>
+          </div>
+        }
         <button
           class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
           cdkFocusInitial
@@ -77,6 +94,9 @@
         </button>
         <button
           class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          [class.ring-2]="namesIdentical()"
+          [class.ring-primary]="namesIdentical()"
+          [class.animate-pulse]="namesIdentical()"
           (click)="confirm()"
           [disabled]="submitting()"
         >

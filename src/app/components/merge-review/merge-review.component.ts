@@ -5,6 +5,7 @@ import {
   EventEmitter,
   inject,
   signal,
+  computed,
   ChangeDetectionStrategy,
   ViewChild,
   ElementRef,
@@ -63,6 +64,13 @@ export class MergeReviewComponent {
   protected submitting = signal(false);
   protected nameErrorA = signal<string | null>(null);
   protected nameErrorB = signal<string | null>(null);
+  protected showExitConfirm = signal(false);
+
+  protected namesIdentical = computed(() => {
+    const a = this.subjectA()?.name?.trim().toLowerCase();
+    const b = this.subjectB()?.name?.trim().toLowerCase();
+    return !!a && !!b && a === b;
+  });
 
   get mergeTarget(): MergeTarget | null {
     const subjectA = this.subjectA();
@@ -158,6 +166,14 @@ export class MergeReviewComponent {
   }
 
   async dismiss() {
+    if (this.namesIdentical() && !this.submitting()) {
+      this.showExitConfirm.set(true);
+      return;
+    }
+    await this.doDismiss();
+  }
+
+  private async doDismiss() {
     if (!this._suggestion || this.submitting()) return;
     if (!this.canDismiss) {
       this.dismissed.emit();
@@ -175,8 +191,27 @@ export class MergeReviewComponent {
   }
 
   close() {
+    if (this.namesIdentical() && !this.submitting()) {
+      this.showExitConfirm.set(true);
+      return;
+    }
+    this.doClose();
+  }
+
+  private doClose() {
     if (!this._suggestion || this.submitting()) return;
     this.closed.emit();
+  }
+
+  /** Exit-guard "Keep separate": abandon the merge WITHOUT writing a cannot_link mark. */
+  protected keepSeparate() {
+    this.showExitConfirm.set(false);
+    this.doClose();
+  }
+
+  protected confirmFromGuard() {
+    this.showExitConfirm.set(false);
+    void this.confirm();
   }
 
   @HostListener('document:keydown.escape')
