@@ -37,6 +37,8 @@ export class MergeReviewComponent {
   @Input()
   set suggestion(value: MergeSuggestion | null) {
     this._suggestion = value;
+    this.subjectA.set(value?.subject_a ?? null);
+    this.subjectB.set(value?.subject_b ?? null);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
@@ -52,22 +54,25 @@ export class MergeReviewComponent {
 
   private photoService = inject(PhotoService);
 
+  subjectA = signal<Subject | null>(null);
+  subjectB = signal<Subject | null>(null);
   photosA = signal<SubjectPhotoFace[]>([]);
   photosB = signal<SubjectPhotoFace[]>([]);
   protected loading = signal(false);
   protected submitting = signal(false);
 
   get mergeTarget(): MergeTarget | null {
-    if (!this._suggestion) return null;
-    const { subject_a, subject_b } = this._suggestion;
-    const aName = !!subject_a.name;
-    const bName = !!subject_b.name;
-    if (aName && !bName) return { target: subject_a, source: subject_b };
-    if (bName && !aName) return { target: subject_b, source: subject_a };
+    const subjectA = this.subjectA();
+    const subjectB = this.subjectB();
+    if (!subjectA || !subjectB) return null;
+    const aName = !!subjectA.name;
+    const bName = !!subjectB.name;
+    if (aName && !bName) return { target: subjectA, source: subjectB };
+    if (bName && !aName) return { target: subjectB, source: subjectA };
     // Both named or both unnamed: lower id wins
-    return subject_a.id <= subject_b.id
-      ? { target: subject_a, source: subject_b }
-      : { target: subject_b, source: subject_a };
+    return subjectA.id <= subjectB.id
+      ? { target: subjectA, source: subjectB }
+      : { target: subjectB, source: subjectA };
   }
 
   protected onFaceRemovedA(faceId: number): void {

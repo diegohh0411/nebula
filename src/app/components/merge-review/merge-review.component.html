@@ -8,9 +8,9 @@
 
       <div class="subjects-grid" #subjectsGrid>
         <div class="subject-col" #colA>
-          <div class="subject-name" [class.opacity-50]="!suggestion.subject_a.name">
-            {{ suggestion.subject_a.name || 'Unnamed' }}
-            @if (mergeTarget?.target?.id === suggestion.subject_a.id) {
+          <div class="subject-name" [class.opacity-50]="!subjectA()?.name">
+            {{ subjectA()?.name || 'Unnamed' }}
+            @if (mergeTarget?.target?.id === subjectA()?.id) {
               <span class="keep-badge">keep</span>
             }
           </div>
@@ -21,16 +21,16 @@
             <app-merge-photo-grid
               class="subject-photos"
               [images]="photosA()"
-              [removable]="mergeTarget?.source?.id === suggestion.subject_a.id"
+              [removable]="mergeTarget?.source?.id === subjectA()?.id"
               (removed)="onFaceRemovedA($event)"
             />
           }
         </div>
 
         <div class="subject-col" #colB>
-          <div class="subject-name" [class.opacity-50]="!suggestion.subject_b.name">
-            {{ suggestion.subject_b.name || 'Unnamed' }}
-            @if (mergeTarget?.target?.id === suggestion.subject_b.id) {
+          <div class="subject-name" [class.opacity-50]="!subjectB()?.name">
+            {{ subjectB()?.name || 'Unnamed' }}
+            @if (mergeTarget?.target?.id === subjectB()?.id) {
               <span class="keep-badge">keep</span>
             }
           </div>
@@ -41,7 +41,7 @@
             <app-merge-photo-grid
               class="subject-photos"
               [images]="photosB()"
-              [removable]="mergeTarget?.source?.id === suggestion.subject_b.id"
+              [removable]="mergeTarget?.source?.id === subjectB()?.id"
               (removed)="onFaceRemovedB($event)"
             />
           }
