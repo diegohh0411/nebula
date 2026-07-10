@@ -163,7 +163,7 @@ describe('MergeReviewComponent', () => {
     await component.confirm();
 
     expect(photoService.mergeSubjects).toHaveBeenCalledWith(1, 2);
-    expect(confirmedSpy).toHaveBeenCalled();
+    expect(confirmedSpy).toHaveBeenCalledWith(1); // subA (id 1) is the named target
   });
 
   it('dismiss calls dismissMergeSuggestion then emits dismissed', async () => {

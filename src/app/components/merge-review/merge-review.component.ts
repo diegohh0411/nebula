@@ -47,7 +47,7 @@ export class MergeReviewComponent {
 
   @Input() canDismiss = true;
 
-  @Output() confirmed = new EventEmitter<void>();
+  @Output() confirmed = new EventEmitter<number>();
   @Output() dismissed = new EventEmitter<void>();
   @Output() closed = new EventEmitter<void>();
 
@@ -157,7 +157,7 @@ export class MergeReviewComponent {
     try {
       await this.runMergeAnimation(target);
       await this.photoService.mergeSubjects(target.target.id, target.source.id);
-      this.confirmed.emit();
+      this.confirmed.emit(target.target.id);
     } catch (e) {
       console.error('MergeReview: merge failed', e);
     } finally {
