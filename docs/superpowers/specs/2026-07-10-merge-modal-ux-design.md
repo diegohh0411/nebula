@@ -33,6 +33,10 @@ flow consistent across the app:
 - `photoService.subjects` is a shared `signal<Subject[]>` both parent views keep loaded.
 - `mergeSubjects(targetId, sourceId)` preserves **all** faces from both subjects; only
   the surviving name / thumbnail / id differ. No face data is ever lost by a merge.
+- `dismissMergeSuggestion` (`dismiss_merge_suggestion`, repo.rs:579) does **not** just
+  hide the suggestion — it also inserts a `cannot_link` constraint (`source='dismiss'`)
+  between representative faces of the two subjects, suppressing future auto-merge
+  suggestions. Dismissing is therefore an active "not the same person" feedback mark.
 
 ## Feature 1 — Inline name editing in `MergeReviewComponent`
 
@@ -73,17 +77,33 @@ Let `typed` be the trimmed committed value for the edited subject:
 Because Case 3 is caught client-side **before** writing, we never trigger the backend's
 unconditional-rename-then-revert behavior.
 
+### Left button label — "Not the same person"
+
+Because dismissing records a `cannot_link` mark (see Background), the left button is
+labeled **"Not the same person"** (not "Dismiss") in both modes — its consequence is a
+definitive judgment, and the label should say so. This replaces the current
+`canDismiss ? 'Dismiss' : 'Not the same person'` ternary with a single constant label.
+Behavior is unchanged per mode: `canDismiss=true` calls `dismissMergeSuggestion` (writes
+the constraint); `canDismiss=false` (naming-conflict path) still only emits `dismissed`
+with no API call — out of scope to change.
+
 ### Duplicate guard — nudge + exit guard
 
 `namesIdentical` = both column names non-empty and equal (case-insensitive). While it is
 true and the merge has not yet been performed:
 
-- **Nudge:** the `Merge as X` button gets visual emphasis (pulse/ring); `Dismiss` is
-  de-emphasized.
-- **Exit guard:** every leave path — `Dismiss`, backdrop click, and `Esc` — is
-  intercepted and instead shows an inline confirm strip:
-  *"Both named '{name}'."* with **Keep separate** (proceeds with the original
-  dismiss/close) and **Merge** (runs `confirm()`).
+- **Nudge:** the `Merge as X` button gets visual emphasis (pulse/ring); the
+  "Not the same person" button is de-emphasized.
+- **Exit guard:** every leave path — the "Not the same person" button, backdrop click,
+  and `Esc` — is intercepted and instead shows an inline confirm strip:
+  *"Both named '{name}'."* with **Keep separate** and **Merge** (runs `confirm()`).
+
+**"Keep separate" must call `close()` — never `dismissMergeSuggestion`.** Recording a
+`cannot_link` ("not the same person") mark on two subjects the user just named
+*identically* is self-contradictory and would poison clustering. So "Keep separate"
+simply abandons the merge (no API, no constraint), leaving both subjects and their names
+as-is. This is a deliberate contrast with the main "Not the same person" button, which
+*does* write the constraint when names differ.
 
 Auto-merging on rename is explicitly **not** done: the modal supports removing individual
 faces first, so the user may legitimately still be reviewing after the names match.
@@ -149,8 +169,11 @@ import left unused as a result. No file deletions.
   - Case 3 (third subject's name) → `nameSubject` **not** called, inline error shown,
     field reverts. Case-insensitive.
   - Empty commit → clears name.
-  - `namesIdentical` → nudge state on; Dismiss/Esc/backdrop show the confirm strip;
-    "Keep separate" proceeds, "Merge" calls `confirm()`.
+  - Left button label is "Not the same person" in both `canDismiss` modes;
+    `canDismiss=true` click calls `dismissMergeSuggestion`, `canDismiss=false` does not.
+  - `namesIdentical` → nudge state on; the left button / Esc / backdrop show the confirm
+    strip; **"Keep separate" calls `close()` and never `dismissMergeSuggestion`** (no
+    `cannot_link`); "Merge" calls `confirm()`.
   - `confirmed` emits the surviving subject id (verify both target orientations).
 - **SubjectDetailComponent** (extend existing `.spec.ts`):
   - "Review" opens the modal with the right suggestion.
