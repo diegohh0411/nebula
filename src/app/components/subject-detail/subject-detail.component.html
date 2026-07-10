@@ -112,15 +112,9 @@
               </a>
               <button
                 class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                (click)="mergeSimilar(suggestion)"
+                (click)="openReview(suggestion)"
               >
-                Merge
-              </button>
-              <button
-                class="px-2 py-1 text-xs rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
-                (click)="dismissSimilar(suggestion)"
-              >
-                Dismiss
+                Review
               </button>
             </div>
           }
@@ -143,6 +137,13 @@
       </div>
     }
   </main>
+
+  <app-merge-review
+    [suggestion]="reviewingSuggestion()"
+    (confirmed)="onReviewConfirmed($event)"
+    (dismissed)="onReviewDismissed()"
+    (closed)="onReviewClosed()"
+  />
 
   <app-confirm-merge-dialog
     [open]="tagging.nameConflict() !== null"
