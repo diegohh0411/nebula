@@ -117,8 +117,15 @@ async fn save_faces(
         Ok(rows) => rows,
         Err(e) => {
             error!("[pipeline] list_faces_for_image failed for image {image_id}: {e}");
-            record_queue_failure(pool, "subject", image_id, sub_qid, sub_attempts, &e.to_string())
-                .await;
+            record_queue_failure(
+                pool,
+                "subject",
+                image_id,
+                sub_qid,
+                sub_attempts,
+                &e.to_string(),
+            )
+            .await;
             return Vec::new();
         }
     };
@@ -186,13 +193,11 @@ async fn record_queue_failure(
 ) {
     use crate::pipeline::queue::FailureOutcome;
     match crate::pipeline::queue::mark_failed(pool, queue_id, attempts, error).await {
-        Ok(FailureOutcome::DeadLettered) => warn!(
-            "[pipeline] image {image_id} {stage} entry dead-lettered after repeated failures"
-        ),
+        Ok(FailureOutcome::DeadLettered) => {
+            warn!("[pipeline] image {image_id} {stage} entry dead-lettered after repeated failures")
+        }
         Ok(FailureOutcome::Retrying) => {}
-        Err(e) => error!(
-            "[pipeline] failed to record {stage} failure for image {image_id}: {e:#}"
-        ),
+        Err(e) => error!("[pipeline] failed to record {stage} failure for image {image_id}: {e:#}"),
     }
 }
 
@@ -523,13 +528,23 @@ pub async fn run_pipeline(
                     error!("[pipeline] decode failed for image {image_id}: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
                         record_queue_failure(
-                            &pool, "semantic", image_id, sem_qid, sem_attempts, &err_msg,
+                            &pool,
+                            "semantic",
+                            image_id,
+                            sem_qid,
+                            sem_attempts,
+                            &err_msg,
                         )
                         .await;
                     }
                     if let Some((sub_qid, sub_attempts)) = sub_entry {
                         record_queue_failure(
-                            &pool, "subject", image_id, sub_qid, sub_attempts, &err_msg,
+                            &pool,
+                            "subject",
+                            image_id,
+                            sub_qid,
+                            sub_attempts,
+                            &err_msg,
                         )
                         .await;
                     }
@@ -575,7 +590,12 @@ pub async fn run_pipeline(
                     Some(erx)
                 } else {
                     record_queue_failure(
-                        &pool, "semantic", image_id, sem_qid, sem_attempts, "embed actor closed",
+                        &pool,
+                        "semantic",
+                        image_id,
+                        sem_qid,
+                        sem_attempts,
+                        "embed actor closed",
                     )
                     .await;
                     None
@@ -616,7 +636,12 @@ pub async fn run_pipeline(
                     Some(frx)
                 } else {
                     record_queue_failure(
-                        &pool, "subject", image_id, sub_qid, sub_attempts, "face actor closed",
+                        &pool,
+                        "subject",
+                        image_id,
+                        sub_qid,
+                        sub_attempts,
+                        "face actor closed",
                     )
                     .await;
                     None
@@ -664,7 +689,11 @@ pub async fn run_pipeline(
                             error!("[pipeline] Embedding error for image {image_id}: {e}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
                                 record_queue_failure(
-                                    &pool, "semantic", image_id, sem_qid, sem_attempts,
+                                    &pool,
+                                    "semantic",
+                                    image_id,
+                                    sem_qid,
+                                    sem_attempts,
                                     &e.to_string(),
                                 )
                                 .await;
@@ -674,7 +703,11 @@ pub async fn run_pipeline(
                             error!("[pipeline] Embed reply channel dropped for image {image_id}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
                                 record_queue_failure(
-                                    &pool, "semantic", image_id, sem_qid, sem_attempts,
+                                    &pool,
+                                    "semantic",
+                                    image_id,
+                                    sem_qid,
+                                    sem_attempts,
                                     "embed reply channel dropped",
                                 )
                                 .await;
@@ -702,7 +735,11 @@ pub async fn run_pipeline(
                             error!("[pipeline] Face analysis error for image {image_id}: {e}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 record_queue_failure(
-                                    &pool, "subject", image_id, sub_qid, sub_attempts,
+                                    &pool,
+                                    "subject",
+                                    image_id,
+                                    sub_qid,
+                                    sub_attempts,
                                     &e.to_string(),
                                 )
                                 .await;
@@ -712,7 +749,11 @@ pub async fn run_pipeline(
                             error!("[pipeline] Face reply channel dropped for image {image_id}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
                                 record_queue_failure(
-                                    &pool, "subject", image_id, sub_qid, sub_attempts,
+                                    &pool,
+                                    "subject",
+                                    image_id,
+                                    sub_qid,
+                                    sub_attempts,
                                     "face reply channel dropped",
                                 )
                                 .await;
@@ -728,7 +769,12 @@ pub async fn run_pipeline(
                         error!("[pipeline] Embedding error for image {image_id}: {e}");
                         if let Some((sem_qid, sem_attempts)) = sem_entry {
                             record_queue_failure(
-                                &pool, "semantic", image_id, sem_qid, sem_attempts, &e.to_string(),
+                                &pool,
+                                "semantic",
+                                image_id,
+                                sem_qid,
+                                sem_attempts,
+                                &e.to_string(),
                             )
                             .await;
                         }
@@ -737,7 +783,11 @@ pub async fn run_pipeline(
                         error!("[pipeline] Embed reply channel dropped for image {image_id}");
                         if let Some((sem_qid, sem_attempts)) = sem_entry {
                             record_queue_failure(
-                                &pool, "semantic", image_id, sem_qid, sem_attempts,
+                                &pool,
+                                "semantic",
+                                image_id,
+                                sem_qid,
+                                sem_attempts,
                                 "embed reply channel dropped",
                             )
                             .await;
@@ -764,7 +814,12 @@ pub async fn run_pipeline(
                         error!("[pipeline] Face analysis error for image {image_id}: {e}");
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
                             record_queue_failure(
-                                &pool, "subject", image_id, sub_qid, sub_attempts, &e.to_string(),
+                                &pool,
+                                "subject",
+                                image_id,
+                                sub_qid,
+                                sub_attempts,
+                                &e.to_string(),
                             )
                             .await;
                         }
@@ -773,7 +828,11 @@ pub async fn run_pipeline(
                         error!("[pipeline] Face reply channel dropped for image {image_id}");
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
                             record_queue_failure(
-                                &pool, "subject", image_id, sub_qid, sub_attempts,
+                                &pool,
+                                "subject",
+                                image_id,
+                                sub_qid,
+                                sub_attempts,
                                 "face reply channel dropped",
                             )
                             .await;
