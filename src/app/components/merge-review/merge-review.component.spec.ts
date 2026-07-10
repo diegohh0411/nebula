@@ -181,6 +181,17 @@ describe('MergeReviewComponent', () => {
     expect(dismissedSpy).toHaveBeenCalled();
   });
 
+  it('labels the left button "Not the same person" in the default (canDismiss=true) mode', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(subA, subB);
+    fixture.detectChanges();
+
+    const dismissBtn = fixture.debugElement.query(By.css('button[cdkFocusInitial]'));
+    expect(dismissBtn.nativeElement.textContent.trim()).toBe('Not the same person');
+  });
+
   it('with canDismiss=false, dismiss() emits dismissed without calling dismissMergeSuggestion', async () => {
     const subA = makeSubject(1, 'Alice');
     const subB = makeSubject(2, null);
