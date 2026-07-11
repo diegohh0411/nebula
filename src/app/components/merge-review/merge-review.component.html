@@ -83,25 +83,26 @@
               Merge
             </button>
           </div>
+        } @else {
+          <button
+            class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+            cdkFocusInitial
+            (click)="dismiss()"
+            [disabled]="submitting()"
+          >
+            Not the same person
+          </button>
+          <button
+            class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            [class.ring-2]="namesIdentical()"
+            [class.ring-primary]="namesIdentical()"
+            [class.animate-pulse]="shouldPulse()"
+            (click)="confirm()"
+            [disabled]="submitting()"
+          >
+            Merge as <span [class.opacity-50]="!mergeTarget?.target?.name">{{ mergeTarget?.target?.name || 'Unnamed' }}</span>
+          </button>
         }
-        <button
-          class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
-          cdkFocusInitial
-          (click)="dismiss()"
-          [disabled]="submitting()"
-        >
-          Not the same person
-        </button>
-        <button
-          class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          [class.ring-2]="namesIdentical()"
-          [class.ring-primary]="namesIdentical()"
-          [class.animate-pulse]="namesIdentical()"
-          (click)="confirm()"
-          [disabled]="submitting()"
-        >
-          Merge as <span [class.opacity-50]="!mergeTarget?.target?.name">{{ mergeTarget?.target?.name || 'Unnamed' }}</span>
-        </button>
       </div>
     </div>
   </div>

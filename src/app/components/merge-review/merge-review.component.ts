@@ -72,6 +72,9 @@ export class MergeReviewComponent {
     return !!a && !!b && a === b;
   });
 
+  /** The duplicate-name nudge pulses the Merge button, but not when the user prefers reduced motion. */
+  protected shouldPulse = computed(() => this.namesIdentical() && !prefersReducedMotion());
+
   get mergeTarget(): MergeTarget | null {
     const subjectA = this.subjectA();
     const subjectB = this.subjectB();

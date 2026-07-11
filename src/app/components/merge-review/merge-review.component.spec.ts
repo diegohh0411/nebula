@@ -271,6 +271,22 @@ describe('MergeReviewComponent', () => {
     expect(dismissSpy).not.toHaveBeenCalled();
   });
 
+  it('hides the primary actions while the exit confirm is shown', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'noah');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(subA, subB);
+    fixture.detectChanges();
+
+    component.dismiss(); // opens the guard
+    fixture.detectChanges();
+
+    const buttonLabels = fixture.debugElement
+      .queryAll(By.css('.modal-actions button'))
+      .map((b) => b.nativeElement.textContent.trim());
+    expect(buttonLabels).toEqual(['Keep separate', 'Merge']);
+  });
+
   it('with canDismiss=false, dismiss() emits dismissed directly even when names are identical (no exit confirm)', async () => {
     const subA = makeSubject(1, 'Noah');
     const subB = makeSubject(2, 'Noah');
