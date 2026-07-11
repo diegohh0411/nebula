@@ -8,12 +8,21 @@
 
       <div class="subjects-grid" #subjectsGrid>
         <div class="subject-col" #colA>
-          <div class="subject-name" [class.opacity-50]="!suggestion.subject_a.name">
-            {{ suggestion.subject_a.name || 'Unnamed' }}
-            @if (mergeTarget?.target?.id === suggestion.subject_a.id) {
+          <div class="subject-name">
+            <app-editable-text
+              [value]="subjectA()?.name ?? null"
+              placeholder="Unnamed"
+              placeholderClass="opacity-50"
+              displayClass="font-semibold"
+              (commit)="onNameCommit('a', $event)"
+            />
+            @if (mergeTarget?.target?.id === subjectA()?.id) {
               <span class="keep-badge">keep</span>
             }
           </div>
+          @if (nameErrorA()) {
+            <p class="text-xs text-destructive mb-1">{{ nameErrorA() }}</p>
+          }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosA().length }} faces</div>
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
@@ -21,19 +30,28 @@
             <app-merge-photo-grid
               class="subject-photos"
               [images]="photosA()"
-              [removable]="mergeTarget?.source?.id === suggestion.subject_a.id"
+              [removable]="mergeTarget?.source?.id === subjectA()?.id"
               (removed)="onFaceRemovedA($event)"
             />
           }
         </div>
 
         <div class="subject-col" #colB>
-          <div class="subject-name" [class.opacity-50]="!suggestion.subject_b.name">
-            {{ suggestion.subject_b.name || 'Unnamed' }}
-            @if (mergeTarget?.target?.id === suggestion.subject_b.id) {
+          <div class="subject-name">
+            <app-editable-text
+              [value]="subjectB()?.name ?? null"
+              placeholder="Unnamed"
+              placeholderClass="opacity-50"
+              displayClass="font-semibold"
+              (commit)="onNameCommit('b', $event)"
+            />
+            @if (mergeTarget?.target?.id === subjectB()?.id) {
               <span class="keep-badge">keep</span>
             }
           </div>
+          @if (nameErrorB()) {
+            <p class="text-xs text-destructive mb-1">{{ nameErrorB() }}</p>
+          }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosB().length }} faces</div>
           @if (loading()) {
             <div class="text-muted-foreground text-sm">Loading…</div>
@@ -41,7 +59,7 @@
             <app-merge-photo-grid
               class="subject-photos"
               [images]="photosB()"
-              [removable]="mergeTarget?.source?.id === suggestion.subject_b.id"
+              [removable]="mergeTarget?.source?.id === subjectB()?.id"
               (removed)="onFaceRemovedB($event)"
             />
           }
@@ -49,21 +67,42 @@
       </div>
 
       <div class="modal-actions">
-        <button
-          class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
-          cdkFocusInitial
-          (click)="dismiss()"
-          [disabled]="submitting()"
-        >
-          {{ canDismiss ? 'Dismiss' : 'Not the same person' }}
-        </button>
-        <button
-          class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          (click)="confirm()"
-          [disabled]="submitting()"
-        >
-          Merge as <span [class.opacity-50]="!mergeTarget?.target?.name">{{ mergeTarget?.target?.name || 'Unnamed' }}</span>
-        </button>
+        @if (showExitConfirm()) {
+          <div class="flex items-center gap-3 mr-auto text-sm">
+            <span class="text-muted-foreground">Both named "{{ mergeTarget?.target?.name }}".</span>
+            <button
+              class="px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+              (click)="keepSeparate()"
+            >
+              Keep separate
+            </button>
+            <button
+              class="px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              (click)="confirmFromGuard()"
+            >
+              Merge
+            </button>
+          </div>
+        } @else {
+          <button
+            class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+            cdkFocusInitial
+            (click)="dismiss()"
+            [disabled]="submitting()"
+          >
+            Not the same person
+          </button>
+          <button
+            class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            [class.ring-2]="namesIdentical()"
+            [class.ring-primary]="namesIdentical()"
+            [class.animate-pulse]="shouldPulse()"
+            (click)="confirm()"
+            [disabled]="submitting()"
+          >
+            Merge as <span [class.opacity-50]="!mergeTarget?.target?.name">{{ mergeTarget?.target?.name || 'Unnamed' }}</span>
+          </button>
+        }
       </div>
     </div>
   </div>
