@@ -144,6 +144,14 @@ describe('PhotoService — subjectMatches signal', () => {
     service.clearSearch();
     expect(service.subjectMatches()).toEqual([]);
   });
+
+  it('searchByExternalImage defaults gallerySort to relevance on success', async () => {
+    invoke.mockResolvedValue([{ image_id: 1 } as unknown as SearchResult]);
+
+    await service.searchByExternalImage('base64data', 'image/png', 'blob:fake-object-url');
+
+    expect(service.gallerySort().key).toBe('relevance');
+  });
 });
 
 describe('PhotoService — processing speed resilience & ETA', () => {
