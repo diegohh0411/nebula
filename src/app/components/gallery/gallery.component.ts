@@ -48,6 +48,8 @@ export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
   private elementRef = inject(ElementRef);
   private resizeObserver?: ResizeObserver;
 
+  // Drives <app-grid-controls> only (sort/dateRange/availableSortKeys/activeFilterCount).
+  // Rendering uses photos.virtualRows(); collection.view()/reset() are unused here.
   protected readonly collection = createImageCollection(
     this.photos.galleryImages,
     {
