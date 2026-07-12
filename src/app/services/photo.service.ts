@@ -24,6 +24,9 @@ import {
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
+import {
+  DateRange, SortDirection, SortKeyId, SORT_KEYS, applySort, matchesDateRange,
+} from '../utils/image-ordering';
 
 @Injectable({ providedIn: 'root' })
 export class PhotoService {
@@ -37,6 +40,8 @@ export class PhotoService {
   readonly subjects = signal<Subject[]>([]);
   readonly images = signal<Image[]>([]);
   readonly searchResults = signal<SearchResult[] | null>(null); // null = not in search mode
+  readonly gallerySort = signal<{ key: SortKeyId; direction: SortDirection }>({ key: 'dateTaken', direction: 'desc' });
+  readonly galleryDateRange = signal<DateRange>({ from: null, to: null });
   readonly pipelineStats = signal<PipelineStats>({ total_pending: 0, images_per_sec: 0 });
   readonly selectedFolderId = signal<number | null>(null);
   readonly isSearching = signal(false);
@@ -108,18 +113,16 @@ export class PhotoService {
 
   /** Day-grouped images for the gallery. Uses search results when available. */
   readonly dayGroups = computed<DayGroup[]>(() => {
+    const sort = this.gallerySort();
+    const range = this.galleryDateRange();
     const results = this.searchResults();
     if (results) {
-      // Use a single group for search results to show them sorted by similarity
-      return [
-        {
-          label: 'Search Results',
-          date: 'search',
-          images: results,
-        },
-      ];
+      const filtered = results.filter((i) => matchesDateRange(i, range));
+      const key = SORT_KEYS[sort.key].available(filtered) ? SORT_KEYS[sort.key] : SORT_KEYS.relevance;
+      return [{ label: 'Search Results', date: 'search', images: applySort(filtered, key, sort.direction) }];
     }
-    return groupByDay(this.images());
+    const imgs = this.images().filter((i) => matchesDateRange(i, range));
+    return groupByDay(imgs, sort.direction);
   });
 
   /** Full visual-ordered list backing the main gallery / search lightbox. */
@@ -298,6 +301,7 @@ export class PhotoService {
     try {
       const results = await invoke<SearchResult[]>('search', { query: { type: 'text', query } });
       this.searchResults.set(results);
+      this.syncGallerySortToMode(true);
       this.searchSubjects(query)
         .then((m) => this.subjectMatches.set(m))
         .catch(() => this.subjectMatches.set([]));
@@ -324,6 +328,7 @@ export class PhotoService {
     try {
       const results = await invoke<SearchResult[]>('search', { query: { type: 'imageId', image_id: id } });
       this.searchResults.set(results);
+      this.syncGallerySortToMode(true);
     } catch (e: unknown) {
       this.searchError.set(typeof e === 'string' ? e : 'Visual search failed.');
       this.searchResults.set(null);
@@ -356,6 +361,15 @@ export class PhotoService {
     this.searchImage.set(null);
     this.searchText.set('');
     this.subjectMatches.set([]);
+    this.syncGallerySortToMode(false);
+  }
+
+  /** Reset the gallery's default ordering when switching browse <-> search. */
+  private syncGallerySortToMode(searching: boolean): void {
+    this.gallerySort.set(
+      searching ? { key: 'relevance', direction: 'desc' } : { key: 'dateTaken', direction: 'desc' },
+    );
+    this.galleryDateRange.set({ from: null, to: null });
   }
 
   selectFolder(id: number | null): void {
@@ -485,7 +499,7 @@ function getTimestamp(img: Image | SearchResult): number {
   return img.date_taken ?? img.mtime;
 }
 
-function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
+function groupByDay(images: (Image | SearchResult)[], direction: SortDirection = 'desc'): DayGroup[] {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const yesterday = new Date(today);
@@ -526,7 +540,14 @@ function groupByDay(images: (Image | SearchResult)[]): DayGroup[] {
     map.get(key)!.images.push(img);
   }
 
-  return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+  for (const group of map.values()) {
+    group.images = applySort(group.images, SORT_KEYS.dateTaken, direction) as (Image | SearchResult)[];
+  }
+  const groups = Array.from(map.values());
+  groups.sort((a, b) =>
+    direction === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date),
+  );
+  return groups;
 }
 
 /**

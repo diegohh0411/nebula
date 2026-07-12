@@ -1,4 +1,7 @@
-<app-search-bar />
+<div class="flex items-center gap-2">
+  <div class="flex-1"><app-search-bar /></div>
+  <app-grid-controls [collection]="collection" />
+</div>
 
 @if (photos.virtualRows().length === 0) {
   <!-- Empty state -->
