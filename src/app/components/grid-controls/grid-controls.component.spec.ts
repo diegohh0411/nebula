@@ -45,8 +45,19 @@ describe('GridControlsComponent', () => {
     fixture.componentInstance.collection = collection;
     fixture.detectChanges();
     fixture.componentInstance['setFrom']('2026-01-01');
-    expect(collection.dateRange().from).toBe(Math.floor(Date.UTC(2026, 0, 1) / 1000));
+    // Local-time start-of-day, matching how the gallery groups days.
+    expect(collection.dateRange().from).toBe(Math.floor(new Date(2026, 0, 1, 0, 0, 0, 0).getTime() / 1000));
     expect(collection.activeFilterCount()).toBe(1);
+  });
+
+  it('sets an inclusive end-of-day To bound and round-trips it to the input', () => {
+    const fixture = TestBed.createComponent(GridControlsComponent);
+    const collection = makeCollection();
+    fixture.componentInstance.collection = collection;
+    fixture.detectChanges();
+    fixture.componentInstance['setTo']('2026-01-15');
+    expect(collection.dateRange().to).toBe(Math.floor(new Date(2026, 0, 15, 23, 59, 59, 999).getTime() / 1000));
+    expect(fixture.componentInstance['toInput']()).toBe('2026-01-15');
   });
 
   it('clears the range', () => {

@@ -24,18 +24,31 @@ export class GridControlsComponent {
     this.collection.sort.update((s) => ({ ...s, direction }));
   }
 
-  /** yyyy-mm-dd (from an <input type="date">) → epoch seconds at UTC midnight, or null. */
-  private toEpoch(value: string): number | null {
+  /**
+   * yyyy-mm-dd (from an <input type="date">) → epoch seconds at a local-time
+   * day boundary, or null. Local time matches how the gallery groups days.
+   * `bound: 'start'` snaps to 00:00:00, `'end'` to 23:59:59 so the range is
+   * inclusive of the whole selected day.
+   */
+  private toEpoch(value: string, bound: 'start' | 'end'): number | null {
     if (!value) return null;
     const [y, m, d] = value.split('-').map(Number);
     if (!y || !m || !d) return null;
-    return Math.floor(Date.UTC(y, m - 1, d) / 1000);
+    const date =
+      bound === 'start'
+        ? new Date(y, m - 1, d, 0, 0, 0, 0)
+        : new Date(y, m - 1, d, 23, 59, 59, 999);
+    return Math.floor(date.getTime() / 1000);
   }
 
-  /** epoch seconds → yyyy-mm-dd for binding back into <input type="date">. */
+  /** epoch seconds → yyyy-mm-dd (local) for binding back into <input type="date">. */
   private toInputValue(epoch: number | null): string {
     if (epoch == null) return '';
-    return new Date(epoch * 1000).toISOString().slice(0, 10);
+    const d = new Date(epoch * 1000);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   }
 
   protected fromInput(): string {
@@ -47,11 +60,11 @@ export class GridControlsComponent {
   }
 
   protected setFrom(value: string): void {
-    this.collection.dateRange.update((r) => ({ ...r, from: this.toEpoch(value) }));
+    this.collection.dateRange.update((r) => ({ ...r, from: this.toEpoch(value, 'start') }));
   }
 
   protected setTo(value: string): void {
-    this.collection.dateRange.update((r) => ({ ...r, to: this.toEpoch(value) }));
+    this.collection.dateRange.update((r) => ({ ...r, to: this.toEpoch(value, 'end') }));
   }
 
   protected clearRange(): void {

@@ -118,7 +118,7 @@ export class PhotoService {
     const results = this.searchResults();
     if (results) {
       const filtered = results.filter((i) => matchesDateRange(i, range));
-      const key = SORT_KEYS[sort.key].available(filtered) ? SORT_KEYS[sort.key] : SORT_KEYS.relevance;
+      const key = SORT_KEYS[sort.key].available(filtered) ? SORT_KEYS[sort.key] : SORT_KEYS.dateTaken;
       return [{ label: 'Search Results', date: 'search', images: applySort(filtered, key, sort.direction) }];
     }
     const imgs = this.images().filter((i) => matchesDateRange(i, range));
