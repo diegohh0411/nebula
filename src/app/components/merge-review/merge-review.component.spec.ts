@@ -562,4 +562,41 @@ describe('MergeReviewComponent', () => {
     expect((component as any).showRedirectPicker()).toBe(false);
     expect(closedSpy).not.toHaveBeenCalled(); // the modal itself must still be open
   });
+
+  it('loads an avatar crop for each redirect candidate', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = { ...makeSubject(4, 'Roberto'), thumbnail_face_id: 777 };
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'getFaceCrop').mockResolvedValue('/crops/777.jpg');
+    vi.spyOn(photoService, 'thumbnailUrl').mockImplementation((p) => p);
+
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    fixture.detectChanges();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(photoService.getFaceCrop).toHaveBeenCalledWith(777);
+    expect((component as any).redirectAvatarUrls().get(4)).toBe('/crops/777.jpg');
+  });
+
+  it('leaves the avatar entry null when a candidate has no thumbnail_face_id', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const noThumb = makeSubject(4, 'Roberto'); // thumbnail_face_id: null via makeSubject
+    photoService.subjects.set([a, b, noThumb]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    fixture.detectChanges();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect((component as any).redirectAvatarUrls().get(4) ?? null).toBeNull();
+  });
 });

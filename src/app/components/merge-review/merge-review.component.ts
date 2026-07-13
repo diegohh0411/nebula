@@ -6,6 +6,7 @@ import {
   inject,
   signal,
   computed,
+  effect,
   ChangeDetectionStrategy,
   ViewChild,
   ElementRef,
@@ -90,6 +91,34 @@ export class MergeReviewComponent {
       return s.name.toLowerCase().includes(query);
     });
   });
+
+  protected redirectAvatarUrls = signal<Map<number, string | null>>(new Map());
+
+  constructor() {
+    effect(() => {
+      if (this.showRedirectPicker()) {
+        this.loadRedirectAvatars(this.redirectCandidates());
+      }
+    });
+  }
+
+  private loadRedirectAvatars(candidates: Subject[]): void {
+    const known = this.redirectAvatarUrls();
+    const missing = candidates.filter((c) => !known.has(c.id));
+    for (const candidate of missing) {
+      if (!candidate.thumbnail_face_id) {
+        this.redirectAvatarUrls.update((m) => new Map(m).set(candidate.id, null));
+        continue;
+      }
+      this.photoService.getFaceCrop(candidate.thumbnail_face_id)
+        .then((path) => {
+          this.redirectAvatarUrls.update((m) => new Map(m).set(candidate.id, this.photoService.thumbnailUrl(path)));
+        })
+        .catch(() => {
+          this.redirectAvatarUrls.update((m) => new Map(m).set(candidate.id, null));
+        });
+    }
+  }
 
   protected namesIdentical = computed(() => {
     const a = this.subjectA()?.name?.trim().toLowerCase();

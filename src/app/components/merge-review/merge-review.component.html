@@ -102,6 +102,11 @@
                   [class.highlighted]="i === redirectHighlight()"
                   (click)="pickRedirectCandidate(candidate)"
                 >
+                  @if (redirectAvatarUrls().get(candidate.id); as avatarUrl) {
+                    <img [src]="avatarUrl" class="redirect-avatar" alt="" />
+                  } @else {
+                    <span class="redirect-avatar redirect-avatar-placeholder"></span>
+                  }
                   <span class="font-medium">{{ candidate.name }}</span>
                 </button>
               } @empty {
