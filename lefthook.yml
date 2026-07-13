@@ -1,4 +1,19 @@
 # managed by lefthook
+pre-commit:
+  commands:
+    cargo-fmt:
+      root: "src-tauri/"
+      glob: "*.rs"
+      run: cargo fmt --all
+      stage_fixed: true
+
+pre-push:
+  commands:
+    cargo-clippy:
+      root: "src-tauri/"
+      glob: "*.rs"
+      run: cargo clippy --all-targets -- -D warnings
+
 post-checkout:
   commands:
     sync-claude-dir:
