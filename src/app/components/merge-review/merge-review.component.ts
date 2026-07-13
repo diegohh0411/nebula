@@ -44,6 +44,7 @@ export class MergeReviewComponent {
     this.targetOverride.set(null);
     this.redirectSource.set(null);
     this.showRedirectPicker.set(false);
+    this.redirectColumn.set(null);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
@@ -71,6 +72,7 @@ export class MergeReviewComponent {
   protected showRedirectPicker = signal(false);
   protected targetOverride = signal<Subject | null>(null);
   protected redirectSource = signal<Subject | null>(null);
+  protected redirectColumn = signal<'a' | 'b' | null>(null);
 
   protected namesIdentical = computed(() => {
     const a = this.subjectA()?.name?.trim().toLowerCase();
@@ -165,6 +167,50 @@ export class MergeReviewComponent {
     }
   }
 
+  /** Which photo signal (A or B) is the redirect slot. Decided once, on the FIRST redirect
+   *  in this modal session, from the *original* (pre-any-redirect) suggestion, and reused
+   *  unchanged by every subsequent pick — recomputing this from the live `mergeTarget` on a
+   *  second pick would be wrong, because after the first redirect `mergeTarget.target.id` is
+   *  already the previously-picked subject's id, which matches neither `subjectA.id` nor
+   *  `subjectB.id`. */
+  private photosSignalFor(originalTargetId: number): typeof this.photosA {
+    const column = this.redirectColumn() ?? (this._suggestion?.subject_a.id === originalTargetId ? 'a' : 'b');
+    if (this.redirectColumn() === null) this.redirectColumn.set(column);
+    return column === 'a' ? this.photosA : this.photosB;
+  }
+
+  /** Re-target the merge to `picked` instead of the original keep subject (or, when
+   *  `explicitSource` is given, instead of whichever subject is explicitly passed — used by
+   *  the Part 2 collision entry point, where the colliding rename may have happened on
+   *  either column, not necessarily the current `mergeTarget.source`). Does not merge — the
+   *  user must still click "Merge as {picked.name}" to confirm (see confirm()). */
+  protected async applyRedirect(picked: Subject, explicitSource?: Subject): Promise<void> {
+    const originalTarget = this.mergeTarget; // pre-redirect target/source, before override is set
+    if (!originalTarget && !explicitSource) return;
+
+    const source = explicitSource ?? originalTarget!.source;
+    // The slot to reload is always keyed off the ORIGINAL target id on the first redirect —
+    // even when called with an explicitSource, the slot being replaced is the one that
+    // currently shows the "keep" subject's faces, i.e. mergeTarget.target, not `source`.
+    const slotAnchorId = originalTarget?.target.id ?? this._suggestion!.subject_a.id;
+
+    this.redirectSource.set(source);
+    this.targetOverride.set(picked);
+    this.showRedirectPicker.set(false);
+    this.nameErrorA.set(null);
+    this.nameErrorB.set(null);
+
+    const gen = ++this._loadGen;
+    const photosSig = this.photosSignalFor(slotAnchorId);
+    try {
+      const photos = await this.photoService.getSubjectPhotosWithFaces(picked.id);
+      if (gen !== this._loadGen) return; // stale, discard
+      photosSig.set(photos);
+    } catch (e) {
+      console.error('MergeReview: failed to load redirected subject faces', e);
+    }
+  }
+
   async confirm() {
     const target = this.mergeTarget;
     if (!target || this.submitting()) return;
@@ -236,8 +282,8 @@ export class MergeReviewComponent {
   }
 
   protected async runMergeAnimation(target: MergeTarget) {
-    if (prefersReducedMotion()) {
-      return;
+    if (prefersReducedMotion() || this.targetOverride()) {
+      return; // accepted v1 simplification: no animation for a redirected confirm (see spec)
     }
     const colA = this.colARef?.nativeElement;
     const colB = this.colBRef?.nativeElement;

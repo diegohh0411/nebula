@@ -388,4 +388,66 @@ describe('MergeReviewComponent', () => {
     expect(photoService.nameSubject).toHaveBeenCalledWith(1, null);
     expect(component.subjectA()?.name).toBeNull();
   });
+
+  it('applyRedirect sets override/source and reloads faces into the original keep slot', async () => {
+    const a = makeSubject(1, 'Alice');   // named -> original target/keep, column A
+    const b = makeSubject(2, null);      // unnamed -> original source, column B
+    const roberto = makeSubject(99, 'Roberto');
+
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockImplementation(async (id: number) => {
+      if (id === 99) return [makePhoto(500)];
+      return [];
+    });
+
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    await (component as any).applyRedirect(roberto);
+
+    expect((component as any).targetOverride()).toEqual(roberto);
+    expect((component as any).redirectSource()).toEqual(b); // original non-target participant
+    expect(photoService.getSubjectPhotosWithFaces).toHaveBeenCalledWith(99);
+    // Column A held the original keep subject's (Alice's) faces; it now shows Roberto's.
+    expect(component.photosA().map(f => f.face_id)).toEqual([500]);
+    expect((component as any).showRedirectPicker()).toBe(false);
+  });
+
+  it('applyRedirect uses the explicit source when provided, not mergeTarget.source', async () => {
+    const a = makeSubject(1, 'Alice');   // named -> original target/keep, column A
+    const b = makeSubject(2, null);      // unnamed -> original source, column B
+    const roberto = makeSubject(99, 'Roberto');
+
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Simulate a Part-2-style collision caught while renaming the *target* column (Alice),
+    // not the source column — mergeTarget.source is still `b`, but the actual redirect must
+    // treat `a` as the source, since Alice is the one being redirected into Roberto.
+    await (component as any).applyRedirect(roberto, a);
+
+    expect((component as any).redirectSource()).toEqual(a);
+  });
+
+  it('a second applyRedirect call reloads into the same slot as the first, not a re-derived one', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(99, 'Roberto');
+    const carla = makeSubject(100, 'Carla');
+
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockImplementation(async (id: number) => {
+      if (id === 99) return [makePhoto(500)];
+      if (id === 100) return [makePhoto(600)];
+      return [];
+    });
+
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    await (component as any).applyRedirect(roberto);   // first pick -> column A (Alice's original slot)
+    await (component as any).applyRedirect(carla);     // re-pick -> must still land in column A, not B
+
+    expect(component.photosA().map(f => f.face_id)).toEqual([600]); // Carla's faces
+    expect(component.photosB().map(f => f.face_id)).toEqual([]);    // B (the real candidate) untouched
+  });
 });
