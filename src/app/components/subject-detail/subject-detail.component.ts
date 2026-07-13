@@ -19,6 +19,8 @@ import { ConfirmMergeDialogComponent } from '../confirm-merge-dialog/confirm-mer
 import { MergeReviewComponent } from '../merge-review/merge-review.component';
 import { injectSubjectTagging } from '../../composables/subject-tagging.composable';
 import { HlmInput } from '@spartan-ng/helm/input';
+import { GridControlsComponent } from '../grid-controls/grid-controls.component';
+import { createImageCollection } from '../../composables/image-collection.composable';
 
 @Component({
   selector: 'app-subject-detail',
@@ -34,6 +36,7 @@ import { HlmInput } from '@spartan-ng/helm/input';
     ConfirmMergeDialogComponent,
     MergeReviewComponent,
     HlmInput,
+    GridControlsComponent,
   ],
   templateUrl: './subject-detail.component.html',
   styleUrl: './subject-detail.component.css',
@@ -47,6 +50,11 @@ export class SubjectDetailComponent implements OnInit {
   protected subjectId = signal<number | null>(null);
   protected detail = signal<SubjectDetail | null>(null);
   protected subjectPhotos = signal<SearchResult[]>([]);
+  protected readonly collection = createImageCollection(this.subjectPhotos, {
+    sortKeys: ['dateTaken', 'relevance'],
+    defaultSort: { key: 'dateTaken', direction: 'desc' },
+    dateRangeFilter: true,
+  });
   protected faceCropUrl = signal<string | null>(null);
 
   protected isMenuOpen = signal(false);
@@ -64,7 +72,7 @@ export class SubjectDetailComponent implements OnInit {
   });
 
   protected readonly virtualRows = computed<VirtualRow[]>(() => {
-    const images = this.subjectPhotos();
+    const images = this.collection.view();
     const width = this.photos.viewportWidth();
     const targetRowHeight = this.photos.targetRowHeight();
 

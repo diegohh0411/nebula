@@ -63,6 +63,7 @@ class SubjectDetailPhotoServiceStub {
   viewportWidth = signal(1000);
   targetRowHeight = signal(220);
   selectedImage = signal(null);
+  selectedImageIds = signal(new Set<number>());
 
   getSubjectDetail = vi.fn();
   getSubjectPhotos = vi.fn().mockResolvedValue([]);
@@ -275,5 +276,27 @@ describe('SubjectDetailComponent — similar-subjects review flow', () => {
 
     expect((cmp as any).similarSubjects()).toEqual([]);
     expect((cmp as any).reviewingSuggestion()).toBeNull();
+  });
+
+  it('orders subject photos newest-first with a deterministic id tiebreak', async () => {
+    const { cmp, harness } = await mount();
+
+    const photos = [
+      { image_id: 3, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: 100, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 1, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: 100, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 2, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: 300, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+    ];
+    (cmp as any)['subjectPhotos'].set(photos);
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const viewIds = (cmp as any)['collection'].view().map((i: { image_id: number }) => i.image_id);
+    expect(viewIds).toEqual([2, 3, 1]);
+
+    const virtualRowIds = (cmp as any)['virtualRows']()
+      .filter((row: { type: string }) => row.type === 'row')
+      .flatMap((row: { images: { image_id: number }[] }) => row.images.map((img) => img.image_id));
+    expect(virtualRowIds).toEqual([2, 3, 1]);
   });
 });

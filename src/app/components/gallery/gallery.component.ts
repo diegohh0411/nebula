@@ -21,6 +21,8 @@ import { SubjectPersonCardComponent } from '../subject-person-card/subject-perso
 import { VirtualRow } from '../../models/models';
 import { ScrollingModule, CdkVirtualScrollViewport } from '@angular/cdk/scrolling';
 import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
+import { GridControlsComponent } from '../grid-controls/grid-controls.component';
+import { createImageCollection } from '../../composables/image-collection.composable';
 
 @Component({
   selector: 'app-gallery',
@@ -35,6 +37,7 @@ import { CdkAutoSizeVirtualScroll } from '@angular/cdk-experimental/scrolling';
     ScrollingModule,
     CdkAutoSizeVirtualScroll,
     LucideAngularModule,
+    GridControlsComponent,
   ],
   templateUrl: './gallery.component.html',
   styleUrl: './gallery.component.css',
@@ -44,6 +47,18 @@ export class GalleryComponent implements OnInit, AfterViewInit, OnDestroy {
   private router = inject(Router);
   private elementRef = inject(ElementRef);
   private resizeObserver?: ResizeObserver;
+
+  // Drives <app-grid-controls> only (sort/dateRange/availableSortKeys/activeFilterCount).
+  // Rendering uses photos.virtualRows(); collection.view()/reset() are unused here.
+  protected readonly collection = createImageCollection(
+    this.photos.galleryImages,
+    {
+      sortKeys: ['dateTaken', 'relevance'],
+      defaultSort: { key: 'dateTaken', direction: 'desc' },
+      dateRangeFilter: true,
+    },
+    { sort: this.photos.gallerySort, dateRange: this.photos.galleryDateRange },
+  );
 
   protected viewport = viewChild(CdkVirtualScrollViewport);
 
