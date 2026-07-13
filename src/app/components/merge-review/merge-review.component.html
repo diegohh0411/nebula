@@ -111,6 +111,9 @@
           </div>
         } @else if (showRedirectPicker()) {
           <div class="redirect-picker mr-auto" (keydown)="onRedirectKeydown($event)">
+            @if (redirectGoneError()) {
+              <span class="text-xs text-destructive" data-test="redirect-gone-error">{{ redirectGoneError() }}</span>
+            }
             <input
               #redirectInput
               type="text"

@@ -50,6 +50,7 @@ export class MergeReviewComponent {
     this.redirectHighlight.set(0);
     this.nameErrorA.set(null);
     this.nameErrorB.set(null);
+    this.redirectGoneError.set(null);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
@@ -81,6 +82,7 @@ export class MergeReviewComponent {
   protected redirectColumn = signal<'a' | 'b' | null>(null);
   protected redirectQuery = signal('');
   protected redirectHighlight = signal(0);
+  protected redirectGoneError = signal<string | null>(null);
 
   protected redirectCandidates = computed<Subject[]>(() => {
     const query = this.redirectQuery().trim().toLowerCase();
@@ -277,6 +279,7 @@ export class MergeReviewComponent {
   protected openRedirectPicker(): void {
     this.redirectQuery.set('');
     this.redirectHighlight.set(0);
+    this.redirectGoneError.set(null);
     this.showRedirectPicker.set(true);
     queueMicrotask(() => this.redirectInputRef?.nativeElement.focus());
   }
@@ -307,6 +310,14 @@ export class MergeReviewComponent {
   async confirm() {
     const target = this.mergeTarget;
     if (!target || this.submitting()) return;
+
+    const override = this.targetOverride();
+    if (override && !this.photoService.subjects().some((s) => s.id === override.id)) {
+      this.redirectGoneError.set(`${override.name} is no longer available — pick another subject.`);
+      this.showRedirectPicker.set(true);
+      return;
+    }
+
     this.submitting.set(true);
     try {
       await this.runMergeAnimation(target);

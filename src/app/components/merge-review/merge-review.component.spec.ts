@@ -691,4 +691,64 @@ describe('MergeReviewComponent', () => {
     // Alice (the one actually renamed) is merged into Roberto; `b` is left completely alone.
     expect(mergeSpy).toHaveBeenCalledWith(9, 1);
   });
+
+  it('confirm shows an error and reopens the picker if the redirected target no longer exists', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const mergeSpy = vi.spyOn(photoService, 'mergeSubjects').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).targetOverride.set(roberto);
+    (component as any).redirectSource.set(b);
+    // Roberto is no longer in the live subjects list (deleted elsewhere mid-flow).
+    photoService.subjects.set([a, b]);
+
+    await component.confirm();
+
+    expect(mergeSpy).not.toHaveBeenCalled();
+    expect((component as any).redirectGoneError()).toBe('Roberto is no longer available — pick another subject.');
+    expect((component as any).showRedirectPicker()).toBe(true);
+  });
+
+  it('confirm proceeds normally for a redirected target that still exists', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const mergeSpy = vi.spyOn(photoService, 'mergeSubjects').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    photoService.subjects.set([a, b, roberto]);
+    (component as any).targetOverride.set(roberto);
+    (component as any).redirectSource.set(b);
+
+    await component.confirm();
+
+    expect(mergeSpy).toHaveBeenCalledWith(9, 2);
+  });
+
+  it('the "no longer available" error is actually visible in the DOM, in the reopened picker', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'mergeSubjects').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).targetOverride.set(roberto);
+    (component as any).redirectSource.set(b);
+    photoService.subjects.set([a, b]); // Roberto no longer present
+
+    await component.confirm();
+    fixture.detectChanges();
+
+    const errorEl = fixture.debugElement.query(By.css('[data-test="redirect-gone-error"]'));
+    expect(errorEl).toBeTruthy();
+    expect(errorEl.nativeElement.textContent).toContain('no longer available');
+  });
 });
