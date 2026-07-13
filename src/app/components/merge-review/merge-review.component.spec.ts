@@ -751,4 +751,24 @@ describe('MergeReviewComponent', () => {
     expect(errorEl).toBeTruthy();
     expect(errorEl.nativeElement.textContent).toContain('no longer available');
   });
+
+  it('a full redirect-merge journey never calls dismissMergeSuggestion', async () => {
+    const a = makeSubject(1, 'Alice'); // original keep, bypassed
+    const b = makeSubject(2, null);    // original candidate, actually merged
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'mergeSubjects').mockResolvedValue(undefined);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion');
+
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    await (component as any).applyRedirect(roberto);
+    await component.confirm();
+
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(photoService.mergeSubjects).toHaveBeenCalledWith(9, 2); // Roberto absorbs B; A untouched
+  });
 });
