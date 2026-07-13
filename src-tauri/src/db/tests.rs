@@ -352,6 +352,112 @@ async fn dismiss_persists_pair_in_dismissed_pairs() {
     assert_eq!(dismissed, 1, "dismissed pair should be persisted");
 }
 
+/// dismiss_merge_suggestion must write cannot_link across a small deterministic
+/// representative set: up to 3 faces per side (thumbnail preferred, then lowest id),
+/// not a single arbitrary LIMIT 1 face.
+#[tokio::test]
+async fn dismiss_writes_multiple_representative_cannot_links() {
+    let pool = make_dismissal_pool().await;
+
+    let alice: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let bob: i64 = sqlx::query_scalar(
+        "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // 4 faces on alice (so the 3-face cap is exercised), 2 on bob.
+    let mut alice_faces = Vec::new();
+    for i in 0..4 {
+        let fid: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) \
+             VALUES (?, ?, 0, 0, 0.5, 0.5, 0) RETURNING id",
+        )
+        .bind(i + 1)
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        alice_faces.push(fid);
+    }
+    let mut bob_faces = Vec::new();
+    for i in 0..2 {
+        let fid: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) \
+             VALUES (?, ?, 0, 0, 0.5, 0.5, 0) RETURNING id",
+        )
+        .bind(i + 10)
+        .bind(bob)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        bob_faces.push(fid);
+    }
+
+    // Thumbnail is alice's highest-id face — not in lowest-3-by-id — so selection
+    // that ignores thumbnail_face_id would pick the three lowest ids instead.
+    let thumb = alice_faces[3];
+    let third_lowest = alice_faces[2];
+    sqlx::query("UPDATE subjects SET thumbnail_face_id = ? WHERE id = ?")
+        .bind(thumb)
+        .bind(alice)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let suggestion_id: i64 = sqlx::query_scalar(
+        "INSERT INTO merge_suggestions (subject_id_a, subject_id_b, score, created_at) \
+         VALUES (?, ?, 0.9, 0) RETURNING id",
+    )
+    .bind(alice)
+    .bind(bob)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    dismiss_merge_suggestion(&pool, suggestion_id)
+        .await
+        .unwrap();
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM constraints WHERE kind = 'cannot_link' AND source = 'dismiss'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 6,
+        "expected 3 alice faces × 2 bob faces = 6 dismiss cannot_links"
+    );
+
+    let pairs: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT face_a, face_b FROM constraints WHERE kind = 'cannot_link' AND source = 'dismiss'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let involves_thumb = pairs.iter().any(|&(a, b)| a == thumb || b == thumb);
+    assert!(
+        involves_thumb,
+        "thumbnail face {thumb} must be among selected representatives"
+    );
+
+    let involves_third_lowest = pairs
+        .iter()
+        .any(|&(a, b)| a == third_lowest || b == third_lowest);
+    assert!(
+        !involves_third_lowest,
+        "3rd-lowest face {third_lowest} must be displaced by the thumbnail preference"
+    );
+}
+
 #[tokio::test]
 async fn get_dismissed_pair_set_returns_stored_pairs() {
     let pool = make_dismissal_pool().await;
