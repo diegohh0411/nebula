@@ -48,6 +48,8 @@ export class MergeReviewComponent {
     this.redirectColumn.set(null);
     this.redirectQuery.set('');
     this.redirectHighlight.set(0);
+    this.nameErrorA.set(null);
+    this.nameErrorB.set(null);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
@@ -70,8 +72,8 @@ export class MergeReviewComponent {
   photosB = signal<SubjectPhotoFace[]>([]);
   protected loading = signal(false);
   protected submitting = signal(false);
-  protected nameErrorA = signal<string | null>(null);
-  protected nameErrorB = signal<string | null>(null);
+  protected nameErrorA = signal<{ message: string; conflict: Subject } | null>(null);
+  protected nameErrorB = signal<{ message: string; conflict: Subject } | null>(null);
   protected showExitConfirm = signal(false);
   protected showRedirectPicker = signal(false);
   protected targetOverride = signal<Subject | null>(null);
@@ -193,7 +195,7 @@ export class MergeReviewComponent {
           (s.name ?? '').toLowerCase() === typed.toLowerCase(),
       );
       if (conflict) {
-        errorSig.set(`A subject named "${typed}" already exists.`);
+        errorSig.set({ message: `A subject named "${typed}" already exists.`, conflict });
         return; // no backend write; EditableText re-displays the unchanged signal value
       }
     }

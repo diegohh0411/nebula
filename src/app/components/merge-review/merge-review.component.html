@@ -26,8 +26,18 @@
               <span class="keep-badge">keep</span>
             }
           </div>
-          @if (nameErrorA()) {
-            <p class="text-xs text-destructive mb-1">{{ nameErrorA() }}</p>
+          @if (nameErrorA(); as err) {
+            <p class="text-xs text-destructive mb-1">
+              {{ err.message }}
+              <button
+                type="button"
+                class="underline"
+                data-test="collision-redirect-a"
+                (click)="applyRedirect(err.conflict, subjectA()!)"
+              >
+                Merge into {{ err.conflict.name }}
+              </button>
+            </p>
           }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosA().length }} faces</div>
           @if (loading()) {
@@ -55,8 +65,18 @@
               <span class="keep-badge">keep</span>
             }
           </div>
-          @if (nameErrorB()) {
-            <p class="text-xs text-destructive mb-1">{{ nameErrorB() }}</p>
+          @if (nameErrorB(); as err) {
+            <p class="text-xs text-destructive mb-1">
+              {{ err.message }}
+              <button
+                type="button"
+                class="underline"
+                data-test="collision-redirect-b"
+                (click)="applyRedirect(err.conflict, subjectB()!)"
+              >
+                Merge into {{ err.conflict.name }}
+              </button>
+            </p>
           }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosB().length }} faces</div>
           @if (loading()) {

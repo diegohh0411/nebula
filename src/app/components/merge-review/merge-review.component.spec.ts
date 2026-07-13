@@ -293,7 +293,7 @@ describe('MergeReviewComponent', () => {
 
     expect(nameSpy).not.toHaveBeenCalled();
     expect(component.subjectA()?.name).toBeNull(); // reverted / unchanged
-    expect(component.nameErrorA()).toContain('already exists');
+    expect((component.nameErrorA() as any)?.message).toContain('already exists');
   });
 
   it('dismiss() shows the exit confirm instead of dismissing when names are identical', async () => {
@@ -630,5 +630,65 @@ describe('MergeReviewComponent', () => {
 
     const chip = fixture.debugElement.query(By.css('[data-test="match-score-chip"]'));
     expect(chip.nativeElement.textContent).not.toContain('%');
+  });
+
+  it('onNameCommit collision populates a structured error with the conflicting subject', async () => {
+    const a = makeSubject(1, null);
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    await component.onNameCommit('a', 'Roberto');
+
+    expect(component.nameErrorA()).toEqual({
+      message: 'A subject named "Roberto" already exists.',
+      conflict: roberto,
+    });
+  });
+
+  it('clicking "Merge into {name}" on the rendered collision error applies the redirect and never calls nameSubject', async () => {
+    const a = makeSubject(1, null);
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const nameSubjectSpy = vi.spyOn(photoService, 'nameSubject');
+    const applySpy = vi.spyOn(component as any, 'applyRedirect').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    await component.onNameCommit('a', 'Roberto');
+    fixture.detectChanges();
+
+    const button = fixture.debugElement.query(By.css('[data-test="collision-redirect-a"]'));
+    expect(button).toBeTruthy();
+    button.triggerEventHandler('click', null);
+
+    expect(applySpy).toHaveBeenCalledWith(roberto, a); // explicit source: `a` is the renamed subject
+    expect(nameSubjectSpy).not.toHaveBeenCalled();
+  });
+
+  it('a collision while renaming the currently-kept (target) column redirects that column, not mergeTarget.source', async () => {
+    const alice = makeSubject(1, 'Alice');  // named -> mergeTarget.target (the "keep" subject)
+    const b = makeSubject(2, null);         // unnamed -> mergeTarget.source
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([alice, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const mergeSpy = vi.spyOn(photoService, 'mergeSubjects').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(alice, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // User tries to rename Alice (the target/keep column) to "Roberto" -> collides.
+    await component.onNameCommit('a', 'Roberto');
+    const conflict = component.nameErrorA()!.conflict;
+    await (component as any).applyRedirect(conflict, alice); // Part 2 must pass `alice`, not mergeTarget.source (`b`)
+    await component.confirm();
+
+    // Alice (the one actually renamed) is merged into Roberto; `b` is left completely alone.
+    expect(mergeSpy).toHaveBeenCalledWith(9, 1);
   });
 });
