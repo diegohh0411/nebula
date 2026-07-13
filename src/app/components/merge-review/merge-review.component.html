@@ -83,7 +83,42 @@
               Merge
             </button>
           </div>
+        } @else if (showRedirectPicker()) {
+          <div class="redirect-picker mr-auto" (keydown)="onRedirectKeydown($event)">
+            <input
+              #redirectInput
+              type="text"
+              class="redirect-input"
+              placeholder="Type a name…"
+              [value]="redirectQuery()"
+              (input)="redirectQuery.set($any($event.target).value)"
+              data-test="redirect-input"
+            />
+            <div class="redirect-results">
+              @for (candidate of redirectCandidates(); track candidate.id; let i = $index) {
+                <button
+                  type="button"
+                  class="redirect-result-row"
+                  [class.highlighted]="i === redirectHighlight()"
+                  (click)="pickRedirectCandidate(candidate)"
+                >
+                  <span class="font-medium">{{ candidate.name }}</span>
+                </button>
+              } @empty {
+                <div class="redirect-empty text-sm text-muted-foreground">No matching subjects</div>
+              }
+            </div>
+          </div>
         } @else {
+          @if (!submitting()) {
+            <button
+              class="redirect-link text-sm text-muted-foreground mr-auto"
+              data-test="redirect-link"
+              (click)="openRedirectPicker()"
+            >
+              Merge into someone else…
+            </button>
+          }
           <button
             class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
             cdkFocusInitial

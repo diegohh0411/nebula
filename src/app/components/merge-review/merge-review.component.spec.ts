@@ -450,4 +450,116 @@ describe('MergeReviewComponent', () => {
     expect(component.photosA().map(f => f.face_id)).toEqual([600]); // Carla's faces
     expect(component.photosB().map(f => f.face_id)).toEqual([]);    // B (the real candidate) untouched
   });
+
+  it('shows the "Merge into someone else…" link in the normal footer, hidden while submitting', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    let link = fixture.debugElement.query(By.css('[data-test="redirect-link"]'));
+    expect(link).toBeTruthy();
+
+    component.submitting.set(true);
+    fixture.detectChanges();
+    link = fixture.debugElement.query(By.css('[data-test="redirect-link"]'));
+    expect(link).toBeFalsy();
+  });
+
+  it('redirectCandidates excludes the current source and unnamed subjects, filters by query', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null); // source
+    photoService.subjects.set([
+      a, b,
+      makeSubject(3, null),        // unnamed -> excluded
+      makeSubject(4, 'Roberto'),
+      makeSubject(5, 'Robert Sr.'),
+    ]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    (component as any).redirectQuery.set('rob');
+
+    const names = (component as any).redirectCandidates().map((s: any) => s.name);
+    expect(names).toEqual(['Roberto', 'Robert Sr.']);
+  });
+
+  it('redirectCandidates is empty (not thrown) when query matches nothing', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    photoService.subjects.set([a, b, makeSubject(4, 'Roberto')]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    (component as any).redirectQuery.set('zzz-no-match');
+
+    expect((component as any).redirectCandidates()).toEqual([]);
+  });
+
+  it('Enter on the highlighted candidate calls applyRedirect', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(4, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const applySpy = vi.spyOn(component as any, 'applyRedirect').mockResolvedValue(undefined);
+    (component as any).openRedirectPicker();
+    (component as any).redirectQuery.set('Roberto');
+    (component as any).redirectHighlight.set(0);
+
+    (component as any).onRedirectKeydown({ key: 'Enter', preventDefault: () => {}, stopPropagation: () => {} } as unknown as KeyboardEvent);
+
+    expect(applySpy).toHaveBeenCalledWith(roberto);
+  });
+
+  it('Escape closes the picker without applying a redirect and does not propagate', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    let propagated = false;
+    (component as any).onRedirectKeydown({
+      key: 'Escape',
+      preventDefault: () => {},
+      stopPropagation: () => { propagated = true; },
+    } as unknown as KeyboardEvent);
+
+    expect((component as any).showRedirectPicker()).toBe(false);
+    expect((component as any).targetOverride()).toBeNull();
+    expect(propagated).toBe(true); // confirms stopPropagation was called, not that it reached document
+  });
+
+  it('a real Escape keydown on the rendered redirect input does not close the whole modal', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const closedSpy = vi.fn();
+    component.closed.subscribe(closedSpy);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    (component as any).openRedirectPicker();
+    fixture.detectChanges();
+
+    const input = fixture.debugElement.query(By.css('.redirect-input')).nativeElement as HTMLInputElement;
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    input.dispatchEvent(event);
+    fixture.detectChanges();
+
+    expect((component as any).showRedirectPicker()).toBe(false);
+    expect(closedSpy).not.toHaveBeenCalled(); // the modal itself must still be open
+  });
 });

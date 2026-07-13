@@ -45,6 +45,8 @@ export class MergeReviewComponent {
     this.redirectSource.set(null);
     this.showRedirectPicker.set(false);
     this.redirectColumn.set(null);
+    this.redirectQuery.set('');
+    this.redirectHighlight.set(0);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
@@ -57,6 +59,7 @@ export class MergeReviewComponent {
 
   @ViewChild('colA') colARef?: ElementRef<HTMLElement>;
   @ViewChild('colB') colBRef?: ElementRef<HTMLElement>;
+  @ViewChild('redirectInput') redirectInputRef?: ElementRef<HTMLInputElement>;
 
   private photoService = inject(PhotoService);
 
@@ -73,6 +76,20 @@ export class MergeReviewComponent {
   protected targetOverride = signal<Subject | null>(null);
   protected redirectSource = signal<Subject | null>(null);
   protected redirectColumn = signal<'a' | 'b' | null>(null);
+  protected redirectQuery = signal('');
+  protected redirectHighlight = signal(0);
+
+  protected redirectCandidates = computed<Subject[]>(() => {
+    const query = this.redirectQuery().trim().toLowerCase();
+    const sourceId = this.mergeTarget?.source.id;
+    return this.photoService.subjects().filter((s) => {
+      if (!s.name) return false;
+      if (s.id === sourceId) return false;
+      if (this.targetOverride() && s.id === this.targetOverride()!.id) return false;
+      if (!query) return true;
+      return s.name.toLowerCase().includes(query);
+    });
+  });
 
   protected namesIdentical = computed(() => {
     const a = this.subjectA()?.name?.trim().toLowerCase();
@@ -209,6 +226,36 @@ export class MergeReviewComponent {
     } catch (e) {
       console.error('MergeReview: failed to load redirected subject faces', e);
     }
+  }
+
+  protected openRedirectPicker(): void {
+    this.redirectQuery.set('');
+    this.redirectHighlight.set(0);
+    this.showRedirectPicker.set(true);
+    queueMicrotask(() => this.redirectInputRef?.nativeElement.focus());
+  }
+
+  protected onRedirectKeydown(event: KeyboardEvent): void {
+    const candidates = this.redirectCandidates();
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.redirectHighlight.update((i) => Math.min(i + 1, Math.max(candidates.length - 1, 0)));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      this.redirectHighlight.update((i) => Math.max(i - 1, 0));
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const picked = candidates[this.redirectHighlight()];
+      if (picked) void this.applyRedirect(picked);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation(); // must not bubble to @HostListener('document:keydown.escape')
+      this.showRedirectPicker.set(false);
+    }
+  }
+
+  protected pickRedirectCandidate(subject: Subject): void {
+    void this.applyRedirect(subject);
   }
 
   async confirm() {
