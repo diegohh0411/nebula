@@ -108,7 +108,11 @@ Escape handling today) and is called out here specifically because it is easy to
 
 ### Combobox behavior
 
-- Autofocused text input on entry.
+- Autofocused text input on entry. **Implementation note:** the plain HTML `autofocus`
+  attribute does not reliably focus an element that appears via a structural directive
+  (`@if`) after initial render in most browsers; use a `viewChild` reference to the input and
+  call `.focus()` explicitly (e.g. in an `afterNextRender`/effect triggered by
+  `showRedirectPicker()` becoming true), not the `autofocus` HTML attribute alone.
 - Filters `photoService.subjects()` client-side (no new backend call) to: named subjects
   (`s.name` truthy) whose id is neither the current candidate/source subject's id.
   ("Current candidate/source" = `mergeTarget.source.id` at the moment the picker opens — see
@@ -182,6 +186,20 @@ in place). Instead:
   column and its faces disappear from the merge computation entirely — A is not merged,
   renamed, or touched at all; it simply stops being involved. On confirm, `mergeSubjects(C.id,
   B.id)` runs. A remains exactly as it was before the modal opened.
+- **Reset on a new suggestion.** `MergeReviewComponent` is a single long-lived instance reused
+  across suggestions — confirmed in `people-view.component.html:89-97`
+  (`[suggestion]="reviewingSuggestion()"` on a component that is never destroyed/recreated
+  between reviews). The `suggestion` input setter (`merge-review.component.ts:39-45`) already
+  resets `subjectA`/`subjectB`/photos but does **not** reset any redirect state. Without an
+  explicit reset, confirming a redirect-merge and then advancing to the *next* suggestion
+  leaves `targetOverride`/`redirectSource` set from the previous review: `mergeTarget` (which
+  checks `targetOverride()` first, unconditionally) would silently redirect the brand-new
+  suggestion to the stale target, and one click on "Merge as {stale name}" would merge two
+  subjects that have nothing to do with the suggestion on screen. The `suggestion` setter must
+  additionally reset `targetOverride`, `redirectSource`, `showRedirectPicker`, `redirectQuery`,
+  `redirectGoneError`, and (per the stale-error note below) `nameErrorA`/`nameErrorB` to their
+  initial values every time a new suggestion is assigned, including when a redirect was left
+  active on the previous suggestion.
 - Canceling the picker (`Escape` with nothing selected) leaves `targetOverride` untouched —
   it was never set, so the footer/`mergeTarget` revert to normal automatically (no explicit
   "undo" needed, since nothing was mutated yet).
@@ -192,6 +210,44 @@ in place). Instead:
   still fully intact in `subjectA`/`subjectB` and reopening the modal (close + reopen from
   the suggestions list) is an acceptable way to fully reset. Explicitly out of scope: a
   dedicated "back to original suggestion" button.
+- **Repeated redirects and which photo slot gets reloaded.** Re-picking (the case immediately
+  above) must not re-derive the photo slot from `mergeTarget.target.id` the second time,
+  because once `targetOverride` is already set, `mergeTarget.target.id` is C's id (the
+  *previous* pick), which matches neither `subjectA.id` nor `subjectB.id` — a naive
+  "find the column whose id equals the current target" lookup would fall through to a
+  wrong-column default and clobber the untouched candidate's faces instead of replacing the
+  first pick's faces. The photo slot must be decided **once**, from the *original* (pre-any-
+  redirect) suggestion — i.e. "is the original keep subject `subjectA` or `subjectB`" — and
+  that slot choice must be remembered (e.g. a `redirectColumn: 'a' | 'b'` captured on the
+  first redirect and reused, unchanged, by every subsequent pick in the same modal session)
+  rather than recomputed from the live (already-redirect-aware) `mergeTarget` on each pick.
+- **Column header/name/badge during an active redirect.** The slot that now shows C's faces
+  still renders the *original* keep subject's name via `EditableText` and the `keep` badge
+  check (`mergeTarget?.target?.id === subjectA()?.id`) matches neither column once
+  `targetOverride` is set (C is never `subjectA`/`subjectB`), so the badge silently
+  disappears and the name field silently keeps showing/renaming the bypassed original
+  subject, not C. During an active redirect this display must be redirect-aware: the
+  redirected slot's name must show `targetOverride()!.name` (not the original subject's
+  name), the `keep` badge must render on that slot based on `targetOverride()` being set
+  (not solely the original id comparison), and the header match-% chip must be hidden or
+  relabeled ("manual reassignment") as already specified above. **Accepted trade-off:**
+  wiring the redirected slot's rename control to actually target `C` is deferred past v1 —
+  `onNameCommit` continues to resolve the subject from `subjectA()`/`subjectB()` as it does
+  today, so committing a rename on the redirected slot while a redirect is active still
+  renames the bypassed original subject under the hood, even though the *displayed* name now
+  reads as `C`'s. This is a narrow edge case (the user would have to type into a name field
+  mid-redirect rather than just click "Merge as {C.name}"), and treating it as v1-safe
+  requires only that the display (name text, keep badge, score chip) is corrected — not that
+  the rename control itself is retargeted.
+- **The merge-confirmation animation is skipped during a redirect.** `runMergeAnimation`
+  determines the source/target columns via `target.target.id === this._suggestion!.subject_a.id`
+  — after a redirect this is always false (C is never `subject_a`), so the fade/scale
+  animation would run against the wrong DOM columns (animating as if the redirected slot
+  were the *source* fading out, when it is in fact the new target). Rather than reimplement
+  column-mapping logic for the animation, `runMergeAnimation` should short-circuit and skip
+  the animation entirely whenever `targetOverride()` is set — an accepted v1 simplification,
+  not a fix of the general column-mapping problem (out of scope: animating a redirect-merge
+  is deferred past v1).
 
 ### Edge case — the picked subject (C) is deleted mid-flow
 
@@ -217,7 +273,8 @@ explicitly out of scope per the task.
 
 ## Part 2 — Upgrade the name-collision error into a second entry point
 
-Change the Case 3 block in `onNameCommit` (`merge-review.component.ts:111-124`) from a
+Change the Case 3 block in `onNameCommit` (the `if (typed) { ... }` block inside the method
+spanning `merge-review.component.ts:100-132`, itself at lines `111-124`) from a
 blocking dead-end into an actionable inline prompt. Today: sets `nameErrorA`/`nameErrorB` to a
 plain string and returns. New: the error slot becomes a small structured object instead of a
 plain string —
@@ -237,6 +294,23 @@ second caller of the same "apply redirect" method. Because `onNameCommit` alread
 `conflict` (the colliding subject) to look up the error message, no additional
 `photoService.subjects()` lookup is needed at click time — the conflict subject object is
 already in hand and stored on the error signal itself.
+
+**Which subject is the redirect `source` for this entry point?** This is *not* necessarily
+`mergeTarget.source` at click time, and reusing Part 1's pick logic verbatim (which always
+takes `mergeTarget.source` as the thing being redirected) is wrong here. A name collision can
+happen while renaming **either** column — including the current `mergeTarget.target` (the
+"keep" subject), not only the candidate. The subject that must become the redirect's source
+is whichever subject the user was actually typing the colliding name into (i.e. the `subject`
+resolved at the top of `onNameCommit`, the same one `conflict` was checked against) —
+*regardless* of whether that subject is currently `mergeTarget.target` or `mergeTarget.source`.
+Concretely: the shared "apply redirect" method must accept the source subject explicitly as a
+parameter for this entry point (`applyRedirect(picked, explicitSource)`), rather than reading
+`mergeTarget.source` internally, because by the time the button is clicked the renamed subject
+may be the one currently occupying the *target* slot. Passing the wrong one silently merges an
+unrelated, untouched subject into C while leaving the subject the user was actually referring
+to as "Roberto" untouched — the opposite of what the user asked for. Part 1's picker keeps its
+existing default behavior (source = `mergeTarget.source`, since there the redirect always
+targets the non-keep candidate slot); only Part 2's caller needs to pass the explicit override.
 
 The blocked rename itself is **not** retried or auto-applied — the user was trying to rename
 the candidate to "Roberto", which is now moot once the whole candidate is being merged into
@@ -293,6 +367,30 @@ Extend `merge-review.component.spec.ts`:
 - **Deleted-target guard:** with `targetOverride` set to a subject no longer present in
   `photoService.subjects()` at confirm time, `confirm()` shows the inline "no longer
   available" error and reopens the picker instead of calling `mergeSubjects`.
+- **State resets on a new suggestion:** with a redirect active (`targetOverride` set,
+  `showRedirectPicker` possibly true), assigning a *new* `suggestion` input value resets
+  `targetOverride`/`redirectSource`/`showRedirectPicker`/`redirectQuery`/`redirectGoneError`/
+  `nameErrorA`/`nameErrorB` to their initial (unset) values — `mergeTarget` for the new
+  suggestion reflects only the new `subjectA`/`subjectB`, never a stale override.
+- **Repeated redirect does not corrupt the untouched column:** with a redirect already active
+  (picked C once), picking a *second* subject D reloads D's faces into the same column that
+  showed C's faces (not the column that has held the original candidate's faces all along) —
+  assert via `photoService.getSubjectPhotosWithFaces` being called with D's id and the
+  untouched column's photos signal being unchanged from its pre-redirect value.
+- **Part 2 redirects the subject actually being renamed, not always the non-target one:**
+  with a suggestion where the *target* (keep) subject is the one whose rename collides with a
+  third subject, clicking "[Merge into {name}]" results in `confirm()` calling
+  `mergeSubjects(conflictId, originalTargetId)` — i.e. the subject who was being renamed is
+  the one merged into the conflict, not `mergeTarget.source` from before the redirect.
+- **Name-collision entry point exercised through the template, not by calling the redirect
+  method directly:** the collision-button test must render the component, trigger the
+  collision via a simulated name-commit event, query the rendered "[Merge into {name}]"
+  button in the DOM, and dispatch a click on it — a test that calls `component.applyRedirect(...)`
+  itself instead of clicking the rendered button would pass even if the button were never
+  wired to anything in the template, and does not prove Part 2's UI entry point works.
+- **Stale collision error is cleared by a redirect:** after a redirect is applied (either
+  entry point), `nameErrorA`/`nameErrorB` for the affected column is cleared — a leftover
+  "already exists" message must not persist beside a column that is now merging.
 
 ## Out of scope
 
@@ -305,3 +403,27 @@ Extend `merge-review.component.spec.ts`:
 - Drag-and-drop or a browse-grid alternative to the typeahead (rejected in the original design
   brief: no natural drop target in this modal, and typeahead better matches the "I already
   know the name" premise of this action).
+- **Accepted trade-off — the redirect *source* (B) being deleted/renamed mid-flow is not
+  guarded.** The Deleted-target-guard above only re-checks `targetOverride` (C) at confirm
+  time; it does not re-check `redirectSource` (B). A concurrent deletion of B is a narrower
+  window (B is actively on screen, mid-review, versus C which the user may not have looked at
+  since picking it) and follows the same latent "no backend existence check" gap already
+  called out for C. Treated as out of scope for the same reason: a real fix needs a backend
+  existence check, which this task explicitly does not include.
+- **Accepted trade-off — the guardrail that the redirect path never calls
+  `dismissMergeSuggestion` (Part 3 / Testing) only covers `MergeReviewComponent` itself.** It
+  does not extend to any parent container's post-confirm handling (e.g. `people-view`'s
+  `(confirmed)` handler) that could independently decide to call `dismissMergeSuggestion` as
+  a "cleanup" step for the bypassed A/B suggestion. Verified: no such call exists in
+  `people-view` today, and none is being added by this task, so there is nothing for the
+  guardrail to miss right now — but a future change to the parent's `(confirmed)` handler
+  would not be caught by this component-level test. Not extending the guardrail to the parent
+  is accepted because the parent's handler is out of this task's file map entirely.
+- **Accepted trade-off — animating a redirect-merge is not implemented; the animation is
+  skipped for a redirected confirm** (see Data flow, "the merge-confirmation animation is
+  skipped during a redirect"). Building correct column-mapping for the animation after a
+  redirect is deferred past v1.
+- **Accepted trade-off — renaming the redirected slot mid-redirect still renames the bypassed
+  original subject, not `C`**, even though the display is corrected to show `C`'s name (see
+  Part 1, "Column header/name/badge during an active redirect"). Retargeting the rename
+  control itself is deferred past v1.
