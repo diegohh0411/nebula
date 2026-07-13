@@ -599,4 +599,36 @@ describe('MergeReviewComponent', () => {
 
     expect((component as any).redirectAvatarUrls().get(4) ?? null).toBeNull();
   });
+
+  it('the redirected column shows the picked subject\'s name and keep badge, not the original subject\'s', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    await (component as any).applyRedirect(roberto); // redirects column A (Alice's original slot)
+    fixture.detectChanges();
+
+    const colA = fixture.debugElement.query(By.css('.subject-col'));
+    expect(colA.nativeElement.textContent).toContain('Roberto');
+    expect(colA.nativeElement.textContent).not.toContain('Alice');
+    expect(colA.query(By.css('.keep-badge'))).toBeTruthy();
+  });
+
+  it('the header match-% chip is hidden or relabeled once a redirect is active', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    await (component as any).applyRedirect(roberto);
+    fixture.detectChanges();
+
+    const chip = fixture.debugElement.query(By.css('[data-test="match-score-chip"]'));
+    expect(chip.nativeElement.textContent).not.toContain('%');
+  });
 });

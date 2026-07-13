@@ -129,6 +129,21 @@ export class MergeReviewComponent {
   /** The duplicate-name nudge pulses the Merge button, but not when the user prefers reduced motion. */
   protected shouldPulse = computed(() => this.namesIdentical() && !prefersReducedMotion());
 
+  /** Display name for a column, accounting for an active redirect into this slot. */
+  protected columnDisplayName(which: 'a' | 'b'): string | null {
+    if (this.targetOverride() && this.redirectColumn() === which) {
+      return this.targetOverride()!.name;
+    }
+    return which === 'a' ? this.subjectA()?.name ?? null : this.subjectB()?.name ?? null;
+  }
+
+  /** Whether the `keep` badge belongs on this column, accounting for an active redirect. */
+  protected columnIsKeep(which: 'a' | 'b'): boolean {
+    if (this.targetOverride()) return this.redirectColumn() === which;
+    const id = which === 'a' ? this.subjectA()?.id : this.subjectB()?.id;
+    return this.mergeTarget?.target?.id === id;
+  }
+
   get mergeTarget(): MergeTarget | null {
     const override = this.targetOverride();
     if (override) {
