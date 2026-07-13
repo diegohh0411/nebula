@@ -76,14 +76,45 @@ AND NOT EXISTS (
 )
 ```
 
-This is placed inside the existing `WHERE` clause of the aggregate query (correlated
-to the per-row `f1`/`f2` subject ids, evaluated per group since `subject_id` is
-constant within a `GROUP BY` group). `source = 'dismiss'` is required: `cannot_link`
-rows are also written with `source = 'removal'` (face-removal-from-subject flow,
-repo.rs:722-737, called from commands.rs:262 and clustering.rs:911) and with those
-semantics a removal constraint pins a *specific* face out of a subject — it must not
-be allowed to suppress a same-named-subject merge suggestion between two otherwise
-unrelated subjects that happen to share that one forbidden face pair.
+This is placed inside the existing `WHERE` clause of the aggregate query. `WHERE` is
+evaluated per input row, *before* `GROUP BY` collapses rows into groups — the clause
+is correct not because `subject_id` is "constant within a group" at evaluation time,
+but because the predicate's truth value happens to be identical across every row that
+would land in the same group, so filtering row-by-row and then grouping produces the
+same result as filtering whole groups. (This is a different — and non-hazardous —
+situation from bare, non-aggregated columns appearing in the `SELECT` list of a
+`GROUP BY` query, where SQLite's "pick an arbitrary row per group" behavior actually
+matters; that hazard doesn't apply here since this is a `WHERE`-clause predicate, not
+a selected value.)
+
+`source = 'dismiss'` is required: `cannot_link` rows are also written with
+`source = 'removal'` (face-removal-from-subject flow, repo.rs:722-737, called from
+commands.rs:262 and clustering.rs:911) and with those semantics a removal constraint
+pins a *specific* face out of a subject — it must not be allowed to suppress a
+same-named-subject merge suggestion between two otherwise unrelated subjects that
+happen to share that one forbidden face pair.
+
+**Known trade-off, accepted as in-scope for this fix:** the new check keys off each
+constrained face's *current* `subject_id`, which is exactly what makes it survive
+subject-id churn — but it also means that if a face involved in a `'dismiss'`
+constraint later migrates (via reclustering) into a *different* subject than the one
+it was dismissed against, the surviving constraint will suppress a suggestion between
+the new subject pair that the user never actually dismissed. This is judged
+acceptable: false-suppression of an occasional merge suggestion is a much smaller cost
+than the current bug (a dismissal that doesn't stick at all), and the user can still
+merge manually if a suppressed pair should in fact be merged. Not fixed here; flag if
+it becomes a reported problem in practice.
+
+**Known interaction with manual merges, accepted as in-scope for this fix:**
+`merge_subjects` (repo.rs:473-558) does not delete any `source = 'dismiss'`
+`cannot_link` rows between the two subjects being merged — it only ever *adds*
+`must_link` rows and lets `build_components_with_constraints` (clustering.rs:268-278,
+286-294) resolve the resulting contradiction in `must_link`'s favor (with a `warn!`
+log). This was already true before this fix for the single dismiss-sourced pair;
+Change 2 makes it true for up to 9 pairs instead of 1. Functionally harmless
+(`must_link` always wins), just noisier in logs. Not fixed here — a follow-up could
+have `merge_subjects` delete `source = 'dismiss'` constraints between the merged face
+sets as part of its existing transaction.
 
 Keep the existing per-edge `cannot_link` check (lines 510-515) and the existing
 `dismissed_pairs` check (lines 526-535) as-is — both are cheap and remain correct for
@@ -102,9 +133,10 @@ This closes both failure paths:
 ### Change 2 — harden the constraint write in `dismiss_merge_suggestion` (`repo.rs:603-619`)
 
 Replace the `LIMIT 1`, no-`ORDER BY` representative-face selection with a small
-deterministic set: up to 3 representative faces per side, preferring the subject's
-`thumbnail_face_id` first, then `ORDER BY id LIMIT 3` for the rest, writing up to
-3 × 3 = 9 `cannot_link` rows (one per cross pair), via the existing
+deterministic set: up to 3 representative faces per side total — the subject's
+`thumbnail_face_id` if set, plus enough lowest-`id` faces (`ORDER BY id`) to fill the
+remaining slots up to 3 — writing up to 3 × 3 = 9 `cannot_link` rows (one per cross
+pair, fewer if either side has under 3 faces), via the existing
 `repo::add_cannot_link(pool, face_a, face_b, "dismiss")` helper (repo.rs:722-737),
 which already handles pair ordering and dedup (`INSERT OR IGNORE`).
 
@@ -123,6 +155,26 @@ Selection order — prefer `thumbnail_face_id` first, then lowest `id`s — is c
 because the thumbnail face is the one most likely to persist (subjects already prefer
 never clearing an existing thumbnail, per `upgrade_subject_thumbnails`, repo.rs:373-405)
 and is deterministic, which keeps the write idempotent and testable.
+
+**Known edge case, pre-existing and not introduced by this fix:** `constraints`'
+primary key is `(face_a, face_b, kind)` — `source` is not part of the key
+(db/mod.rs:156-163) — and `add_cannot_link` writes via `INSERT OR IGNORE`. If a
+representative face pair already has a `cannot_link` row from `source = 'removal'`
+(written by the face-removal flow, repo.rs:722-737 / commands.rs:262 /
+clustering.rs:911), the dismiss-time insert for that exact pair is silently a no-op
+and the row keeps `source = 'removal'` — Change 1's new subject-scoped check only
+matches `source = 'dismiss'`, so that particular pair does not count toward
+suppression (though the existing per-edge check at lines 510-515, which has no
+`source` filter, still suppresses that specific face pair regardless). This was
+already true pre-fix for the single `LIMIT 1` pair; Change 2 only reduces the odds of
+it mattering, by giving each dismissal up to 9 chances instead of 1 to land a
+`source = 'dismiss'` row that survives id churn. It is not fully eliminated. Considered
+acceptable for this fix (the collision requires a fairly specific prior-removal
+history on the exact representative faces chosen), but flag as a candidate follow-up
+if dismissals are observed not to stick even after this fix ships — the fix would be
+to check for an existing `cannot_link` row (any source) before insert and, if found,
+leave a `source = 'dismiss'` marker via a secondary mechanism rather than relying on
+`INSERT OR IGNORE`'s silent no-op.
 
 ### Change 3 — leave `dismissed_pairs` and its CASCADE as-is
 
@@ -178,25 +230,36 @@ Both new tests belong in `src-tauri/src/people/clustering.rs`'s existing `#[cfg(
 mod tests`, using the `make_integration_pool()` helper (clustering.rs:834-851) and
 following the pattern of the existing `graph_suggestions_skipped_for_cannot_link_pair`
 test (clustering.rs ~1103-1157), rather than in `src-tauri/src/db/tests.rs`.
-Rationale: `find_merge_suggestions` and reclustering require `face_edges`,
-`face_vectors` (the `vec0` virtual table, needing `ensure_sqlite_vec_registered()`),
-and `constraints` wired together, plus the `clustering` module's own functions in
-scope — infrastructure that `make_integration_pool` already provides and
-`db/tests.rs`'s pools do not (its `make_merge_pool`/`make_dismissal_pool` have no
-`face_vectors`/`face_edges` tables and the module doesn't import `clustering::*`).
+Rationale: `find_merge_suggestions` itself only touches `face_edges`, `faces`,
+`subjects`, `constraints`, `dismissed_pairs`, and `merge_suggestions` — it does not
+require `face_vectors` directly. But `db/tests.rs`'s pools (`make_merge_pool` /
+`make_dismissal_pool`) don't create a `face_edges` table at all, and the module
+doesn't import anything from `clustering::*` (so `find_merge_suggestions` isn't even
+callable from there without adding imports). `make_integration_pool` already wires up
+`face_edges`, `constraints`, `dismissed_pairs`, and `merge_suggestions` together
+correctly, plus `face_vectors`/`ensure_sqlite_vec_registered()` for the tests in that
+module that also exercise reclustering — so it's the natural fixture to extend even
+though these two specific new tests don't need the vector table.
 `db/tests.rs`'s existing `dismiss_persists_pair_in_dismissed_pairs` test only exercises
 the `dismissed_pairs` write in isolation via `people::repo::dismiss_merge_suggestion`,
 which remains valid and unchanged by this fix (Change 2 only alters representative-face
 selection, not the `dismissed_pairs` write path).
 
-1. **`suggestion_not_resurfaced_after_subject_id_churn`**: Dismiss a pair (insert
-   `dismissed_pairs` row + `cannot_link` constraint(s) directly, or call
-   `people::repo::dismiss_merge_suggestion`), then simulate id churn by deleting the
-   unnamed subject row and re-inserting a new subject with a new id, re-pointing the
-   same face(s) to it (mirrors what `relabel_from_edges` does when a cluster shifts:
-   old subject deleted via `delete_subjects_with_no_faces`, new subject created via
-   `insert_subject` + `update_face_subject`). Run `find_merge_suggestions`. Assert no
-   suggestion row exists for the new subject id paired with the other side.
+1. **`suggestion_not_resurfaced_after_subject_id_churn`**: Dismiss a pair where the
+   churned side has **two** faces — one that received the `source='dismiss'`
+   `cannot_link` (call it `f1`), one that didn't (`f1b`). Simulate id churn by
+   deleting the unnamed subject row and re-inserting a new subject with a new id,
+   re-pointing **both** `f1` and `f1b` to it (mirrors what `relabel_from_edges` does
+   when a cluster shifts: old subject deleted via `delete_subjects_with_no_faces`,
+   new subject created via `insert_subject` + `update_face_subject` for all faces in
+   the shifted cluster). Add the *candidate* `face_edges` row on `(fa, f1b)` — the
+   unconstrained pair — not on `(fa, f1)`. This matters: if the candidate edge were on
+   the exact constrained pair `(fa, f1)`, the pre-existing per-edge `NOT EXISTS` check
+   (lines 510-515, which has no `source` filter) would already suppress it, and the
+   test would pass even without Change 1 — failing to actually exercise the new
+   subject-scoped check, and failing the TDD "must fail before the fix" gate. Run
+   `find_merge_suggestions`. Assert no suggestion row exists for the new subject id
+   paired with the other side.
 2. **`suggestion_not_resurfaced_after_new_face_added`**: Dismiss a pair (representative
    faces get `cannot_link`), then insert a *new* face into one of the two subjects with
    a `face_edges` row connecting it to a face on the other subject (a fresh candidate
@@ -224,3 +287,32 @@ selection, not the `dismissed_pairs` write path).
 - Terminology check: "subject" vs "face" vs "constraint" used consistently with their
   meaning in the codebase (subject = person entity, face = detected face row, faces
   carry `subject_id`, constraints are face-keyed).
+
+**Second review pass (independent model, Fable):** this spec and the companion plan
+were sent for an independent adversarial review against the current worktree. Findings
+incorporated into this revision:
+- **Blocking, fixed:** the id-churn test's originally-proposed fixture put the
+  candidate `face_edges` row on the exact already-constrained face pair, which the
+  pre-existing per-edge check already suppresses pre-fix — the test would never have
+  failed before the fix, breaking the TDD gate and not actually exercising Change 1.
+  Corrected above (churned side now has a second, unconstrained face; the candidate
+  edge connects to that one instead).
+- **Should-fix, documented above (not code-changed, by design of this being a spec, not
+  an implementation):** the `source='removal'`-vs-`source='dismiss'` PK-collision edge
+  case in Change 2 (see "Known edge case" under Change 2); the face-migration
+  false-suppression trade-off and the stale-dismiss-constraint-after-manual-merge
+  interaction (both under Change 1).
+- **Nitpicks, fixed:** corrected the `WHERE`-vs-`GROUP BY` evaluation-order explanation
+  under Change 1 (the original phrasing was technically backwards, though the SQL
+  itself was always correct); corrected the "3 × 3" face-count wording under Change 2
+  to make clear the cap is 3 total per side (thumbnail + up to 2 more), not thumbnail
+  plus 3; corrected the overstated claim that `find_merge_suggestions` itself requires
+  `face_vectors` (it doesn't — `make_integration_pool` is still the right fixture, but
+  for different reasons, now stated accurately).
+- One should-fix item flagged by the reviewer as a performance question (cost of the
+  new correlated `NOT EXISTS` at scale) is noted here rather than resolved: neither
+  `constraints` nor the new query path has an index on `(kind, source)`, only the
+  existing PK `(face_a, face_b, kind)`. Likely fine for a background/idle pass at
+  current expected data volumes, but worth a `cargo test`-adjacent timing check or an
+  `EXPLAIN QUERY PLAN` look during implementation if `constraints` has grown large in
+  practice; not blocking for writing the spec/plan.

@@ -18,6 +18,20 @@ directly, consistent with how that function already works) and
 **Tech stack:** Rust, `sqlx` (SQLite), `tokio::test` for async tests, existing
 in-memory-SQLite test-pool helpers (`make_integration_pool` in clustering.rs).
 
+**Review note:** this plan (and its companion spec) was sent for an independent
+adversarial review (Fable) after the first draft. That review caught a blocking
+defect in Task 1's original Test A fixture — the candidate `face_edges` row was
+placed on the exact already-constrained face pair, which the pre-existing per-edge
+`NOT EXISTS` check suppresses regardless of this fix, so the test would never have
+failed pre-fix and wouldn't have exercised Change 1 at all. Task 1 Step 1 below is
+already corrected to require a second, unconstrained face on the churned side. Task 2
+Step 1 is corrected similarly (S4: the original fixture didn't force the
+thumbnail-preference branch to matter). See the spec's "Self-review notes" section
+for the full list of findings from that pass, including should-fix items recorded as
+accepted trade-offs rather than code changes (face-migration false-suppression,
+`source='removal'` PK-collision edge case, stale dismiss-constraints surviving a
+later manual merge).
+
 ## Global constraints
 
 - No schema/migration changes — both changes operate on the existing `constraints`
@@ -68,25 +82,42 @@ pair generated the candidate edge.
   they share its `make_integration_pool()` fixture pattern:
 
   **Test A — `suggestion_not_resurfaced_after_subject_id_churn`:**
+
+  *Caution (caught in review — get this right or the test is a no-op):* the churned
+  side must end up with **two** faces after churn — one that carries the
+  `source='dismiss'` `cannot_link`, and a second, unconstrained one that the
+  candidate `face_edges` row connects to. If the candidate edge instead connects the
+  exact already-constrained face pair, the pre-existing per-edge `NOT EXISTS` check
+  (clustering.rs:510-515, which has no `source` filter) already suppresses it today —
+  the test would pass before Change 1 is implemented, silently skipping the TDD
+  "must fail first" gate and never actually exercising the new subject-scoped check.
+
   1. Create subjects `alice` (named) and `unnamed1` (unnamed, `name = NULL`).
-  2. Insert one face on each (`fa` on alice, `f1` on unnamed1), each with a
-     `face_vectors` row (reuse the `emb_bytes` helper already in this test module).
-  3. Insert a `cannot_link` constraint `(fa, f1, 'cannot_link', 'dismiss')` via
+  2. Insert **two** faces on `unnamed1`: `f1` and `f1b`. Insert one face `fa` on
+     `alice`. Give `fa` and `f1` `face_vectors` rows (reuse the `emb_bytes` helper
+     already in this test module) — `f1b` doesn't need one, it's never scored by KNN
+     in this test, only referenced by id.
+  3. Insert a `cannot_link` constraint on `(fa, f1, 'dismiss')` via
      `crate::people::repo::add_cannot_link(&pool, fa, f1, "dismiss")` — this simulates
-     the state left behind by a prior dismissal.
-  4. Simulate id churn: delete `unnamed1` from `subjects` (its face `f1` gets
-     `subject_id` set to NULL by the schema's `ON DELETE SET NULL`, mirroring what a
-     real cascade-free subject delete does), then insert a **new** subject
-     `unnamed2` and re-point `f1`'s `subject_id` to it directly with an `UPDATE`
-     (mirrors `relabel_from_edges`'s `LabelAction::NewSubject` path re-assigning an
-     existing face to a freshly `insert_subject`-ed row).
-  5. Insert a `face_edges` row `(fa, f1, weight)` (or whichever face-id order the
-     table's `PRIMARY KEY (face_a, face_b)` expects — check existing test inserts for
-     the convention) so the pair is a live candidate for `find_merge_suggestions`.
+     the state left behind by a prior dismissal. Deliberately do **not** constrain
+     `(fa, f1b)`.
+  4. Simulate id churn: delete `unnamed1` from `subjects` (its faces get
+     `subject_id` set to NULL by the schema's `ON DELETE SET NULL` — note this is a
+     simplification for test setup, not a literal replay of `relabel_from_edges`,
+     which re-points faces to the new subject directly without an intermediate NULL
+     state; the two converge to the same final DB row values, which is all
+     `find_merge_suggestions` reads), then insert a **new** subject `unnamed2` and
+     `UPDATE faces SET subject_id = ? WHERE id IN (f1, f1b)` to point **both** faces
+     at it (mirrors the net effect of `relabel_from_edges`'s `LabelAction::NewSubject`
+     path re-assigning a shifted cluster's faces to a freshly `insert_subject`-ed row).
+  5. Insert a `face_edges` row on `(fa, f1b)` — the **unconstrained** pair — not
+     `(fa, f1)` (see caution above). Check existing test inserts in this file for the
+     face-id ordering the table's `PRIMARY KEY (face_a, face_b)` expects.
   6. Call `find_merge_suggestions(&pool).await.unwrap()`.
   7. Assert `SELECT COUNT(*) FROM merge_suggestions` is `0` — the pair must not
-     resurface even though `f1` now lives under `unnamed2`'s new id and
-     `dismissed_pairs` has no row naming `unnamed2`.
+     resurface even though the live candidate edge is between `fa` and a face
+     (`f1b`) that was never directly constrained, `f1`/`f1b` now live under
+     `unnamed2`'s new id, and `dismissed_pairs` has no row naming `unnamed2`.
 
   **Test B — `suggestion_not_resurfaced_after_new_face_added`:**
   1. Create subjects `alice` (named) and `bob` (named), each with one face
@@ -162,16 +193,24 @@ first, then lowest ids), writing up to 9 pairwise `cannot_link` rows via
   **Test — `dismiss_writes_multiple_representative_cannot_links`:**
   1. Create subjects `alice`, `bob`.
   2. Insert 4 faces under `alice` (so the 3-face cap is actually exercised) and 2
-     faces under `bob`, with distinct `id`s (rely on `AUTOINCREMENT` ordering) and
-     one of alice's faces set as `alice`'s `thumbnail_face_id`.
+     faces under `bob`, with distinct `id`s (rely on `AUTOINCREMENT` ordering).
+     Critically, set `alice.thumbnail_face_id` to alice's **4th / highest-id** face,
+     not one of the lowest 3. If the thumbnail happens to already be one of the
+     lowest-3-by-id faces, a plain `ORDER BY id LIMIT 3` would select it anyway and
+     the "thumbnail preferred" assertion below would pass even against an
+     implementation that never reads `thumbnail_face_id` at all — so the fixture only
+     pins down the selection logic if the thumbnail face is one that `ORDER BY id
+     LIMIT 3` alone would otherwise have excluded.
   3. Insert a `merge_suggestions` row for `(alice, bob)`.
   4. Call `dismiss_merge_suggestion(&pool, suggestion_id).await.unwrap()`.
   5. Assert `SELECT COUNT(*) FROM constraints WHERE kind='cannot_link' AND
-     source='dismiss'` is `<= 9` and `> 1` (specifically: `3 faces-of-alice × 2
-     faces-of-bob = 6`, since bob only has 2 faces — assert the exact expected count
-     for the fixture, not just a range, so the test pins down the selection logic).
-  6. Assert the row set includes a pair containing alice's `thumbnail_face_id` (the
-     preferred face was actually selected, not skipped).
+     source='dismiss'` is exactly `6` (`3 faces-of-alice × 2 faces-of-bob`, since bob
+     only has 2 faces) — not just a range, so the test pins down the selection logic.
+  6. Assert the row set includes a pair containing alice's `thumbnail_face_id`
+     (proves the thumbnail was actually selected despite not being in the
+     lowest-3-by-id set) **and** assert the row set does *not* contain alice's
+     3rd-lowest-id face (proves the thumbnail displaced it rather than the
+     implementation just taking the 3 lowest ids regardless of thumbnail).
 
   Run the test, confirm it fails against the current `LIMIT 1` implementation (should
   see `COUNT = 1`, not the expected `6`).
