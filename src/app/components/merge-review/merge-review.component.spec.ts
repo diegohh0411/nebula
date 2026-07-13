@@ -102,6 +102,45 @@ describe('MergeReviewComponent', () => {
     expect(component.mergeTarget).toEqual({ target: a, source: b });
   });
 
+  it('mergeTarget uses targetOverride/redirectSource when a redirect is active', () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    component.suggestion = makeSuggestion(a, b); // normally: target=a, source=b
+
+    const roberto = makeSubject(99, 'Roberto');
+    (component as any).targetOverride.set(roberto);
+    (component as any).redirectSource.set(b);
+
+    expect(component.mergeTarget).toEqual({ target: roberto, source: b });
+  });
+
+  it('mergeTarget falls back to normal tiebreak when targetOverride is null', () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    component.suggestion = makeSuggestion(a, b);
+
+    expect((component as any).targetOverride()).toBeNull();
+    expect(component.mergeTarget).toEqual({ target: a, source: b });
+  });
+
+  it('assigning a new suggestion resets an active redirect from the previous suggestion', () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    component.suggestion = makeSuggestion(a, b);
+
+    const roberto = makeSubject(99, 'Roberto');
+    (component as any).targetOverride.set(roberto);
+    (component as any).redirectSource.set(b);
+
+    const c = makeSubject(3, 'Cara');
+    const d = makeSubject(4, null);
+    component.suggestion = makeSuggestion(c, d); // simulates advancing to the next review
+
+    expect((component as any).targetOverride()).toBeNull();
+    expect((component as any).redirectSource()).toBeNull();
+    expect(component.mergeTarget).toEqual({ target: c, source: d }); // not the stale Roberto
+  });
+
   it('marks only the source subject\'s grid as removable', async () => {
     const subA = makeSubject(1, 'Alice'); // named -> target
     const subB = makeSubject(2, null);    // unnamed -> source

@@ -41,6 +41,9 @@ export class MergeReviewComponent {
     this._suggestion = value;
     this.subjectA.set(value?.subject_a ?? null);
     this.subjectB.set(value?.subject_b ?? null);
+    this.targetOverride.set(null);
+    this.redirectSource.set(null);
+    this.showRedirectPicker.set(false);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
@@ -65,6 +68,9 @@ export class MergeReviewComponent {
   protected nameErrorA = signal<string | null>(null);
   protected nameErrorB = signal<string | null>(null);
   protected showExitConfirm = signal(false);
+  protected showRedirectPicker = signal(false);
+  protected targetOverride = signal<Subject | null>(null);
+  protected redirectSource = signal<Subject | null>(null);
 
   protected namesIdentical = computed(() => {
     const a = this.subjectA()?.name?.trim().toLowerCase();
@@ -76,6 +82,12 @@ export class MergeReviewComponent {
   protected shouldPulse = computed(() => this.namesIdentical() && !prefersReducedMotion());
 
   get mergeTarget(): MergeTarget | null {
+    const override = this.targetOverride();
+    if (override) {
+      const source = this.redirectSource();
+      if (!source) return null;
+      return { target: override, source };
+    }
     const subjectA = this.subjectA();
     const subjectB = this.subjectB();
     if (!subjectA || !subjectB) return null;
