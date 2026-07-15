@@ -120,7 +120,7 @@
               class="redirect-input"
               placeholder="Type a name…"
               [value]="redirectQuery()"
-              (input)="redirectQuery.set($any($event.target).value)"
+              (input)="onRedirectQueryInput($any($event.target).value)"
               data-test="redirect-input"
             />
             <div class="redirect-results">

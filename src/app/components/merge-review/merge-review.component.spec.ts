@@ -451,6 +451,67 @@ describe('MergeReviewComponent', () => {
     expect(component.photosB().map(f => f.face_id)).toEqual([]);    // B (the real candidate) untouched
   });
 
+  it('a collision-redirect on the kept column loads the target into the OTHER column, keeping the source visible', async () => {
+    const alice = makeSubject(1, 'Alice');    // named, lower id -> kept/target, column A
+    const bianca = makeSubject(2, 'Bianca');  // named -> mergeTarget.source, column B
+    const roberto = makeSubject(9, 'Roberto');
+
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockImplementation(async (id: number) => {
+      if (id === 1) return [makePhoto(100)]; // Alice
+      if (id === 2) return [makePhoto(200)]; // Bianca
+      if (id === 9) return [makePhoto(900)]; // Roberto
+      return [];
+    });
+    component.suggestion = makeSuggestion(alice, bianca);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Rename the kept column (Alice) to an existing subject -> redirect Alice into Roberto.
+    await (component as any).applyRedirect(roberto, alice);
+
+    // The source (Alice) keeps her own column A with her faces; the target (Roberto) replaces
+    // the bystander column B. Bianca is no longer shown, because she is not part of this merge.
+    expect(component.photosA().map(f => f.face_id)).toEqual([100]); // Alice, unchanged
+    expect(component.photosB().map(f => f.face_id)).toEqual([900]); // Roberto, replaced Bianca
+    expect((component as any).columnDisplayName('a')).toBe('Alice');
+    expect((component as any).columnDisplayName('b')).toBe('Roberto');
+    expect((component as any).columnIsKeep('a')).toBe(false);
+    expect((component as any).columnIsKeep('b')).toBe(true); // the keep badge sits on the target
+    // The merge itself is Alice -> Roberto; Bianca is left completely alone.
+    expect(component.mergeTarget).toEqual({ target: roberto, source: alice });
+  });
+
+  it('redirectCandidates never offers the subject currently being kept', async () => {
+    const alice = makeSubject(1, 'Alice');    // kept/target
+    const bianca = makeSubject(2, 'Bianca');  // source
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([alice, bianca, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(alice, bianca);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const ids = (component as any).redirectCandidates().map((s: Subject) => s.id);
+    expect(ids).not.toContain(1); // Alice, the kept target, must not be a redirect candidate
+    expect(ids).not.toContain(2); // Bianca, the source, is excluded as before
+    expect(ids).toEqual([9]);     // only the genuine third subject remains
+  });
+
+  it('typing in the redirect filter resets the highlight to the top', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    photoService.subjects.set([a, b, makeSubject(9, 'Roberto'), makeSubject(10, 'Rosa')]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    (component as any).openRedirectPicker();
+    (component as any).redirectHighlight.set(1); // user had arrowed down
+
+    (component as any).onRedirectQueryInput('ros'); // narrows the list to one row
+
+    expect((component as any).redirectQuery()).toBe('ros');
+    expect((component as any).redirectHighlight()).toBe(0);
+  });
+
   it('shows the "Merge into someone else…" link in the normal footer, hidden while submitting', async () => {
     const a = makeSubject(1, 'Alice');
     const b = makeSubject(2, null);

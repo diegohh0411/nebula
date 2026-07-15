@@ -86,11 +86,13 @@ export class MergeReviewComponent {
 
   protected redirectCandidates = computed<Subject[]>(() => {
     const query = this.redirectQuery().trim().toLowerCase();
-    const sourceId = this.mergeTarget?.source.id;
+    const merge = this.mergeTarget;
+    const sourceId = merge?.source.id;
+    const targetId = merge?.target.id; // the subject currently being kept (override when a redirect is active)
     return this.photoService.subjects().filter((s) => {
       if (!s.name) return false;
       if (s.id === sourceId) return false;
-      if (this.targetOverride() && s.id === this.targetOverride()!.id) return false;
+      if (s.id === targetId) return false; // never offer the subject already being kept
       if (!query) return true;
       return s.name.toLowerCase().includes(query);
     });
@@ -232,14 +234,19 @@ export class MergeReviewComponent {
     }
   }
 
-  /** Which photo signal (A or B) is the redirect slot. Decided once, on the FIRST redirect
-   *  in this modal session, from the *original* (pre-any-redirect) suggestion, and reused
-   *  unchanged by every subsequent pick — recomputing this from the live `mergeTarget` on a
-   *  second pick would be wrong, because after the first redirect `mergeTarget.target.id` is
-   *  already the previously-picked subject's id, which matches neither `subjectA.id` nor
-   *  `subjectB.id`. */
-  private photosSignalFor(originalTargetId: number): typeof this.photosA {
-    const column = this.redirectColumn() ?? (this._suggestion?.subject_a.id === originalTargetId ? 'a' : 'b');
+  /** Which photo signal (A or B) is the redirect *target* slot — always the column OPPOSITE
+   *  the merge source, so the source subject keeps its own column and the picked target
+   *  replaces the non-participating column. This matters for the Part-2 collision entry point
+   *  on the *kept* column: there the source is the kept column itself, so loading the target
+   *  into the opposite column keeps the source (the subject actually being merged) visible and
+   *  drops the bystander column, instead of overwriting the source and leaving an irrelevant
+   *  subject on screen.
+   *  Decided once, on the FIRST redirect in this modal session, from the *original*
+   *  (pre-any-redirect) source, and reused unchanged by every subsequent pick — `redirectSource`
+   *  is stable across re-picks, so recomputing would give the same column, but pinning it also
+   *  documents the invariant. */
+  private photosSignalFor(sourceId: number): typeof this.photosA {
+    const column = this.redirectColumn() ?? (this._suggestion?.subject_a.id === sourceId ? 'b' : 'a');
     if (this.redirectColumn() === null) this.redirectColumn.set(column);
     return column === 'a' ? this.photosA : this.photosB;
   }
@@ -254,10 +261,6 @@ export class MergeReviewComponent {
     if (!originalTarget && !explicitSource) return;
 
     const source = explicitSource ?? originalTarget!.source;
-    // The slot to reload is always keyed off the ORIGINAL target id on the first redirect —
-    // even when called with an explicitSource, the slot being replaced is the one that
-    // currently shows the "keep" subject's faces, i.e. mergeTarget.target, not `source`.
-    const slotAnchorId = originalTarget?.target.id ?? this._suggestion!.subject_a.id;
 
     this.redirectSource.set(source);
     this.targetOverride.set(picked);
@@ -266,7 +269,7 @@ export class MergeReviewComponent {
     this.nameErrorB.set(null);
 
     const gen = ++this._loadGen;
-    const photosSig = this.photosSignalFor(slotAnchorId);
+    const photosSig = this.photosSignalFor(source.id);
     try {
       const photos = await this.photoService.getSubjectPhotosWithFaces(picked.id);
       if (gen !== this._loadGen) return; // stale, discard
@@ -274,6 +277,14 @@ export class MergeReviewComponent {
     } catch (e) {
       console.error('MergeReview: failed to load redirected subject faces', e);
     }
+  }
+
+  /** Update the filter query and reset the highlight — a narrowed list must never keep a
+   *  now-out-of-range highlight index (Enter would otherwise be a silent no-op until an arrow
+   *  key nudges it back into range). */
+  protected onRedirectQueryInput(value: string): void {
+    this.redirectQuery.set(value);
+    this.redirectHighlight.set(0);
   }
 
   protected openRedirectPicker(): void {
