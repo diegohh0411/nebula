@@ -144,6 +144,14 @@ describe('PhotoService — subjectMatches signal', () => {
     service.clearSearch();
     expect(service.subjectMatches()).toEqual([]);
   });
+
+  it('searchByExternalImage defaults gallerySort to relevance on success', async () => {
+    invoke.mockResolvedValue([{ image_id: 1 } as unknown as SearchResult]);
+
+    await service.searchByExternalImage('base64data', 'image/png', 'blob:fake-object-url');
+
+    expect(service.gallerySort().key).toBe('relevance');
+  });
 });
 
 describe('PhotoService — processing speed resilience & ETA', () => {
@@ -286,11 +294,66 @@ describe('PhotoService — lightbox navigation', () => {
   });
 
   it('galleryImages flattens dayGroups in visual order (search results)', () => {
+    // Mirrors the post-search state (gallerySort synced to relevance) so the
+    // flattened order reflects descending score, not an incidental id tiebreak.
+    service.gallerySort.set({ key: 'relevance', direction: 'desc' });
     const results: SearchResult[] = [
-      { image_id: 10, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: null, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
-      { image_id: 11, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: null, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 10, path: '', thumbnail_path: null, preview_path: null, score: 0.9, date_taken: null, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 11, path: '', thumbnail_path: null, preview_path: null, score: 0.5, date_taken: null, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
     ];
     service.searchResults.set(results);
     expect(service.galleryImages().map((i) => ('id' in i ? i.id : i.image_id))).toEqual([10, 11]);
+  });
+});
+
+describe('PhotoService gallery ordering', () => {
+  let service: PhotoService;
+
+  function img2(id: number, dateTaken: number): Image {
+    return {
+      id, folder_id: 1, path: `/p/${id}.jpg`, file_hash: '', hash_status: 'ok',
+      date_taken: dateTaken, mtime: 0, thumbnail_path: null, preview_path: null,
+      semantic_analysis_done: true, subject_analysis_done: true,
+      added_at: 0, updated_at: 0, deleted_at: null,
+    };
+  }
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        PhotoService,
+        {
+          provide: TauriEventsService,
+          useValue: {
+            pipelineStats$: new Subject(),
+            imageAdded$: new Subject(),
+            imageUpdated$: new Subject(),
+            imageRemoved$: new Subject(),
+            modelDownloadProgress$: new Subject(),
+          },
+        },
+      ],
+    });
+    service = TestBed.inject(PhotoService);
+    // Two images ~13 months apart so they land in distinct day groups.
+    service.images.set([img2(1, 1_600_000_000), img2(2, 1_640_000_000)]);
+  });
+
+  it('orders day groups newest-first by default', () => {
+    const groups = service.dayGroups();
+    const firstImageId = (groups[0].images[0] as Image).id;
+    expect(firstImageId).toBe(2);
+  });
+
+  it('reverses group order when direction is asc', () => {
+    service.gallerySort.set({ key: 'dateTaken', direction: 'asc' });
+    const groups = service.dayGroups();
+    expect((groups[0].images[0] as Image).id).toBe(1);
+  });
+
+  it('drops images outside an active date range', () => {
+    service.galleryDateRange.set({ from: 1_630_000_000, to: null });
+    const remaining = service.dayGroups().flatMap((g) => g.images).map((i) => (i as Image).id);
+    expect(remaining).toEqual([2]);
   });
 });

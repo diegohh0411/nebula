@@ -117,9 +117,15 @@ async fn save_faces(
         Ok(rows) => rows,
         Err(e) => {
             error!("[pipeline] list_faces_for_image failed for image {image_id}: {e}");
-            let _ =
-                crate::pipeline::queue::mark_failed(pool, sub_qid, sub_attempts, &e.to_string())
-                    .await;
+            record_queue_failure(
+                pool,
+                "subject",
+                image_id,
+                sub_qid,
+                sub_attempts,
+                &e.to_string(),
+            )
+            .await;
             return Vec::new();
         }
     };
@@ -134,8 +140,13 @@ async fn save_faces(
     .await
     {
         Ok(touched) => {
-            let _ =
-                crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await;
+            if let Err(e) =
+                crate::pipeline::queue::mark_subject_analysis_done(pool, sub_qid, image_id).await
+            {
+                error!(
+                    "[pipeline] failed to mark subject analysis done for image {image_id}: {e:#}"
+                );
+            }
             touched
         }
         Err(e) => {
@@ -145,8 +156,10 @@ async fn save_faces(
                 );
             } else {
                 error!("[pipeline] reprocess_image_faces failed for image {image_id}: {e}");
-                let _ = crate::pipeline::queue::mark_failed(
+                record_queue_failure(
                     pool,
+                    "subject",
+                    image_id,
                     sub_qid,
                     sub_attempts,
                     &e.to_string(),
@@ -164,6 +177,28 @@ async fn save_faces(
 /// check and the insert itself.
 fn is_missing_image_fk_error(e: &anyhow::Error) -> bool {
     e.to_string().contains("FOREIGN KEY constraint failed")
+}
+
+/// Record a failed queue attempt without ever swallowing the outcome: a
+/// dead-letter is warned, an exhausted-but-rescheduled retry is silent, and a
+/// DB write failure is logged so an entry can never get stuck invisibly.
+/// `stage` names the pipeline ("semantic"/"subject") for the log line.
+async fn record_queue_failure(
+    pool: &sqlx::SqlitePool,
+    stage: &str,
+    image_id: i64,
+    queue_id: i64,
+    attempts: i32,
+    error: &str,
+) {
+    use crate::pipeline::queue::FailureOutcome;
+    match crate::pipeline::queue::mark_failed(pool, queue_id, attempts, error).await {
+        Ok(FailureOutcome::DeadLettered) => {
+            warn!("[pipeline] image {image_id} {stage} entry dead-lettered after repeated failures")
+        }
+        Ok(FailureOutcome::Retrying) => {}
+        Err(e) => error!("[pipeline] failed to record {stage} failure for image {image_id}: {e:#}"),
+    }
 }
 
 /// Resolve the `subject_model` setting to its preset, falling back to Blitz
@@ -202,14 +237,19 @@ async fn ensure_face_preset(
 /// Distinguishes "the image row was deleted mid-flight" (expected race with
 /// `library::repo::delete_folder`'s cascade) from any other decode error.
 enum DecodeFailure {
+    /// The `images` row was deleted mid-pipeline (FK/lookup miss).
     ImageGone,
+    /// The source file no longer exists on disk (moved/deleted after indexing).
+    /// Carries the path for logging. Permanent — dead-lettered immediately.
+    Missing(String),
+    /// Any other decode error, carrying the full cause chain for logging.
     Other(String),
 }
 
-/// A batch image whose embed and face requests were both dispatched to their
-/// actors in Phase A. Phase B awaits `erx`/`frx` and persists the results.
-/// A receiver is `None` when that image had no corresponding queue slot, or the
-/// actor's channel was already closed when we tried to send.
+/// A batch image whose applicable embed/face requests were dispatched in
+/// Phase A. Phase B awaits `erx`/`frx` and persists the results. Receivers are
+/// `None` when that image had no corresponding queue slot, or the actor's
+/// channel was already closed when we tried to send.
 struct Pending {
     image_id: i64,
     sem_entry: Option<(i64, i32)>,
@@ -224,11 +264,12 @@ struct Pending {
 /// N's results are still being persisted in Phase B — instead of gating each
 /// face dispatch behind the previous image's `join!`.
 ///
-/// Deadlock-free as long as each channel's depth (`infer_channel_depth`) is at
-/// least the batch size — `run_pipeline` enforces this with a `debug_assert!`
+/// Non-blocking as long as each channel's depth (`infer_channel_depth`) is at
+/// least the batch size — `run_pipeline` enforces this with an `assert!`
 /// before spawning the actors. Under that invariant, every `send().await`
-/// here returns without waiting on a reply. On a closed channel the affected
-/// queue slot is marked failed and its receiver is left `None`.
+/// here returns without waiting for the actor to free buffer space (or for a
+/// oneshot reply). On a closed channel the affected queue slot is marked
+/// failed and its receiver is left `None`.
 async fn dispatch_batch(
     pool: &sqlx::SqlitePool,
     decoded: Vec<(i64, WorkSlot, WorkSlot, DecodedImage)>,
@@ -249,8 +290,10 @@ async fn dispatch_batch(
             {
                 Some(erx)
             } else {
-                let _ = crate::pipeline::queue::mark_failed(
+                record_queue_failure(
                     pool,
+                    "semantic",
+                    image_id,
                     sem_qid,
                     sem_attempts,
                     "embed actor closed",
@@ -273,8 +316,10 @@ async fn dispatch_batch(
             {
                 Some(frx)
             } else {
-                let _ = crate::pipeline::queue::mark_failed(
+                record_queue_failure(
                     pool,
+                    "subject",
+                    image_id,
                     sub_qid,
                     sub_attempts,
                     "face actor closed",
@@ -294,6 +339,32 @@ async fn dispatch_batch(
         });
     }
     pending
+}
+
+/// Persist a successful semantic embedding, logging any DB write failure
+/// instead of silently discarding it (which would leave the queue entry to be
+/// retried forever with no signal).
+async fn save_semantic(
+    pool: &sqlx::SqlitePool,
+    index: &crate::search::vector_index::IndexStore,
+    sem_entry: WorkSlot,
+    image_id: i64,
+    emb: &[f32],
+) {
+    if let Some((sem_qid, _)) = sem_entry {
+        let blob = crate::search::math::f32_slice_to_bytes(emb);
+        match crate::pipeline::queue::mark_semantic_analysis_done(pool, sem_qid, image_id, &blob)
+            .await
+        {
+            Ok(()) => {
+                index.write().unwrap().add(image_id, emb);
+                info!("[pipeline] Saved semantic embedding for image {image_id}");
+            }
+            Err(e) => {
+                error!("[pipeline] failed to save semantic embedding for image {image_id}: {e:#}")
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -342,14 +413,15 @@ pub async fn run_pipeline(
     );
     let mut subject_preset = initial_preset;
 
-    // dispatch_batch's deadlock-freedom depends on this holding: every batch
-    // (bounded by batch_size) must fit in each actor channel's depth without
-    // a send ever waiting on a reply. Catch a misconfiguration loudly here
-    // rather than have it surface as a hang deep inside the pipeline loop.
-    debug_assert!(
+    // dispatch_batch's non-blocking Phase A depends on this holding: every
+    // batch (bounded by batch_size) must fit in each actor channel's depth
+    // without a send waiting for the actor to free buffer space. Catch a
+    // misconfiguration loudly here (including release builds) rather than
+    // surface as backpressure or a hang deep inside the pipeline loop.
+    assert!(
         config.batch_size <= config.infer_channel_depth,
         "PipelineConfig.batch_size ({}) must be <= infer_channel_depth ({}) \
-         or Phase A pre-dispatch can deadlock",
+         or Phase A pre-dispatch can block on a full channel",
         config.batch_size,
         config.infer_channel_depth
     );
@@ -444,7 +516,7 @@ pub async fn run_pipeline(
                 let poller = tauri::async_runtime::spawn(async move {
                     loop {
                         tokio::time::sleep(Duration::from_millis(500)).await;
-                        if crate::pipeline::queue::count_pending_inference(&poll_pool)
+                        if crate::pipeline::queue::count_due_inference(&poll_pool)
                             .await
                             .unwrap_or(0)
                             > 0
@@ -500,10 +572,8 @@ pub async fn run_pipeline(
             .map(|(image_id, (sem, sub))| (image_id, sem, sub))
             .collect();
 
-        info!(
-            "[pipeline] Processing batch of {} distinct images",
-            batch.len()
-        );
+        let batch_size = batch.len();
+        info!("[pipeline] Processing batch of {batch_size} distinct images");
 
         // Stage 1: bounded-parallel decode
         let sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
@@ -533,22 +603,30 @@ pub async fn run_pipeline(
                 };
                 let path = image.path.clone();
                 match tokio::task::spawn_blocking(move || {
-                    decoded_image::load_decoded(image_id, std::path::Path::new(&path))
+                    // Classify inside the blocking context: a file moved or
+                    // deleted after indexing can never be decoded, so the caller
+                    // drops it immediately instead of retrying forever. The
+                    // existence check is filesystem IO, so it belongs here rather
+                    // than on the async runtime thread. Use the alternate
+                    // formatter (`{:#}`) to keep the full cause chain;
+                    // `to_string()` would only show the outer context.
+                    match decoded_image::load_decoded(image_id, std::path::Path::new(&path)) {
+                        Ok(d) => Ok(d),
+                        Err(_) if !std::path::Path::new(&path).exists() => {
+                            Err(DecodeFailure::Missing(path))
+                        }
+                        Err(e) => Err(DecodeFailure::Other(format!("{e:#}"))),
+                    }
                 })
                 .await
                 {
                     Ok(Ok(d)) => Ok((image_id, sem_entry, sub_entry, d)),
-                    Ok(Err(e)) => Err((
-                        image_id,
-                        sem_entry,
-                        sub_entry,
-                        DecodeFailure::Other(e.to_string()),
-                    )),
+                    Ok(Err(failure)) => Err((image_id, sem_entry, sub_entry, failure)),
                     Err(e) => Err((
                         image_id,
                         sem_entry,
                         sub_entry,
-                        DecodeFailure::Other(e.to_string()),
+                        DecodeFailure::Other(format!("decode task failed: {e}")),
                     )),
                 }
             }));
@@ -564,11 +642,30 @@ pub async fn run_pipeline(
                         "[pipeline] image {image_id} not found (deleted mid-pipeline), skipping decode"
                     );
                 }
-                Ok(Err((_image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
-                    error!("[pipeline] decode failed: {err_msg}");
+                Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Missing(path)))) => {
+                    // File is gone from disk — permanent. Drop both queue
+                    // entries now so they stop dominating every batch.
+                    warn!(
+                        "[pipeline] image {image_id} file missing on disk, dropping from queue: {path}"
+                    );
+                    if let Some((sem_qid, _)) = sem_entry {
+                        if let Err(e) = crate::pipeline::queue::dead_letter(&pool, sem_qid).await {
+                            error!("[pipeline] failed to drop semantic entry for missing image {image_id}: {e:#}");
+                        }
+                    }
+                    if let Some((sub_qid, _)) = sub_entry {
+                        if let Err(e) = crate::pipeline::queue::dead_letter(&pool, sub_qid).await {
+                            error!("[pipeline] failed to drop subject entry for missing image {image_id}: {e:#}");
+                        }
+                    }
+                }
+                Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
+                    error!("[pipeline] decode failed for image {image_id}: {err_msg}");
                     if let Some((sem_qid, sem_attempts)) = sem_entry {
-                        let _ = crate::pipeline::queue::mark_failed(
+                        record_queue_failure(
                             &pool,
+                            "semantic",
+                            image_id,
                             sem_qid,
                             sem_attempts,
                             &err_msg,
@@ -576,8 +673,10 @@ pub async fn run_pipeline(
                         .await;
                     }
                     if let Some((sub_qid, sub_attempts)) = sub_entry {
-                        let _ = crate::pipeline::queue::mark_failed(
+                        record_queue_failure(
                             &pool,
+                            "subject",
+                            image_id,
                             sub_qid,
                             sub_attempts,
                             &err_msg,
@@ -592,8 +691,7 @@ pub async fn run_pipeline(
         let images_processed_this_iter = decoded.len();
         debug!(
             "[pipeline] Decoded {}/{} images for inference",
-            images_processed_this_iter,
-            decoded.len()
+            images_processed_this_iter, batch_size
         );
 
         // Stage 2: dispatch embed + face, write results
@@ -606,7 +704,7 @@ pub async fn run_pipeline(
         // awaiting any reply. This fills the embed actor's channel so its
         // try_recv loop drains a real batch, and queues all face work so the
         // single face worker never idles waiting for Phase B to hand it the next
-        // image. See dispatch_batch for the deadlock-free argument.
+        // image. See dispatch_batch for the channel-depth invariant.
         let pending = dispatch_batch(&pool, decoded, &embed_tx, &face_tx).await;
 
         // Phase B — await both replies per image and persist results. Dispatch
@@ -625,26 +723,15 @@ pub async fn run_pipeline(
                     let (emb_result, face_result) = tokio::join!(erx, frx);
                     match emb_result {
                         Ok(Ok(emb)) => {
-                            let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                            if let Some((sem_qid, _)) = sem_entry {
-                                if crate::pipeline::queue::mark_semantic_analysis_done(
-                                    &pool, sem_qid, image_id, &blob,
-                                )
-                                .await
-                                .is_ok()
-                                {
-                                    index.write().unwrap().add(image_id, &emb);
-                                    info!(
-                                        "[pipeline] Saved semantic embedding for image {image_id}"
-                                    );
-                                }
-                            }
+                            save_semantic(&pool, &index, sem_entry, image_id, &emb).await;
                         }
                         Ok(Err(e)) => {
                             error!("[pipeline] Embedding error for image {image_id}: {e}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
+                                record_queue_failure(
                                     &pool,
+                                    "semantic",
+                                    image_id,
                                     sem_qid,
                                     sem_attempts,
                                     &e.to_string(),
@@ -655,8 +742,10 @@ pub async fn run_pipeline(
                         Err(_) => {
                             error!("[pipeline] Embed reply channel dropped for image {image_id}");
                             if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
+                                record_queue_failure(
                                     &pool,
+                                    "semantic",
+                                    image_id,
                                     sem_qid,
                                     sem_attempts,
                                     "embed reply channel dropped",
@@ -685,8 +774,10 @@ pub async fn run_pipeline(
                         Ok(Err(e)) => {
                             error!("[pipeline] Face analysis error for image {image_id}: {e}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
+                                record_queue_failure(
                                     &pool,
+                                    "subject",
+                                    image_id,
                                     sub_qid,
                                     sub_attempts,
                                     &e.to_string(),
@@ -697,8 +788,10 @@ pub async fn run_pipeline(
                         Err(_) => {
                             error!("[pipeline] Face reply channel dropped for image {image_id}");
                             if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                let _ = crate::pipeline::queue::mark_failed(
+                                record_queue_failure(
                                     &pool,
+                                    "subject",
+                                    image_id,
                                     sub_qid,
                                     sub_attempts,
                                     "face reply channel dropped",
@@ -710,24 +803,15 @@ pub async fn run_pipeline(
                 }
                 (Some(erx), None) => match erx.await {
                     Ok(Ok(emb)) => {
-                        let blob = crate::search::math::f32_slice_to_bytes(&emb);
-                        if let Some((sem_qid, _)) = sem_entry {
-                            if crate::pipeline::queue::mark_semantic_analysis_done(
-                                &pool, sem_qid, image_id, &blob,
-                            )
-                            .await
-                            .is_ok()
-                            {
-                                index.write().unwrap().add(image_id, &emb);
-                                info!("[pipeline] Saved semantic embedding for image {image_id}");
-                            }
-                        }
+                        save_semantic(&pool, &index, sem_entry, image_id, &emb).await;
                     }
                     Ok(Err(e)) => {
                         error!("[pipeline] Embedding error for image {image_id}: {e}");
                         if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
+                            record_queue_failure(
                                 &pool,
+                                "semantic",
+                                image_id,
                                 sem_qid,
                                 sem_attempts,
                                 &e.to_string(),
@@ -738,8 +822,10 @@ pub async fn run_pipeline(
                     Err(_) => {
                         error!("[pipeline] Embed reply channel dropped for image {image_id}");
                         if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
+                            record_queue_failure(
                                 &pool,
+                                "semantic",
+                                image_id,
                                 sem_qid,
                                 sem_attempts,
                                 "embed reply channel dropped",
@@ -767,8 +853,10 @@ pub async fn run_pipeline(
                     Ok(Err(e)) => {
                         error!("[pipeline] Face analysis error for image {image_id}: {e}");
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
+                            record_queue_failure(
                                 &pool,
+                                "subject",
+                                image_id,
                                 sub_qid,
                                 sub_attempts,
                                 &e.to_string(),
@@ -779,8 +867,10 @@ pub async fn run_pipeline(
                     Err(_) => {
                         error!("[pipeline] Face reply channel dropped for image {image_id}");
                         if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            let _ = crate::pipeline::queue::mark_failed(
+                            record_queue_failure(
                                 &pool,
+                                "subject",
+                                image_id,
                                 sub_qid,
                                 sub_attempts,
                                 "face reply channel dropped",

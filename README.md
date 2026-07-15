@@ -49,6 +49,27 @@ Nebula stores its catalog, cached thumbnails, and downloaded models in the platf
 
 Issues and pull requests are welcome. The backend is organized into vertical slices under `src-tauri/src/` (`library`, `people`, `tags`, `search`, `media`, `pipeline`, `vision`, `settings`). Please keep domain queries in the relevant slice and add tests for new behavior.
 
+### Git hooks (lefthook)
+
+This repo uses [lefthook](https://github.com/evilmartians/lefthook) to run checks locally before they hit CI. After cloning, install the hooks once:
+
+```bash
+# install the lefthook CLI if you don't have it (pick one)
+brew install lefthook          # macOS
+cargo install lefthook         # any platform with a Rust toolchain
+npm install -g lefthook        # any platform with Node
+
+# then, from the repo root
+lefthook install
+```
+
+This wires up:
+
+- **`pre-commit`** — runs `cargo fmt --all` against `src-tauri` whenever staged `*.rs` files are found, and re-stages the formatted files. This is the same check the `rust` CI job runs (`cargo fmt --all --check`), so formatting issues are fixed before they ever reach CI.
+- **`pre-push`** — runs `cargo clippy --all-targets -- -D warnings` against `src-tauri`, matching the CI clippy gate. It runs on push rather than every commit since clippy is slower than fmt.
+
+You can skip hooks for a single commit/push with `LEFTHOOK=0 git commit ...` if you need to.
+
 ## License
 
 Copyright (C) 2026 Diego Hernández Herrera. Released under the GNU General Public License v3. See `LICENSE` for details.

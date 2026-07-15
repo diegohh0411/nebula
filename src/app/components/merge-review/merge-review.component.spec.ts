@@ -163,7 +163,7 @@ describe('MergeReviewComponent', () => {
     await component.confirm();
 
     expect(photoService.mergeSubjects).toHaveBeenCalledWith(1, 2);
-    expect(confirmedSpy).toHaveBeenCalled();
+    expect(confirmedSpy).toHaveBeenCalledWith(1); // subA (id 1) is the named target
   });
 
   it('dismiss calls dismissMergeSuggestion then emits dismissed', async () => {
@@ -179,6 +179,17 @@ describe('MergeReviewComponent', () => {
 
     expect(photoService.dismissMergeSuggestion).toHaveBeenCalledWith(1);
     expect(dismissedSpy).toHaveBeenCalled();
+  });
+
+  it('labels the left button "Not the same person" in the default (canDismiss=true) mode', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(subA, subB);
+    fixture.detectChanges();
+
+    const dismissBtn = fixture.debugElement.query(By.css('button[cdkFocusInitial]'));
+    expect(dismissBtn.nativeElement.textContent.trim()).toBe('Not the same person');
   });
 
   it('with canDismiss=false, dismiss() emits dismissed without calling dismissMergeSuggestion', async () => {
@@ -199,5 +210,143 @@ describe('MergeReviewComponent', () => {
 
     expect(photoService.dismissMergeSuggestion).not.toHaveBeenCalled();
     expect(dismissedSpy).toHaveBeenCalled();
+  });
+
+  it('Case 1: committing a new unique name calls nameSubject and updates the signal', async () => {
+    const subA = makeSubject(1, null);
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
+    photoService.subjects.set([subA, subB]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', 'Charlie');
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, 'Charlie');
+    expect(component.subjectA()?.name).toBe('Charlie');
+    expect(component.nameErrorA()).toBeNull();
+  });
+
+  it('Case 2: naming a column the OTHER column\'s name is allowed (no error)', async () => {
+    const subA = makeSubject(1, null);
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 2 });
+    photoService.subjects.set([subA, subB]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', 'bob'); // case-insensitive match of other column
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, 'bob');
+    expect(component.nameErrorA()).toBeNull();
+  });
+
+  it('Case 3: naming a column after a THIRD subject is blocked (no backend call, error shown)', async () => {
+    const subA = makeSubject(1, null);
+    const subB = makeSubject(2, 'Bob');
+    const third = makeSubject(3, 'Jane');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const nameSpy = vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: 3 });
+    photoService.subjects.set([subA, subB, third]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', 'jane'); // case-insensitive match of third subject
+
+    expect(nameSpy).not.toHaveBeenCalled();
+    expect(component.subjectA()?.name).toBeNull(); // reverted / unchanged
+    expect(component.nameErrorA()).toContain('already exists');
+  });
+
+  it('dismiss() shows the exit confirm instead of dismissing when names are identical', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'noah'); // case-insensitive identical
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    component.dismiss();
+
+    expect(component.namesIdentical()).toBe(true);
+    expect(component.showExitConfirm()).toBe(true);
+    expect(dismissSpy).not.toHaveBeenCalled();
+  });
+
+  it('hides the primary actions while the exit confirm is shown', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'noah');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(subA, subB);
+    fixture.detectChanges();
+
+    component.dismiss(); // opens the guard
+    fixture.detectChanges();
+
+    const buttonLabels = fixture.debugElement
+      .queryAll(By.css('.modal-actions button'))
+      .map((b) => b.nativeElement.textContent.trim());
+    expect(buttonLabels).toEqual(['Keep separate', 'Merge']);
+  });
+
+  it('with canDismiss=false, dismiss() emits dismissed directly even when names are identical (no exit confirm)', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'Noah');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const dismissedSpy = vi.fn();
+    component.dismissed.subscribe(dismissedSpy);
+
+    component.canDismiss = false;
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.dismiss();
+
+    expect(component.namesIdentical()).toBe(true);
+    expect(component.showExitConfirm()).toBe(false);
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(dismissedSpy).toHaveBeenCalled();
+  });
+
+  it('keepSeparate() closes without calling dismissMergeSuggestion (no cannot_link)', async () => {
+    const subA = makeSubject(1, 'Noah');
+    const subB = makeSubject(2, 'Noah');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const closedSpy = vi.fn();
+    component.closed.subscribe(closedSpy);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    component.dismiss();          // opens the guard
+    component.keepSeparate();     // choose "Keep separate"
+
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(closedSpy).toHaveBeenCalled();
+    expect(component.showExitConfirm()).toBe(false);
+  });
+
+  it('dismiss() still dismisses directly when names differ', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.dismiss();
+
+    expect(component.showExitConfirm()).toBe(false);
+    expect(dismissSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('committing an empty value clears the name', async () => {
+    const subA = makeSubject(1, 'Alice');
+    const subB = makeSubject(2, 'Bob');
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    vi.spyOn(photoService, 'nameSubject').mockResolvedValue({ duplicate_subject_id: null });
+    photoService.subjects.set([subA, subB]);
+    component.suggestion = makeSuggestion(subA, subB);
+
+    await component.onNameCommit('a', '   ');
+
+    expect(photoService.nameSubject).toHaveBeenCalledWith(1, null);
+    expect(component.subjectA()?.name).toBeNull();
   });
 });

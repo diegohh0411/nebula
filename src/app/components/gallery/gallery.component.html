@@ -1,4 +1,7 @@
-<app-search-bar />
+<div class="flex items-center gap-2">
+  <div class="flex-1"><app-search-bar /></div>
+  <app-grid-controls [collection]="collection" />
+</div>
 
 @if (photos.virtualRows().length === 0) {
   <!-- Empty state -->
@@ -18,7 +21,7 @@
   <!-- Search result count -->
   @if (photos.searchResults() !== null) {
     <div class="search-result-count">
-      {{ photos.searchResults()!.length }} result{{ photos.searchResults()!.length !== 1 ? 's' : '' }}
+      {{ photos.galleryImages().length }} result{{ photos.galleryImages().length !== 1 ? 's' : '' }}
     </div>
   }
 

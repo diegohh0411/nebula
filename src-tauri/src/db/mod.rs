@@ -161,6 +161,9 @@ CREATE TABLE IF NOT EXISTS constraints (
     created_at  INTEGER NOT NULL,
     PRIMARY KEY (face_a, face_b, kind)
 );
+-- Speeds up the subject-scoped dismiss guard in find_merge_suggestions, which
+-- filters constraints by (kind, source) before joining to faces.
+CREATE INDEX IF NOT EXISTS idx_constraints_kind_source ON constraints(kind, source);
 
 CREATE TABLE IF NOT EXISTS face_edges (
     face_a  INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
@@ -212,6 +215,10 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
          ALTER TABLE faces_new RENAME TO faces; \
          CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_id); \
          CREATE INDEX IF NOT EXISTS idx_faces_subject ON faces(subject_id);"
+    ),
+    (
+        6,
+        "CREATE INDEX IF NOT EXISTS idx_constraints_kind_source ON constraints(kind, source)",
     ),
 ];
 

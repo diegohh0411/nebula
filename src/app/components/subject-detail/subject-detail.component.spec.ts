@@ -63,6 +63,7 @@ class SubjectDetailPhotoServiceStub {
   viewportWidth = signal(1000);
   targetRowHeight = signal(220);
   selectedImage = signal(null);
+  selectedImageIds = signal(new Set<number>());
 
   getSubjectDetail = vi.fn();
   getSubjectPhotos = vi.fn().mockResolvedValue([]);
@@ -76,6 +77,8 @@ class SubjectDetailPhotoServiceStub {
   addSubjectTag = vi.fn().mockResolvedValue({ id: 9, name: 'New Tag', added_at: 0 });
   removeSubjectTag = vi.fn().mockResolvedValue(undefined);
   listTags = vi.fn().mockResolvedValue([]);
+  subjects = signal([]);
+  getSubjectPhotosWithFaces = vi.fn().mockResolvedValue([]);
 }
 
 function subjectDetail(over: Partial<SubjectDetail['subject']> = {}): SubjectDetail {
@@ -213,5 +216,87 @@ describe('SubjectDetailComponent — tagging (component-level)', () => {
 
     expect(stub.removeSubjectTag).toHaveBeenCalledWith(1, 5);
     expect(harness.routeNativeElement!.textContent).not.toContain('Old Tag');
+  });
+});
+
+describe('SubjectDetailComponent — similar-subjects review flow', () => {
+  let stub: SubjectDetailPhotoServiceStub;
+
+  beforeEach(() => {
+    stub = new SubjectDetailPhotoServiceStub();
+    stub.getSubjectDetail.mockResolvedValue(subjectDetail());
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: 'subject/:id', component: SubjectDetailComponent }]),
+        importProvidersFrom(LucideAngularModule.pick(APP_ICONS)),
+        { provide: PhotoService, useValue: stub },
+        { provide: TauriEventsService, useValue: mockTauriEvents },
+      ],
+    });
+  });
+
+  async function mount() {
+    const harness = await RouterTestingHarness.create('/subject/1');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    const cmp = harness.routeDebugElement!.componentInstance as SubjectDetailComponent;
+    return { harness, cmp };
+  }
+
+  it('onReviewConfirmed reloads in place when the current subject survives', async () => {
+    const { cmp } = await mount();
+    stub.getSubjectDetail.mockClear();
+    const router = TestBed.inject(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate');
+
+    (cmp as any).onReviewConfirmed(1); // survivor == current subject id
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(stub.getSubjectDetail).toHaveBeenCalledWith(1);
+  });
+
+  it('onReviewConfirmed navigates when a different subject survives', async () => {
+    const { cmp } = await mount();
+    const router = TestBed.inject(Router);
+    const navigateSpy = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    (cmp as any).onReviewConfirmed(2); // survivor != current subject id
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/subject', 2]);
+  });
+
+  it('onReviewDismissed removes the reviewed suggestion from the list', async () => {
+    const { cmp } = await mount();
+    const suggestion = { id: 7, subject_a: { id: 1, name: 'Sofía', thumbnail_face_id: null, type: 'person', added_at: 0 }, subject_b: { id: 2, name: null, thumbnail_face_id: null, type: 'person', added_at: 0 }, score: 0.9 };
+    (cmp as any).similarSubjects.set([suggestion]);
+    (cmp as any).openReview(suggestion);
+
+    (cmp as any).onReviewDismissed();
+
+    expect((cmp as any).similarSubjects()).toEqual([]);
+    expect((cmp as any).reviewingSuggestion()).toBeNull();
+  });
+
+  it('orders subject photos newest-first with a deterministic id tiebreak', async () => {
+    const { cmp, harness } = await mount();
+
+    const photos = [
+      { image_id: 3, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: 100, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 1, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: 100, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+      { image_id: 2, path: '', thumbnail_path: null, preview_path: null, score: 1, date_taken: 300, mtime: 0, semantic_analysis_done: true, subject_analysis_done: true },
+    ];
+    (cmp as any)['subjectPhotos'].set(photos);
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+
+    const viewIds = (cmp as any)['collection'].view().map((i: { image_id: number }) => i.image_id);
+    expect(viewIds).toEqual([2, 3, 1]);
+
+    const virtualRowIds = (cmp as any)['virtualRows']()
+      .filter((row: { type: string }) => row.type === 'row')
+      .flatMap((row: { images: { image_id: number }[] }) => row.images.map((img) => img.image_id));
+    expect(virtualRowIds).toEqual([2, 3, 1]);
   });
 });

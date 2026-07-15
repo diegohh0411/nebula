@@ -5,6 +5,7 @@ import {
   EventEmitter,
   inject,
   signal,
+  computed,
   ChangeDetectionStrategy,
   ViewChild,
   ElementRef,
@@ -15,6 +16,7 @@ import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { PhotoService } from '../../services/photo.service';
 import { MergeSuggestion, SubjectPhotoFace, Subject } from '../../models/models';
 import { MergePhotoGridComponent } from '../merge-photo-grid/merge-photo-grid.component';
+import { EditableTextComponent } from '../editable-text/editable-text.component';
 import { prefersReducedMotion } from '../../utils/motion';
 
 interface MergeTarget {
@@ -26,7 +28,7 @@ interface MergeTarget {
   selector: 'app-merge-review',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, MergePhotoGridComponent, CdkTrapFocus],
+  imports: [CommonModule, MergePhotoGridComponent, CdkTrapFocus, EditableTextComponent],
   templateUrl: './merge-review.component.html',
   styleUrl: './merge-review.component.css',
 })
@@ -37,13 +39,15 @@ export class MergeReviewComponent {
   @Input()
   set suggestion(value: MergeSuggestion | null) {
     this._suggestion = value;
+    this.subjectA.set(value?.subject_a ?? null);
+    this.subjectB.set(value?.subject_b ?? null);
     void this.loadPhotos(value);
   }
   get suggestion(): MergeSuggestion | null { return this._suggestion; }
 
   @Input() canDismiss = true;
 
-  @Output() confirmed = new EventEmitter<void>();
+  @Output() confirmed = new EventEmitter<number>();
   @Output() dismissed = new EventEmitter<void>();
   @Output() closed = new EventEmitter<void>();
 
@@ -52,22 +56,37 @@ export class MergeReviewComponent {
 
   private photoService = inject(PhotoService);
 
+  subjectA = signal<Subject | null>(null);
+  subjectB = signal<Subject | null>(null);
   photosA = signal<SubjectPhotoFace[]>([]);
   photosB = signal<SubjectPhotoFace[]>([]);
   protected loading = signal(false);
   protected submitting = signal(false);
+  protected nameErrorA = signal<string | null>(null);
+  protected nameErrorB = signal<string | null>(null);
+  protected showExitConfirm = signal(false);
+
+  protected namesIdentical = computed(() => {
+    const a = this.subjectA()?.name?.trim().toLowerCase();
+    const b = this.subjectB()?.name?.trim().toLowerCase();
+    return !!a && !!b && a === b;
+  });
+
+  /** The duplicate-name nudge pulses the Merge button, but not when the user prefers reduced motion. */
+  protected shouldPulse = computed(() => this.namesIdentical() && !prefersReducedMotion());
 
   get mergeTarget(): MergeTarget | null {
-    if (!this._suggestion) return null;
-    const { subject_a, subject_b } = this._suggestion;
-    const aName = !!subject_a.name;
-    const bName = !!subject_b.name;
-    if (aName && !bName) return { target: subject_a, source: subject_b };
-    if (bName && !aName) return { target: subject_b, source: subject_a };
+    const subjectA = this.subjectA();
+    const subjectB = this.subjectB();
+    if (!subjectA || !subjectB) return null;
+    const aName = !!subjectA.name;
+    const bName = !!subjectB.name;
+    if (aName && !bName) return { target: subjectA, source: subjectB };
+    if (bName && !aName) return { target: subjectB, source: subjectA };
     // Both named or both unnamed: lower id wins
-    return subject_a.id <= subject_b.id
-      ? { target: subject_a, source: subject_b }
-      : { target: subject_b, source: subject_a };
+    return subjectA.id <= subjectB.id
+      ? { target: subjectA, source: subjectB }
+      : { target: subjectB, source: subjectA };
   }
 
   protected onFaceRemovedA(faceId: number): void {
@@ -76,6 +95,40 @@ export class MergeReviewComponent {
 
   protected onFaceRemovedB(faceId: number): void {
     this.photosB.update((list) => list.filter((f) => f.face_id !== faceId));
+  }
+
+  protected async onNameCommit(which: 'a' | 'b', rawValue: string): Promise<void> {
+    const subjSig = which === 'a' ? this.subjectA : this.subjectB;
+    const otherSig = which === 'a' ? this.subjectB : this.subjectA;
+    const errorSig = which === 'a' ? this.nameErrorA : this.nameErrorB;
+    const subject = subjSig();
+    if (!subject) return;
+    errorSig.set(null);
+
+    const typed = rawValue.trim();
+    const newName = typed || null;
+
+    // Case 3: matches a DIFFERENT existing subject (not either column in this modal) → block.
+    if (typed) {
+      const other = otherSig();
+      const conflict = this.photoService.subjects().find(
+        (s) =>
+          s.id !== subject.id &&
+          s.id !== other?.id &&
+          (s.name ?? '').toLowerCase() === typed.toLowerCase(),
+      );
+      if (conflict) {
+        errorSig.set(`A subject named "${typed}" already exists.`);
+        return; // no backend write; EditableText re-displays the unchanged signal value
+      }
+    }
+
+    try {
+      await this.photoService.nameSubject(subject.id, newName);
+      subjSig.set({ ...subject, name: newName });
+    } catch (e) {
+      console.error('MergeReview: rename failed', e);
+    }
   }
 
   private async loadPhotos(value: MergeSuggestion | null) {
@@ -107,7 +160,7 @@ export class MergeReviewComponent {
     try {
       await this.runMergeAnimation(target);
       await this.photoService.mergeSubjects(target.target.id, target.source.id);
-      this.confirmed.emit();
+      this.confirmed.emit(target.target.id);
     } catch (e) {
       console.error('MergeReview: merge failed', e);
     } finally {
@@ -116,6 +169,14 @@ export class MergeReviewComponent {
   }
 
   async dismiss() {
+    if (this.canDismiss && this.namesIdentical() && !this.submitting()) {
+      this.showExitConfirm.set(true);
+      return;
+    }
+    await this.doDismiss();
+  }
+
+  private async doDismiss() {
     if (!this._suggestion || this.submitting()) return;
     if (!this.canDismiss) {
       this.dismissed.emit();
@@ -133,8 +194,27 @@ export class MergeReviewComponent {
   }
 
   close() {
+    if (this.canDismiss && this.namesIdentical() && !this.submitting()) {
+      this.showExitConfirm.set(true);
+      return;
+    }
+    this.doClose();
+  }
+
+  private doClose() {
     if (!this._suggestion || this.submitting()) return;
     this.closed.emit();
+  }
+
+  /** Exit-guard "Keep separate": abandon the merge WITHOUT writing a cannot_link mark. */
+  protected keepSeparate() {
+    this.showExitConfirm.set(false);
+    this.doClose();
+  }
+
+  protected confirmFromGuard() {
+    this.showExitConfirm.set(false);
+    void this.confirm();
   }
 
   @HostListener('document:keydown.escape')

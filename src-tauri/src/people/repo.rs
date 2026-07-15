@@ -4,7 +4,7 @@ use crate::models::Image;
 use crate::models::{MergeSuggestion, SubjectDetail};
 use crate::people::models::{Face, Subject};
 use anyhow::Result;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Executor, Row, Sqlite, SqliteConnection, SqlitePool};
 use std::collections::{HashMap, HashSet};
 
 pub async fn insert_subject(
@@ -576,11 +576,67 @@ pub async fn get_dismissed_pair_set(pool: &SqlitePool) -> Result<HashSet<(i64, i
         .collect())
 }
 
+/// Select up to 3 representative faces for a subject when writing dismiss constraints:
+/// prefer `thumbnail_face_id` if set, then fill remaining slots with lowest-id faces.
+async fn representative_faces_for_dismiss(
+    conn: &mut SqliteConnection,
+    subject_id: i64,
+) -> Result<Vec<i64>> {
+    let thumbnail_face_id: Option<i64> =
+        sqlx::query_scalar("SELECT thumbnail_face_id FROM subjects WHERE id = ?")
+            .bind(subject_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
+
+    let mut reps: Vec<i64> = Vec::with_capacity(3);
+    if let Some(thumb) = thumbnail_face_id {
+        // Confirm the thumbnail still belongs to this subject.
+        let still_owned: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM faces WHERE id = ? AND subject_id = ?")
+                .bind(thumb)
+                .bind(subject_id)
+                .fetch_optional(&mut *conn)
+                .await?;
+        if still_owned.is_some() {
+            reps.push(thumb);
+        }
+    }
+
+    let remaining = 3 - reps.len();
+    if remaining > 0 {
+        let others: Vec<i64> = if let Some(thumb) = reps.first().copied() {
+            sqlx::query_scalar(
+                "SELECT id FROM faces WHERE subject_id = ? AND id != ? ORDER BY id LIMIT ?",
+            )
+            .bind(subject_id)
+            .bind(thumb)
+            .bind(remaining as i64)
+            .fetch_all(&mut *conn)
+            .await?
+        } else {
+            sqlx::query_scalar("SELECT id FROM faces WHERE subject_id = ? ORDER BY id LIMIT ?")
+                .bind(subject_id)
+                .bind(remaining as i64)
+                .fetch_all(&mut *conn)
+                .await?
+        };
+        reps.extend(others);
+    }
+
+    Ok(reps)
+}
+
 pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> {
     let row = sqlx::query("SELECT subject_id_a, subject_id_b FROM merge_suggestions WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
         .await?;
+
+    // Persist the dismissal (dismissed_pairs + representative cannot_links) and delete
+    // the suggestion atomically, so a mid-sequence failure can't leave a half-written
+    // dismissal that later resurfaces or blocks the wrong pair.
+    let mut tx = pool.begin().await?;
 
     if let Some(r) = row {
         let sid_a: i64 = r.get("subject_id_a");
@@ -597,32 +653,29 @@ pub async fn dismiss_merge_suggestion(pool: &SqlitePool, id: i64) -> Result<()> 
         .bind(lo)
         .bind(hi)
         .bind(now)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-        // Add cannot_link between one representative face from each subject (source='dismiss')
-        let rep_a: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM faces WHERE subject_id = ? LIMIT 1")
-                .bind(lo)
-                .fetch_optional(pool)
-                .await?;
-        let rep_b: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM faces WHERE subject_id = ? LIMIT 1")
-                .bind(hi)
-                .fetch_optional(pool)
-                .await?;
-        if let (Some(fa), Some(fb)) = (rep_a, rep_b) {
-            let (a, b) = if fa < fb { (fa, fb) } else { (fb, fa) };
-            sqlx::query(
-                "INSERT OR IGNORE INTO constraints (face_a, face_b, kind, source, created_at) VALUES (?, ?, 'cannot_link', 'dismiss', ?)"
-            ).bind(a).bind(b).bind(now).execute(pool).await?;
+        // Up to 3 representative faces per side (thumbnail first, then lowest id),
+        // writing cannot_link across the cross product (source='dismiss'). Bounded
+        // constant so single-face deletion is non-fatal without O(n·m) constraint rows.
+        let reps_a = representative_faces_for_dismiss(&mut tx, lo).await?;
+        let reps_b = representative_faces_for_dismiss(&mut tx, hi).await?;
+        if !reps_a.is_empty() && !reps_b.is_empty() {
+            for &fa in &reps_a {
+                for &fb in &reps_b {
+                    add_cannot_link(&mut *tx, fa, fb, "dismiss").await?;
+                }
+            }
         }
     }
 
     sqlx::query("DELETE FROM merge_suggestions WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
@@ -719,12 +772,15 @@ pub async fn add_must_link(
     Ok(())
 }
 
-pub async fn add_cannot_link(
-    pool: &SqlitePool,
+pub async fn add_cannot_link<'e, E>(
+    executor: E,
     face_a: i64,
     face_b: i64,
     source: &str,
-) -> Result<()> {
+) -> Result<()>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     if face_a == face_b {
         return Ok(());
     }
@@ -738,7 +794,7 @@ pub async fn add_cannot_link(
     .bind(b)
     .bind(source)
     .bind(now)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }

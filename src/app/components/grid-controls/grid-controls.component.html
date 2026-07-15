@@ -1,0 +1,69 @@
+<div class="flex items-center gap-1">
+  <!-- Sort -->
+  <div brnPopover #sortPop="brnPopover" align="end">
+    <button
+      brnPopoverTrigger
+      [brnPopoverTriggerFor]="sortPop"
+      class="p-2 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground"
+      title="Sort"
+    >
+      <lucide-icon name="arrow-up-down" size="18"></lucide-icon>
+    </button>
+    <ng-template brnPopoverContent>
+      <div hlmPopoverContent class="w-48 p-1">
+        @for (key of collection.availableSortKeys(); track key.id) {
+          <button
+            class="w-full flex items-center justify-between px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+            (click)="selectSort(key.id)"
+          >
+            {{ key.label }}
+            @if (collection.sort().key === key.id) {
+              <lucide-icon name="check" size="14"></lucide-icon>
+            }
+          </button>
+        }
+        <div class="my-1 h-px bg-border"></div>
+        <div class="flex gap-1 px-1">
+          <button
+            hlmBtn size="sm" variant="ghost" class="flex-1"
+            [class.bg-accent]="collection.sort().direction === 'desc'"
+            (click)="setDirection('desc')"
+          >Newest</button>
+          <button
+            hlmBtn size="sm" variant="ghost" class="flex-1"
+            [class.bg-accent]="collection.sort().direction === 'asc'"
+            (click)="setDirection('asc')"
+          >Oldest</button>
+        </div>
+      </div>
+    </ng-template>
+  </div>
+
+  <!-- Filter -->
+  <div brnPopover #filterPop="brnPopover" align="end">
+    <button
+      brnPopoverTrigger
+      [brnPopoverTriggerFor]="filterPop"
+      class="relative p-2 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground"
+      title="Filter"
+    >
+      <lucide-icon name="sliders-horizontal" size="18"></lucide-icon>
+      @if (collection.activeFilterCount() > 0) {
+        <span class="absolute top-1 right-1 w-2 h-2 rounded-full bg-primary"></span>
+      }
+    </button>
+    <ng-template brnPopoverContent>
+      <div hlmPopoverContent class="w-64 p-3 flex flex-col gap-2">
+        <label class="text-xs text-muted-foreground">From</label>
+        <input type="date" class="h-8 px-2 text-sm rounded-md border border-border bg-background"
+               [value]="fromInput()" (change)="setFrom($any($event.target).value)" />
+        <label class="text-xs text-muted-foreground">To</label>
+        <input type="date" class="h-8 px-2 text-sm rounded-md border border-border bg-background"
+               [value]="toInput()" (change)="setTo($any($event.target).value)" />
+        @if (collection.activeFilterCount() > 0) {
+          <button hlmBtn size="sm" variant="ghost" (click)="clearRange()">Clear</button>
+        }
+      </div>
+    </ng-template>
+  </div>
+</div>

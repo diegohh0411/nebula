@@ -513,6 +513,14 @@ pub async fn find_merge_suggestions(pool: &SqlitePool) -> Result<()> {
                    AND c.face_a = MIN(fe.face_a, fe.face_b)
                    AND c.face_b = MAX(fe.face_a, fe.face_b)
              )
+             AND NOT EXISTS (
+                 SELECT 1 FROM constraints c
+                 JOIN faces fca ON fca.id = c.face_a
+                 JOIN faces fcb ON fcb.id = c.face_b
+                 WHERE c.kind = 'cannot_link' AND c.source = 'dismiss'
+                   AND ((fca.subject_id = f1.subject_id AND fcb.subject_id = f2.subject_id)
+                     OR (fca.subject_id = f2.subject_id AND fcb.subject_id = f1.subject_id))
+             )
            GROUP BY MIN(f1.subject_id, f2.subject_id), MAX(f1.subject_id, f2.subject_id)"#,
     )
     .fetch_all(pool)
@@ -1158,6 +1166,188 @@ mod tests {
         assert_eq!(
             count, 0,
             "dismissed pair (cannot_link) must not be suggested"
+        );
+    }
+
+    /// After an unnamed subject is deleted and recreated under a new id (id churn),
+    /// a prior dismiss-sourced cannot_link on one face of that cluster must still
+    /// suppress suggestions via any other face now under the new subject.
+    ///
+    /// The candidate edge is deliberately on (fa, f1b) — not the constrained pair
+    /// (fa, f1) — so the pre-existing per-edge NOT EXISTS cannot_link check alone
+    /// cannot suppress it; only a subject-scoped dismiss check can.
+    #[tokio::test]
+    async fn suggestion_not_resurfaced_after_subject_id_churn() {
+        let pool = make_integration_pool().await;
+
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let unnamed1: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let fa: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
+        )
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let f1: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id",
+        )
+        .bind(unnamed1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let f1b: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (3, ?, 0) RETURNING id",
+        )
+        .bind(unnamed1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fa)
+            .bind(emb_bytes(&[1.0f32, 0.0, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(f1)
+            .bind(emb_bytes(&[0.99f32, 0.14, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Prior dismissal left a cannot_link on (fa, f1) only — not on (fa, f1b).
+        crate::people::repo::add_cannot_link(&pool, fa, f1, "dismiss")
+            .await
+            .unwrap();
+
+        // Simulate id churn: delete unnamed1, re-create as unnamed2, re-point both faces.
+        sqlx::query("DELETE FROM subjects WHERE id = ?")
+            .bind(unnamed1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let unnamed2: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES (NULL, 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE faces SET subject_id = ? WHERE id IN (?, ?)")
+            .bind(unnamed2)
+            .bind(f1)
+            .bind(f1b)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Candidate edge on the unconstrained pair (fa, f1b) — must still be suppressed.
+        people_repo::upsert_face_edge(&pool, fa, f1b, 0.99)
+            .await
+            .unwrap();
+
+        find_merge_suggestions(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "dismiss must survive subject-id churn even when the live edge is not the constrained face pair"
+        );
+    }
+
+    /// A new face added to one side after dismissal, with a fresh cross-subject edge,
+    /// must not resurface a merge suggestion for the already-dismissed subject pair.
+    #[tokio::test]
+    async fn suggestion_not_resurfaced_after_new_face_added() {
+        let pool = make_integration_pool().await;
+
+        let alice: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Alice', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let bob: i64 = sqlx::query_scalar(
+            "INSERT INTO subjects (name, type, added_at) VALUES ('Bob', 'person', 0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let fa: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (1, ?, 0) RETURNING id",
+        )
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let fb: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (2, ?, 0) RETURNING id",
+        )
+        .bind(bob)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fa)
+            .bind(emb_bytes(&[1.0f32, 0.0, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fb)
+            .bind(emb_bytes(&[0.99f32, 0.14, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::people::repo::add_cannot_link(&pool, fa, fb, "dismiss")
+            .await
+            .unwrap();
+
+        // New face on bob after dismissal, with a fresh edge to alice.
+        let fc: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (image_id, subject_id, added_at) VALUES (3, ?, 0) RETURNING id",
+        )
+        .bind(bob)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO face_vectors(rowid, embedding) VALUES (?, ?)")
+            .bind(fc)
+            .bind(emb_bytes(&[0.98f32, 0.2, 0.0]))
+            .execute(&pool)
+            .await
+            .unwrap();
+        people_repo::upsert_face_edge(&pool, fa, fc, 0.98)
+            .await
+            .unwrap();
+
+        find_merge_suggestions(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM merge_suggestions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "new face on a dismissed subject pair must not resurface a suggestion"
         );
     }
 

@@ -16,8 +16,11 @@ import { buildJustifiedRows } from '../../utils/justified-layout';
 import { LightboxComponent } from '../lightbox/lightbox.component';
 import { EditableTextComponent } from '../editable-text/editable-text.component';
 import { ConfirmMergeDialogComponent } from '../confirm-merge-dialog/confirm-merge-dialog.component';
+import { MergeReviewComponent } from '../merge-review/merge-review.component';
 import { injectSubjectTagging } from '../../composables/subject-tagging.composable';
 import { HlmInput } from '@spartan-ng/helm/input';
+import { GridControlsComponent } from '../grid-controls/grid-controls.component';
+import { createImageCollection } from '../../composables/image-collection.composable';
 
 @Component({
   selector: 'app-subject-detail',
@@ -31,7 +34,9 @@ import { HlmInput } from '@spartan-ng/helm/input';
     LightboxComponent,
     EditableTextComponent,
     ConfirmMergeDialogComponent,
+    MergeReviewComponent,
     HlmInput,
+    GridControlsComponent,
   ],
   templateUrl: './subject-detail.component.html',
   styleUrl: './subject-detail.component.css',
@@ -45,12 +50,18 @@ export class SubjectDetailComponent implements OnInit {
   protected subjectId = signal<number | null>(null);
   protected detail = signal<SubjectDetail | null>(null);
   protected subjectPhotos = signal<SearchResult[]>([]);
+  protected readonly collection = createImageCollection(this.subjectPhotos, {
+    sortKeys: ['dateTaken', 'relevance'],
+    defaultSort: { key: 'dateTaken', direction: 'desc' },
+    dateRangeFilter: true,
+  });
   protected faceCropUrl = signal<string | null>(null);
 
   protected isMenuOpen = signal(false);
 
   protected similarSubjects = signal<MergeSuggestion[]>([]);
   protected similarCropUrls = signal<Record<number, string>>({});
+  protected reviewingSuggestion = signal<MergeSuggestion | null>(null);
 
   protected readonly tagging = injectSubjectTagging(this.subjectId, {
     onNameSaved: (name) =>
@@ -61,7 +72,7 @@ export class SubjectDetailComponent implements OnInit {
   });
 
   protected readonly virtualRows = computed<VirtualRow[]>(() => {
-    const images = this.subjectPhotos();
+    const images = this.collection.view();
     const width = this.photos.viewportWidth();
     const targetRowHeight = this.photos.targetRowHeight();
 
@@ -141,22 +152,31 @@ export class SubjectDetailComponent implements OnInit {
     this.location.back();
   }
 
-  protected async mergeSimilar(suggestion: MergeSuggestion) {
-    const id = this.subjectId();
-    if (id === null) return;
-    const sourceId =
-      suggestion.subject_a.id === id
-        ? suggestion.subject_b.id
-        : suggestion.subject_a.id;
-    await this.photos.mergeSubjects(id, sourceId);
-    void this.loadData(id);
+  protected openReview(suggestion: MergeSuggestion) {
+    this.reviewingSuggestion.set(suggestion);
   }
 
-  protected async dismissSimilar(suggestion: MergeSuggestion) {
-    await this.photos.dismissMergeSuggestion(suggestion.id);
-    this.similarSubjects.update((list) =>
-      list.filter((s) => s.id !== suggestion.id)
-    );
+  protected onReviewConfirmed(survivingId: number) {
+    const current = this.subjectId();
+    this.reviewingSuggestion.set(null);
+    if (current === null) return;
+    if (survivingId === current) {
+      void this.loadData(current);
+    } else {
+      void this.router.navigate(['/subject', survivingId]);
+    }
+  }
+
+  protected onReviewDismissed() {
+    const current = this.reviewingSuggestion();
+    if (current) {
+      this.similarSubjects.update((list) => list.filter((s) => s.id !== current.id));
+    }
+    this.reviewingSuggestion.set(null);
+  }
+
+  protected onReviewClosed() {
+    this.reviewingSuggestion.set(null);
   }
 
   protected getOtherSubject(suggestion: MergeSuggestion) {
