@@ -796,6 +796,38 @@ describe('MergeReviewComponent', () => {
     expect(dismissButton()).toBeFalsy(); // gone while a redirect is pending
   });
 
+  it('assigning a new suggestion clears a stale exit-confirm guard', async () => {
+    const a = makeSubject(1, 'Sam');
+    const b = makeSubject(2, 'Sam'); // identical names -> exit guard is reachable
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    (component as any).showExitConfirm.set(true); // guard is open
+
+    const c = makeSubject(3, 'Cara');
+    const d = makeSubject(4, null);
+    component.suggestion = makeSuggestion(c, d); // advance to the next review
+
+    expect((component as any).showExitConfirm()).toBe(false);
+  });
+
+  it('suppresses the duplicate-name pulse/guard heuristic while a redirect is active', async () => {
+    const a = makeSubject(1, 'Sam');
+    const b = makeSubject(2, 'Sam'); // original pair has identical names -> normally pulses
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect((component as any).namesIdentical()).toBe(true); // sanity: the original pair matches
+
+    await (component as any).applyRedirect(roberto); // now showing source + Roberto
+
+    // The heuristic keys off the original columns, which no longer reflect the visible pairing.
+    expect((component as any).namesIdentical()).toBe(false);
+  });
+
   it('confirm shows an error and reopens the picker if the redirected target no longer exists', async () => {
     const a = makeSubject(1, 'Alice');
     const b = makeSubject(2, null);

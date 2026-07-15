@@ -42,6 +42,7 @@ export class MergeReviewComponent {
     this._suggestion = value;
     this.subjectA.set(value?.subject_a ?? null);
     this.subjectB.set(value?.subject_b ?? null);
+    this.showExitConfirm.set(false);
     this.targetOverride.set(null);
     this.redirectSource.set(null);
     this.showRedirectPicker.set(false);
@@ -127,6 +128,10 @@ export class MergeReviewComponent {
   }
 
   protected namesIdentical = computed(() => {
+    // The same-name nudge/exit-guard is a heuristic about the original algorithmic pairing. Once a
+    // redirect is active the visible columns are source + picked target, so the original-name check
+    // no longer reflects what's on screen — suppress it.
+    if (this.targetOverride()) return false;
     const a = this.subjectA()?.name?.trim().toLowerCase();
     const b = this.subjectB()?.name?.trim().toLowerCase();
     return !!a && !!b && a === b;
