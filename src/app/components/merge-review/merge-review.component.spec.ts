@@ -753,6 +753,49 @@ describe('MergeReviewComponent', () => {
     expect(mergeSpy).toHaveBeenCalledWith(9, 1);
   });
 
+  it('dismiss() never dismisses the original pair while a redirect is active', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    const dismissSpy = vi.spyOn(photoService, 'dismissMergeSuggestion').mockResolvedValue(undefined);
+    const dismissedEmit = vi.fn();
+    component.dismissed.subscribe(dismissedEmit);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    await (component as any).applyRedirect(roberto); // redirect pending: source + Roberto is what's shown
+    await component.dismiss();
+
+    // "Not the same person" during a redirect must not write a cannot_link between the
+    // now-hidden original pair (a, b) — the exact invariant the whole feature protects.
+    expect(dismissSpy).not.toHaveBeenCalled();
+    expect(dismissedEmit).not.toHaveBeenCalled();
+  });
+
+  it('hides the "Not the same person" dismiss button while a redirect is active', async () => {
+    const a = makeSubject(1, 'Alice');
+    const b = makeSubject(2, null);
+    const roberto = makeSubject(9, 'Roberto');
+    photoService.subjects.set([a, b, roberto]);
+    vi.spyOn(photoService, 'getSubjectPhotosWithFaces').mockResolvedValue([]);
+    component.suggestion = makeSuggestion(a, b);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    const dismissButton = () =>
+      fixture.debugElement.queryAll(By.css('button'))
+        .find((db) => db.nativeElement.textContent.trim() === 'Not the same person');
+
+    expect(dismissButton()).toBeTruthy(); // present in the normal footer
+
+    await (component as any).applyRedirect(roberto);
+    fixture.detectChanges();
+
+    expect(dismissButton()).toBeFalsy(); // gone while a redirect is pending
+  });
+
   it('confirm shows an error and reopens the picker if the redirected target no longer exists', async () => {
     const a = makeSubject(1, 'Alice');
     const b = makeSubject(2, null);

@@ -342,6 +342,10 @@ export class MergeReviewComponent {
   }
 
   async dismiss() {
+    // A pending redirect shows the source + picked target, not the original suggestion. Dismissing
+    // here would write a cannot_link against the now-hidden original pair — never do that. The
+    // button is also hidden in this state (see the template); this is the defence-in-depth guard.
+    if (this.targetOverride()) return;
     if (this.canDismiss && this.namesIdentical() && !this.submitting()) {
       this.showExitConfirm.set(true);
       return;
