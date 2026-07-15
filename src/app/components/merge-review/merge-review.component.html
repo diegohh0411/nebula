@@ -3,25 +3,41 @@
     <div class="modal-panel" cdkTrapFocus role="dialog" aria-modal="true" aria-labelledby="merge-review-title" (click)="$event.stopPropagation()">
       <div class="modal-header">
         <h2 id="merge-review-title" class="text-xl font-semibold">Review Possible Duplicate</h2>
-        <span class="text-sm text-muted-foreground">{{ suggestion.score | percent }} match</span>
+        <span class="text-sm text-muted-foreground" data-test="match-score-chip">
+          @if (targetOverride()) {
+            Manual reassignment
+          } @else {
+            {{ suggestion.score | percent }} match
+          }
+        </span>
       </div>
 
       <div class="subjects-grid" #subjectsGrid>
         <div class="subject-col" #colA>
           <div class="subject-name">
             <app-editable-text
-              [value]="subjectA()?.name ?? null"
+              [value]="columnDisplayName('a')"
               placeholder="Unnamed"
               placeholderClass="opacity-50"
               displayClass="font-semibold"
               (commit)="onNameCommit('a', $event)"
             />
-            @if (mergeTarget?.target?.id === subjectA()?.id) {
+            @if (columnIsKeep('a')) {
               <span class="keep-badge">keep</span>
             }
           </div>
-          @if (nameErrorA()) {
-            <p class="text-xs text-destructive mb-1">{{ nameErrorA() }}</p>
+          @if (nameErrorA(); as err) {
+            <p class="text-xs text-destructive mb-1">
+              {{ err.message }}
+              <button
+                type="button"
+                class="underline"
+                data-test="collision-redirect-a"
+                (click)="applyRedirect(err.conflict, subjectA()!)"
+              >
+                Merge into {{ err.conflict.name }}
+              </button>
+            </p>
           }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosA().length }} faces</div>
           @if (loading()) {
@@ -39,18 +55,28 @@
         <div class="subject-col" #colB>
           <div class="subject-name">
             <app-editable-text
-              [value]="subjectB()?.name ?? null"
+              [value]="columnDisplayName('b')"
               placeholder="Unnamed"
               placeholderClass="opacity-50"
               displayClass="font-semibold"
               (commit)="onNameCommit('b', $event)"
             />
-            @if (mergeTarget?.target?.id === subjectB()?.id) {
+            @if (columnIsKeep('b')) {
               <span class="keep-badge">keep</span>
             }
           </div>
-          @if (nameErrorB()) {
-            <p class="text-xs text-destructive mb-1">{{ nameErrorB() }}</p>
+          @if (nameErrorB(); as err) {
+            <p class="text-xs text-destructive mb-1">
+              {{ err.message }}
+              <button
+                type="button"
+                class="underline"
+                data-test="collision-redirect-b"
+                (click)="applyRedirect(err.conflict, subjectB()!)"
+              >
+                Merge into {{ err.conflict.name }}
+              </button>
+            </p>
           }
           <div class="photo-count text-xs text-muted-foreground mb-2">{{ photosB().length }} faces</div>
           @if (loading()) {
@@ -83,15 +109,60 @@
               Merge
             </button>
           </div>
+        } @else if (showRedirectPicker()) {
+          <div class="redirect-picker mr-auto" (keydown)="onRedirectKeydown($event)">
+            @if (redirectGoneError()) {
+              <span class="text-xs text-destructive" data-test="redirect-gone-error">{{ redirectGoneError() }}</span>
+            }
+            <input
+              #redirectInput
+              type="text"
+              class="redirect-input"
+              placeholder="Type a name…"
+              [value]="redirectQuery()"
+              (input)="onRedirectQueryInput($any($event.target).value)"
+              data-test="redirect-input"
+            />
+            <div class="redirect-results">
+              @for (candidate of redirectCandidates(); track candidate.id; let i = $index) {
+                <button
+                  type="button"
+                  class="redirect-result-row"
+                  [class.highlighted]="i === redirectHighlight()"
+                  (click)="pickRedirectCandidate(candidate)"
+                >
+                  @if (redirectAvatarUrls().get(candidate.id); as avatarUrl) {
+                    <img [src]="avatarUrl" class="redirect-avatar" alt="" />
+                  } @else {
+                    <span class="redirect-avatar redirect-avatar-placeholder"></span>
+                  }
+                  <span class="font-medium">{{ candidate.name }}</span>
+                </button>
+              } @empty {
+                <div class="redirect-empty text-sm text-muted-foreground">No matching subjects</div>
+              }
+            </div>
+          </div>
         } @else {
-          <button
-            class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
-            cdkFocusInitial
-            (click)="dismiss()"
-            [disabled]="submitting()"
-          >
-            Not the same person
-          </button>
+          @if (!submitting()) {
+            <button
+              class="redirect-link text-sm text-muted-foreground mr-auto"
+              data-test="redirect-link"
+              (click)="openRedirectPicker()"
+            >
+              Merge into someone else…
+            </button>
+          }
+          @if (!targetOverride()) {
+            <button
+              class="px-4 py-2 rounded-md border border-border hover:bg-muted transition-colors text-muted-foreground"
+              cdkFocusInitial
+              (click)="dismiss()"
+              [disabled]="submitting()"
+            >
+              Not the same person
+            </button>
+          }
           <button
             class="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
             [class.ring-2]="namesIdentical()"
