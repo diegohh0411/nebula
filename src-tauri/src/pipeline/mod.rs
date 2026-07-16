@@ -171,6 +171,29 @@ async fn save_faces(
     }
 }
 
+/// Persist face detections and collect newly touched face IDs for incremental
+/// clustering. Shared by both dual-work and face-only Phase B arms so neither
+/// can silently drop `save_faces`'s return value (TT-95).
+///
+/// Returns `true` when a subject queue entry was present and processed (caller
+/// should set `processed_subject_work`).
+async fn save_faces_and_collect(
+    pool: &sqlx::SqlitePool,
+    image_id: i64,
+    sub_entry: WorkSlot,
+    embedder_id: &str,
+    faces: Vec<face_actor::FaceResult>,
+    batch_new_face_ids: &mut Vec<i64>,
+) -> bool {
+    let Some((sub_qid, sub_attempts)) = sub_entry else {
+        return false;
+    };
+    info!("[pipeline] Found {} faces in image {image_id}", faces.len());
+    let new_ids = save_faces(pool, image_id, sub_qid, sub_attempts, embedder_id, faces).await;
+    batch_new_face_ids.extend(new_ids);
+    true
+}
+
 /// True if `e` wraps a SQLite "FOREIGN KEY constraint failed" error — the
 /// shape `insert_face` raises when the target image row was deleted (e.g.
 /// via `delete_folder`'s cascade) between `save_faces`'s proactive existence
@@ -756,18 +779,16 @@ pub async fn run_pipeline(
                     }
                     match face_result {
                         Ok(Ok(faces)) => {
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                let new_ids = save_faces(
-                                    &pool,
-                                    image_id,
-                                    sub_qid,
-                                    sub_attempts,
-                                    subject_preset.embedder.id,
-                                    faces,
-                                )
-                                .await;
-                                batch_new_face_ids.extend(new_ids);
+                            if save_faces_and_collect(
+                                &pool,
+                                image_id,
+                                sub_entry,
+                                subject_preset.embedder.id,
+                                faces,
+                                &mut batch_new_face_ids,
+                            )
+                            .await
+                            {
                                 processed_subject_work = true;
                             }
                         }
@@ -836,17 +857,16 @@ pub async fn run_pipeline(
                 },
                 (None, Some(frx)) => match frx.await {
                     Ok(Ok(faces)) => {
-                        if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                            save_faces(
-                                &pool,
-                                image_id,
-                                sub_qid,
-                                sub_attempts,
-                                subject_preset.embedder.id,
-                                faces,
-                            )
-                            .await;
+                        if save_faces_and_collect(
+                            &pool,
+                            image_id,
+                            sub_entry,
+                            subject_preset.embedder.id,
+                            faces,
+                            &mut batch_new_face_ids,
+                        )
+                        .await
+                        {
                             processed_subject_work = true;
                         }
                     }
