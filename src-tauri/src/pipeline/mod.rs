@@ -171,6 +171,240 @@ async fn save_faces(
     }
 }
 
+/// Persist face detections and collect newly touched face IDs for incremental
+/// clustering. Shared by both dual-work and face-only Phase B arms so neither
+/// can silently drop `save_faces`'s return value (TT-95).
+///
+/// Returns `true` only when faces were delivered and a subject queue entry was
+/// present — i.e. `save_faces` was invoked (even if it returned no IDs). Analysis
+/// errors and dropped oneshots return `false` via [`handle_face_result`]; those
+/// paths record queue failures but do not flip `processed_subject_work`.
+async fn save_faces_and_collect(
+    pool: &sqlx::SqlitePool,
+    image_id: i64,
+    sub_entry: WorkSlot,
+    embedder_id: &str,
+    faces: Vec<face_actor::FaceResult>,
+    batch_new_face_ids: &mut Vec<i64>,
+) -> bool {
+    let Some((sub_qid, sub_attempts)) = sub_entry else {
+        return false;
+    };
+    info!("[pipeline] Found {} faces in image {image_id}", faces.len());
+    let new_ids = save_faces(pool, image_id, sub_qid, sub_attempts, embedder_id, faces).await;
+    batch_new_face_ids.extend(new_ids);
+    true
+}
+
+/// Handle a face-actor oneshot reply for one image. Shared by dual-work and
+/// face-only Phase B arms so success/error paths cannot drift (TT-95).
+///
+/// Returns `true` only on the success path when a subject queue entry was present
+/// (see [`save_faces_and_collect`]). Analysis errors and dropped replies return
+/// `false` after recording the queue failure.
+async fn handle_face_result(
+    pool: &sqlx::SqlitePool,
+    image_id: i64,
+    sub_entry: WorkSlot,
+    embedder_id: &str,
+    face_result: Result<
+        anyhow::Result<Vec<face_actor::FaceResult>>,
+        tokio::sync::oneshot::error::RecvError,
+    >,
+    batch_new_face_ids: &mut Vec<i64>,
+) -> bool {
+    match face_result {
+        Ok(Ok(faces)) => {
+            save_faces_and_collect(
+                pool,
+                image_id,
+                sub_entry,
+                embedder_id,
+                faces,
+                batch_new_face_ids,
+            )
+            .await
+        }
+        Ok(Err(e)) => {
+            error!("[pipeline] Face analysis error for image {image_id}: {e}");
+            if let Some((sub_qid, sub_attempts)) = sub_entry {
+                record_queue_failure(
+                    pool,
+                    "subject",
+                    image_id,
+                    sub_qid,
+                    sub_attempts,
+                    &e.to_string(),
+                )
+                .await;
+            }
+            false
+        }
+        Err(_) => {
+            error!("[pipeline] Face reply channel dropped for image {image_id}");
+            if let Some((sub_qid, sub_attempts)) = sub_entry {
+                record_queue_failure(
+                    pool,
+                    "subject",
+                    image_id,
+                    sub_qid,
+                    sub_attempts,
+                    "face reply channel dropped",
+                )
+                .await;
+            }
+            false
+        }
+    }
+}
+
+/// Phase B body for one image: await pre-dispatched embed/face replies and
+/// persist results. Extracted so tests can drive the face-only arm
+/// (`erx = None, frx = Some`) and assert `batch_new_face_ids` is extended —
+/// the exact TT-95 wiring that previously discarded `save_faces` IDs.
+///
+/// Returns whether subject work was attempted (OR into `processed_subject_work`).
+async fn await_phase_b_replies(
+    pool: &sqlx::SqlitePool,
+    index: &crate::search::vector_index::IndexStore,
+    pending: Pending,
+    embedder_id: &str,
+    batch_new_face_ids: &mut Vec<i64>,
+) -> bool {
+    let Pending {
+        image_id,
+        sem_entry,
+        sub_entry,
+        erx,
+        frx,
+    } = pending;
+    let mut subject_work = false;
+    match (erx, frx) {
+        (Some(erx), Some(frx)) => {
+            let (emb_result, face_result) = tokio::join!(erx, frx);
+            match emb_result {
+                Ok(Ok(emb)) => {
+                    save_semantic(pool, index, sem_entry, image_id, &emb).await;
+                }
+                Ok(Err(e)) => {
+                    error!("[pipeline] Embedding error for image {image_id}: {e}");
+                    if let Some((sem_qid, sem_attempts)) = sem_entry {
+                        record_queue_failure(
+                            pool,
+                            "semantic",
+                            image_id,
+                            sem_qid,
+                            sem_attempts,
+                            &e.to_string(),
+                        )
+                        .await;
+                    }
+                }
+                Err(_) => {
+                    error!("[pipeline] Embed reply channel dropped for image {image_id}");
+                    if let Some((sem_qid, sem_attempts)) = sem_entry {
+                        record_queue_failure(
+                            pool,
+                            "semantic",
+                            image_id,
+                            sem_qid,
+                            sem_attempts,
+                            "embed reply channel dropped",
+                        )
+                        .await;
+                    }
+                }
+            }
+            subject_work |= handle_face_result(
+                pool,
+                image_id,
+                sub_entry,
+                embedder_id,
+                face_result,
+                batch_new_face_ids,
+            )
+            .await;
+        }
+        (Some(erx), None) => match erx.await {
+            Ok(Ok(emb)) => {
+                save_semantic(pool, index, sem_entry, image_id, &emb).await;
+            }
+            Ok(Err(e)) => {
+                error!("[pipeline] Embedding error for image {image_id}: {e}");
+                if let Some((sem_qid, sem_attempts)) = sem_entry {
+                    record_queue_failure(
+                        pool,
+                        "semantic",
+                        image_id,
+                        sem_qid,
+                        sem_attempts,
+                        &e.to_string(),
+                    )
+                    .await;
+                }
+            }
+            Err(_) => {
+                error!("[pipeline] Embed reply channel dropped for image {image_id}");
+                if let Some((sem_qid, sem_attempts)) = sem_entry {
+                    record_queue_failure(
+                        pool,
+                        "semantic",
+                        image_id,
+                        sem_qid,
+                        sem_attempts,
+                        "embed reply channel dropped",
+                    )
+                    .await;
+                }
+            }
+        },
+        (None, Some(frx)) => {
+            subject_work |= handle_face_result(
+                pool,
+                image_id,
+                sub_entry,
+                embedder_id,
+                frx.await,
+                batch_new_face_ids,
+            )
+            .await;
+        }
+        (None, None) => {}
+    }
+    subject_work
+}
+
+/// Per-iteration accumulator for subject-analysis outcomes.
+///
+/// Owns both the `processed` flag and the face IDs that must reach
+/// `update_edges_incremental`, so `run_pipeline` cannot feed incremental
+/// clustering a different buffer than Phase B wrote into (TT-95 call-site
+/// wiring). Phase B always extends `face_ids` via [`SubjectWorkBatch::absorb`].
+struct SubjectWorkBatch {
+    face_ids: Vec<i64>,
+    processed: bool,
+}
+
+impl SubjectWorkBatch {
+    fn new() -> Self {
+        Self {
+            face_ids: Vec::new(),
+            processed: false,
+        }
+    }
+
+    async fn absorb(
+        &mut self,
+        pool: &sqlx::SqlitePool,
+        index: &crate::search::vector_index::IndexStore,
+        pending: Pending,
+        embedder_id: &str,
+    ) {
+        self.processed |=
+            await_phase_b_replies(pool, index, pending, embedder_id, &mut self.face_ids).await;
+    }
+}
+
 /// True if `e` wraps a SQLite "FOREIGN KEY constraint failed" error — the
 /// shape `insert_face` raises when the target image row was deleted (e.g.
 /// via `delete_folder`'s cascade) between `save_faces`'s proactive existence
@@ -694,11 +928,10 @@ pub async fn run_pipeline(
             images_processed_this_iter, batch_size
         );
 
-        // Stage 2: dispatch embed + face, write results
-        let mut processed_subject_work = false;
-        // Exact set of faces vectorized this iteration — drives the incremental
-        // edge update without relying on face-id ordering.
-        let mut batch_new_face_ids: Vec<i64> = Vec::new();
+        // Stage 2: dispatch embed + face, write results.
+        // SubjectWorkBatch owns both the processed flag and face IDs so
+        // incremental clustering cannot be wired to a different buffer (TT-95).
+        let mut subject_batch = SubjectWorkBatch::new();
 
         // Phase A — pre-dispatch every image's embed AND face request before
         // awaiting any reply. This fills the embed actor's channel so its
@@ -710,177 +943,11 @@ pub async fn run_pipeline(
         // Phase B — await both replies per image and persist results. Dispatch
         // already happened in Phase A (dispatch_batch), so this loop no longer
         // gates the next image's face work behind the current image's writes.
-        for Pending {
-            image_id,
-            sem_entry,
-            sub_entry,
-            erx,
-            frx,
-        } in pending
-        {
-            match (erx, frx) {
-                (Some(erx), Some(frx)) => {
-                    let (emb_result, face_result) = tokio::join!(erx, frx);
-                    match emb_result {
-                        Ok(Ok(emb)) => {
-                            save_semantic(&pool, &index, sem_entry, image_id, &emb).await;
-                        }
-                        Ok(Err(e)) => {
-                            error!("[pipeline] Embedding error for image {image_id}: {e}");
-                            if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                record_queue_failure(
-                                    &pool,
-                                    "semantic",
-                                    image_id,
-                                    sem_qid,
-                                    sem_attempts,
-                                    &e.to_string(),
-                                )
-                                .await;
-                            }
-                        }
-                        Err(_) => {
-                            error!("[pipeline] Embed reply channel dropped for image {image_id}");
-                            if let Some((sem_qid, sem_attempts)) = sem_entry {
-                                record_queue_failure(
-                                    &pool,
-                                    "semantic",
-                                    image_id,
-                                    sem_qid,
-                                    sem_attempts,
-                                    "embed reply channel dropped",
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    match face_result {
-                        Ok(Ok(faces)) => {
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                                let new_ids = save_faces(
-                                    &pool,
-                                    image_id,
-                                    sub_qid,
-                                    sub_attempts,
-                                    subject_preset.embedder.id,
-                                    faces,
-                                )
-                                .await;
-                                batch_new_face_ids.extend(new_ids);
-                                processed_subject_work = true;
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            error!("[pipeline] Face analysis error for image {image_id}: {e}");
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                record_queue_failure(
-                                    &pool,
-                                    "subject",
-                                    image_id,
-                                    sub_qid,
-                                    sub_attempts,
-                                    &e.to_string(),
-                                )
-                                .await;
-                            }
-                        }
-                        Err(_) => {
-                            error!("[pipeline] Face reply channel dropped for image {image_id}");
-                            if let Some((sub_qid, sub_attempts)) = sub_entry {
-                                record_queue_failure(
-                                    &pool,
-                                    "subject",
-                                    image_id,
-                                    sub_qid,
-                                    sub_attempts,
-                                    "face reply channel dropped",
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
-                (Some(erx), None) => match erx.await {
-                    Ok(Ok(emb)) => {
-                        save_semantic(&pool, &index, sem_entry, image_id, &emb).await;
-                    }
-                    Ok(Err(e)) => {
-                        error!("[pipeline] Embedding error for image {image_id}: {e}");
-                        if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            record_queue_failure(
-                                &pool,
-                                "semantic",
-                                image_id,
-                                sem_qid,
-                                sem_attempts,
-                                &e.to_string(),
-                            )
-                            .await;
-                        }
-                    }
-                    Err(_) => {
-                        error!("[pipeline] Embed reply channel dropped for image {image_id}");
-                        if let Some((sem_qid, sem_attempts)) = sem_entry {
-                            record_queue_failure(
-                                &pool,
-                                "semantic",
-                                image_id,
-                                sem_qid,
-                                sem_attempts,
-                                "embed reply channel dropped",
-                            )
-                            .await;
-                        }
-                    }
-                },
-                (None, Some(frx)) => match frx.await {
-                    Ok(Ok(faces)) => {
-                        if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            info!("[pipeline] Found {} faces in image {image_id}", faces.len());
-                            save_faces(
-                                &pool,
-                                image_id,
-                                sub_qid,
-                                sub_attempts,
-                                subject_preset.embedder.id,
-                                faces,
-                            )
-                            .await;
-                            processed_subject_work = true;
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        error!("[pipeline] Face analysis error for image {image_id}: {e}");
-                        if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            record_queue_failure(
-                                &pool,
-                                "subject",
-                                image_id,
-                                sub_qid,
-                                sub_attempts,
-                                &e.to_string(),
-                            )
-                            .await;
-                        }
-                    }
-                    Err(_) => {
-                        error!("[pipeline] Face reply channel dropped for image {image_id}");
-                        if let Some((sub_qid, sub_attempts)) = sub_entry {
-                            record_queue_failure(
-                                &pool,
-                                "subject",
-                                image_id,
-                                sub_qid,
-                                sub_attempts,
-                                "face reply channel dropped",
-                            )
-                            .await;
-                        }
-                    }
-                },
-                (None, None) => {}
-            }
+        for item in pending {
+            let image_id = item.image_id;
+            subject_batch
+                .absorb(&pool, &index, item, subject_preset.embedder.id)
+                .await;
 
             // Second emit: signals full analysis complete (embeddings + faces written). NOT ordered
             // vs. the Stage 1 thumbnail emit — frontend must handle either order (TT-12 Option A).
@@ -908,12 +975,12 @@ pub async fn run_pipeline(
         // vectorized faces, then an in-memory relabel. Both are cheap, so the loop
         // immediately pulls the next batch. The authoritative full sweep is
         // deferred to the idle branch.
-        if processed_subject_work {
+        if subject_batch.processed {
             let incremental_result: anyhow::Result<()> = async {
-                if !batch_new_face_ids.is_empty() {
+                if !subject_batch.face_ids.is_empty() {
                     crate::people::clustering::update_edges_incremental(
                         &pool,
-                        &batch_new_face_ids,
+                        &subject_batch.face_ids,
                         subject_preset.embedder.id,
                     )
                     .await?;
@@ -954,9 +1021,322 @@ mod tests {
         )));
     }
 
-    use super::{dispatch_batch, embed_actor, face_actor};
+    use super::{
+        dispatch_batch, embed_actor, face_actor, handle_face_result, save_faces_and_collect,
+        Pending, SubjectWorkBatch,
+    };
     use crate::pipeline::DecodedImage;
+    use crate::search::vector_index::{FlatIndex, IndexStore};
+    use face_id::detector::{BoundingBox, DetectedFace};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+
+    /// Owned test DB: closes the pool and removes the temp dir on drop.
+    struct TestDb {
+        pool: Option<sqlx::SqlitePool>,
+        dir: PathBuf,
+    }
+
+    impl TestDb {
+        async fn init() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            crate::db::ensure_sqlite_vec_registered();
+            let dir = std::env::temp_dir().join(format!(
+                "nebula_pipeline_test_{}_{}",
+                std::process::id(),
+                n
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let pool = crate::db::init_db(&dir).await.unwrap();
+            Self {
+                pool: Some(pool),
+                dir,
+            }
+        }
+
+        fn pool(&self) -> &sqlx::SqlitePool {
+            self.pool.as_ref().expect("test pool still open")
+        }
+    }
+
+    impl Drop for TestDb {
+        fn drop(&mut self) {
+            drop(self.pool.take());
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn empty_index() -> IndexStore {
+        Arc::new(std::sync::RwLock::new(Box::new(FlatIndex::new(768))))
+    }
+
+    async fn seed_image(pool: &sqlx::SqlitePool) -> i64 {
+        let folder_id: i64 = sqlx::query_scalar(
+            "INSERT INTO folders (path, added_at) VALUES ('/tmp', 0) RETURNING id",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query_scalar(
+            "INSERT INTO images (folder_id, path, file_hash, mtime, added_at, updated_at)
+             VALUES (?, '/tmp/x.jpg', 'hash', 0, 0, 0) RETURNING id",
+        )
+        .bind(folder_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn seed_subject_queue(pool: &sqlx::SqlitePool, image_id: i64) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO embedding_queue (image_id, pipeline, attempts, scheduled_at)
+             VALUES (?, 'subject', 0, 0) RETURNING id",
+        )
+        .bind(image_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn queue_row_count(pool: &sqlx::SqlitePool, qid: i64) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM embedding_queue WHERE id = ?")
+            .bind(qid)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn dummy_face(seed: f32) -> face_actor::FaceResult {
+        // Distinct axis-aligned unit vectors so two faces aren't near-identical.
+        let mut embedding = vec![0.0f32; 512];
+        let idx = (seed as usize).saturating_sub(1).min(511);
+        embedding[idx] = 1.0;
+        (
+            DetectedFace {
+                bbox: BoundingBox {
+                    x1: 0.1 + seed * 0.05,
+                    y1: 0.1,
+                    x2: 0.3 + seed * 0.05,
+                    y2: 0.3,
+                },
+                landmarks: None,
+                score: 0.95,
+            },
+            embedding,
+            0.8,
+        )
+    }
+
+    /// Without a subject queue entry, the helper must not claim work was
+    /// attempted and must not touch the batch vec.
+    #[tokio::test]
+    async fn save_faces_and_collect_none_entry_returns_false_untouched() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let mut batch = vec![42i64];
+        let attempted = save_faces_and_collect(
+            &pool,
+            1,
+            None,
+            "buffalo_s_recognition",
+            vec![dummy_face(1.0)],
+            &mut batch,
+        )
+        .await;
+        assert!(!attempted);
+        assert_eq!(batch, vec![42]);
+    }
+
+    /// Missing image → empty extend, but still `true` (save_faces was invoked).
+    #[tokio::test]
+    async fn save_faces_and_collect_missing_image_attempts_without_ids() {
+        let db = TestDb::init().await;
+        let mut batch = Vec::new();
+        let attempted = save_faces_and_collect(
+            db.pool(),
+            999_999,
+            Some((1, 0)),
+            "buffalo_s_recognition",
+            vec![dummy_face(1.0)],
+            &mut batch,
+        )
+        .await;
+        assert!(
+            attempted,
+            "Some(sub_entry) + delivered faces means save_faces was invoked"
+        );
+        assert!(
+            batch.is_empty(),
+            "missing image must not invent face IDs for incremental clustering"
+        );
+    }
+
+    /// Helper-level pin: successful face persist must extend the batch vec
+    /// and consume the subject queue entry.
+    #[tokio::test]
+    async fn save_faces_and_collect_extends_batch_with_new_face_ids() {
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
+        let mut batch = Vec::new();
+        let attempted = save_faces_and_collect(
+            pool,
+            image_id,
+            Some((qid, 0)),
+            "buffalo_s_recognition",
+            vec![dummy_face(1.0), dummy_face(2.0)],
+            &mut batch,
+        )
+        .await;
+        assert!(attempted);
+        assert_eq!(
+            batch.len(),
+            2,
+            "new face IDs must land in batch_new_face_ids for update_edges_incremental"
+        );
+        let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE image_id = ?")
+            .bind(image_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, 2);
+        assert_eq!(
+            queue_row_count(pool, qid).await,
+            0,
+            "successful save must mark subject analysis done (delete queue row)"
+        );
+    }
+
+    /// TT-95 regression guard at the production call-site shape: `run_pipeline`
+    /// uses [`SubjectWorkBatch::absorb`], which always writes into the same
+    /// `face_ids` buffer later passed to `update_edges_incremental`. A throwaway
+    /// vec at either Phase B arm *or* the outer absorb call site fails this.
+    #[tokio::test]
+    async fn subject_work_batch_absorb_face_only_collects_ids_for_incremental() {
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
+        let index = empty_index();
+
+        let (ftx, frx) = tokio::sync::oneshot::channel();
+        ftx.send(Ok(vec![dummy_face(1.0), dummy_face(2.0)]))
+            .expect("oneshot send");
+
+        let mut subject_batch = SubjectWorkBatch::new();
+        subject_batch
+            .absorb(
+                pool,
+                &index,
+                Pending {
+                    image_id,
+                    sem_entry: None, // no semantic work — face-only path
+                    sub_entry: Some((qid, 0)),
+                    erx: None,
+                    frx: Some(frx),
+                },
+                "buffalo_s_recognition",
+            )
+            .await;
+
+        assert!(
+            subject_batch.processed,
+            "face-only arm must report subject work"
+        );
+        assert_eq!(
+            subject_batch.face_ids.len(),
+            2,
+            "SubjectWorkBatch.face_ids is what update_edges_incremental receives (TT-95)"
+        );
+        assert_eq!(queue_row_count(pool, qid).await, 0);
+    }
+
+    #[tokio::test]
+    async fn handle_face_result_ok_collects_ids() {
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
+        let mut batch = Vec::new();
+        let attempted = handle_face_result(
+            pool,
+            image_id,
+            Some((qid, 0)),
+            "buffalo_s_recognition",
+            Ok(Ok(vec![dummy_face(1.0)])),
+            &mut batch,
+        )
+        .await;
+        assert!(attempted);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(
+            queue_row_count(pool, qid).await,
+            0,
+            "success path must consume the subject queue entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_face_result_analysis_err_records_queue_failure() {
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
+        let mut batch = Vec::new();
+        let attempted = handle_face_result(
+            pool,
+            image_id,
+            Some((qid, 0)),
+            "buffalo_s_recognition",
+            Ok(Err(anyhow::anyhow!("detector failed"))),
+            &mut batch,
+        )
+        .await;
+        assert!(!attempted);
+        assert!(batch.is_empty());
+        let (attempts, err): (i32, String) =
+            sqlx::query_as("SELECT attempts, last_error FROM embedding_queue WHERE id = ?")
+                .bind(qid)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 1);
+        assert!(err.contains("detector failed"));
+    }
+
+    #[tokio::test]
+    async fn handle_face_result_recv_dropped_records_queue_failure() {
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
+        let (ftx, frx) =
+            tokio::sync::oneshot::channel::<anyhow::Result<Vec<face_actor::FaceResult>>>();
+        drop(ftx);
+        let mut batch = Vec::new();
+        let attempted = handle_face_result(
+            pool,
+            image_id,
+            Some((qid, 0)),
+            "buffalo_s_recognition",
+            frx.await,
+            &mut batch,
+        )
+        .await;
+        assert!(!attempted);
+        assert!(batch.is_empty());
+        let (attempts, err): (i32, String) =
+            sqlx::query_as("SELECT attempts, last_error FROM embedding_queue WHERE id = ?")
+                .bind(qid)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 1);
+        assert!(err.contains("face reply channel dropped"));
+    }
 
     /// Regression guard for TT-94: `dispatch_batch` must enqueue *every* image's
     /// embed and face request before returning, without awaiting any reply.
