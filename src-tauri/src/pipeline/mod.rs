@@ -374,6 +374,37 @@ async fn await_phase_b_replies(
     subject_work
 }
 
+/// Per-iteration accumulator for subject-analysis outcomes.
+///
+/// Owns both the `processed` flag and the face IDs that must reach
+/// `update_edges_incremental`, so `run_pipeline` cannot feed incremental
+/// clustering a different buffer than Phase B wrote into (TT-95 call-site
+/// wiring). Phase B always extends `face_ids` via [`SubjectWorkBatch::absorb`].
+struct SubjectWorkBatch {
+    face_ids: Vec<i64>,
+    processed: bool,
+}
+
+impl SubjectWorkBatch {
+    fn new() -> Self {
+        Self {
+            face_ids: Vec::new(),
+            processed: false,
+        }
+    }
+
+    async fn absorb(
+        &mut self,
+        pool: &sqlx::SqlitePool,
+        index: &crate::search::vector_index::IndexStore,
+        pending: Pending,
+        embedder_id: &str,
+    ) {
+        self.processed |=
+            await_phase_b_replies(pool, index, pending, embedder_id, &mut self.face_ids).await;
+    }
+}
+
 /// True if `e` wraps a SQLite "FOREIGN KEY constraint failed" error — the
 /// shape `insert_face` raises when the target image row was deleted (e.g.
 /// via `delete_folder`'s cascade) between `save_faces`'s proactive existence
@@ -897,11 +928,10 @@ pub async fn run_pipeline(
             images_processed_this_iter, batch_size
         );
 
-        // Stage 2: dispatch embed + face, write results
-        let mut processed_subject_work = false;
-        // Exact set of faces vectorized this iteration — drives the incremental
-        // edge update without relying on face-id ordering.
-        let mut batch_new_face_ids: Vec<i64> = Vec::new();
+        // Stage 2: dispatch embed + face, write results.
+        // SubjectWorkBatch owns both the processed flag and face IDs so
+        // incremental clustering cannot be wired to a different buffer (TT-95).
+        let mut subject_batch = SubjectWorkBatch::new();
 
         // Phase A — pre-dispatch every image's embed AND face request before
         // awaiting any reply. This fills the embed actor's channel so its
@@ -915,14 +945,9 @@ pub async fn run_pipeline(
         // gates the next image's face work behind the current image's writes.
         for item in pending {
             let image_id = item.image_id;
-            processed_subject_work |= await_phase_b_replies(
-                &pool,
-                &index,
-                item,
-                subject_preset.embedder.id,
-                &mut batch_new_face_ids,
-            )
-            .await;
+            subject_batch
+                .absorb(&pool, &index, item, subject_preset.embedder.id)
+                .await;
 
             // Second emit: signals full analysis complete (embeddings + faces written). NOT ordered
             // vs. the Stage 1 thumbnail emit — frontend must handle either order (TT-12 Option A).
@@ -950,12 +975,12 @@ pub async fn run_pipeline(
         // vectorized faces, then an in-memory relabel. Both are cheap, so the loop
         // immediately pulls the next batch. The authoritative full sweep is
         // deferred to the idle branch.
-        if processed_subject_work {
+        if subject_batch.processed {
             let incremental_result: anyhow::Result<()> = async {
-                if !batch_new_face_ids.is_empty() {
+                if !subject_batch.face_ids.is_empty() {
                     crate::people::clustering::update_edges_incremental(
                         &pool,
-                        &batch_new_face_ids,
+                        &subject_batch.face_ids,
                         subject_preset.embedder.id,
                     )
                     .await?;
@@ -997,24 +1022,51 @@ mod tests {
     }
 
     use super::{
-        await_phase_b_replies, dispatch_batch, embed_actor, face_actor, handle_face_result,
-        save_faces_and_collect, Pending,
+        dispatch_batch, embed_actor, face_actor, handle_face_result, save_faces_and_collect,
+        Pending, SubjectWorkBatch,
     };
     use crate::pipeline::DecodedImage;
     use crate::search::vector_index::{FlatIndex, IndexStore};
     use face_id::detector::{BoundingBox, DetectedFace};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
-    async fn init_test_pool() -> sqlx::SqlitePool {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        crate::db::ensure_sqlite_vec_registered();
-        let tmp =
-            std::env::temp_dir().join(format!("nebula_pipeline_test_{}_{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        crate::db::init_db(&tmp).await.unwrap()
+    /// Owned test DB: closes the pool and removes the temp dir on drop.
+    struct TestDb {
+        pool: Option<sqlx::SqlitePool>,
+        dir: PathBuf,
+    }
+
+    impl TestDb {
+        async fn init() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            crate::db::ensure_sqlite_vec_registered();
+            let dir = std::env::temp_dir().join(format!(
+                "nebula_pipeline_test_{}_{}",
+                std::process::id(),
+                n
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let pool = crate::db::init_db(&dir).await.unwrap();
+            Self {
+                pool: Some(pool),
+                dir,
+            }
+        }
+
+        fn pool(&self) -> &sqlx::SqlitePool {
+            self.pool.as_ref().expect("test pool still open")
+        }
+    }
+
+    impl Drop for TestDb {
+        fn drop(&mut self) {
+            drop(self.pool.take());
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 
     fn empty_index() -> IndexStore {
@@ -1047,6 +1099,14 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap()
+    }
+
+    async fn queue_row_count(pool: &sqlx::SqlitePool, qid: i64) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM embedding_queue WHERE id = ?")
+            .bind(qid)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     fn dummy_face(seed: f32) -> face_actor::FaceResult {
@@ -1092,10 +1152,10 @@ mod tests {
     /// Missing image → empty extend, but still `true` (save_faces was invoked).
     #[tokio::test]
     async fn save_faces_and_collect_missing_image_attempts_without_ids() {
-        let pool = init_test_pool().await;
+        let db = TestDb::init().await;
         let mut batch = Vec::new();
         let attempted = save_faces_and_collect(
-            &pool,
+            db.pool(),
             999_999,
             Some((1, 0)),
             "buffalo_s_recognition",
@@ -1113,16 +1173,19 @@ mod tests {
         );
     }
 
-    /// Helper-level pin: successful face persist must extend the batch vec.
+    /// Helper-level pin: successful face persist must extend the batch vec
+    /// and consume the subject queue entry.
     #[tokio::test]
     async fn save_faces_and_collect_extends_batch_with_new_face_ids() {
-        let pool = init_test_pool().await;
-        let image_id = seed_image(&pool).await;
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
         let mut batch = Vec::new();
         let attempted = save_faces_and_collect(
-            &pool,
+            pool,
             image_id,
-            Some((1, 0)),
+            Some((qid, 0)),
             "buffalo_s_recognition",
             vec![dummy_face(1.0), dummy_face(2.0)],
             &mut batch,
@@ -1136,62 +1199,72 @@ mod tests {
         );
         let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE image_id = ?")
             .bind(image_id)
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap();
         assert_eq!(stored, 2);
+        assert_eq!(
+            queue_row_count(pool, qid).await,
+            0,
+            "successful save must mark subject analysis done (delete queue row)"
+        );
     }
 
-    /// **The** TT-95 regression guard: drive the face-only Phase B arm
-    /// (`erx = None, frx = Some`) through `await_phase_b_replies` with a real
-    /// oneshot carrying faces, and assert IDs land in the *caller's* batch vec.
-    ///
-    /// Reintroducing the bug by wiring a throwaway `Vec` inside the
-    /// `(None, Some(frx))` arm (instead of `batch_new_face_ids`) fails this test.
+    /// TT-95 regression guard at the production call-site shape: `run_pipeline`
+    /// uses [`SubjectWorkBatch::absorb`], which always writes into the same
+    /// `face_ids` buffer later passed to `update_edges_incremental`. A throwaway
+    /// vec at either Phase B arm *or* the outer absorb call site fails this.
     #[tokio::test]
-    async fn face_only_phase_b_arm_extends_batch_new_face_ids() {
-        let pool = init_test_pool().await;
-        let image_id = seed_image(&pool).await;
-        let qid = seed_subject_queue(&pool, image_id).await;
+    async fn subject_work_batch_absorb_face_only_collects_ids_for_incremental() {
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
         let index = empty_index();
 
         let (ftx, frx) = tokio::sync::oneshot::channel();
         ftx.send(Ok(vec![dummy_face(1.0), dummy_face(2.0)]))
             .expect("oneshot send");
 
-        let mut batch = Vec::new();
-        let attempted = await_phase_b_replies(
-            &pool,
-            &index,
-            Pending {
-                image_id,
-                sem_entry: None, // no semantic work — face-only path
-                sub_entry: Some((qid, 0)),
-                erx: None,
-                frx: Some(frx),
-            },
-            "buffalo_s_recognition",
-            &mut batch,
-        )
-        .await;
+        let mut subject_batch = SubjectWorkBatch::new();
+        subject_batch
+            .absorb(
+                pool,
+                &index,
+                Pending {
+                    image_id,
+                    sem_entry: None, // no semantic work — face-only path
+                    sub_entry: Some((qid, 0)),
+                    erx: None,
+                    frx: Some(frx),
+                },
+                "buffalo_s_recognition",
+            )
+            .await;
 
-        assert!(attempted, "face-only arm must report subject work");
-        assert_eq!(
-            batch.len(),
-            2,
-            "face-only Phase B must extend batch_new_face_ids (TT-95)"
+        assert!(
+            subject_batch.processed,
+            "face-only arm must report subject work"
         );
+        assert_eq!(
+            subject_batch.face_ids.len(),
+            2,
+            "SubjectWorkBatch.face_ids is what update_edges_incremental receives (TT-95)"
+        );
+        assert_eq!(queue_row_count(pool, qid).await, 0);
     }
 
     #[tokio::test]
     async fn handle_face_result_ok_collects_ids() {
-        let pool = init_test_pool().await;
-        let image_id = seed_image(&pool).await;
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
         let mut batch = Vec::new();
         let attempted = handle_face_result(
-            &pool,
+            pool,
             image_id,
-            Some((1, 0)),
+            Some((qid, 0)),
             "buffalo_s_recognition",
             Ok(Ok(vec![dummy_face(1.0)])),
             &mut batch,
@@ -1199,16 +1272,22 @@ mod tests {
         .await;
         assert!(attempted);
         assert_eq!(batch.len(), 1);
+        assert_eq!(
+            queue_row_count(pool, qid).await,
+            0,
+            "success path must consume the subject queue entry"
+        );
     }
 
     #[tokio::test]
     async fn handle_face_result_analysis_err_records_queue_failure() {
-        let pool = init_test_pool().await;
-        let image_id = seed_image(&pool).await;
-        let qid = seed_subject_queue(&pool, image_id).await;
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
         let mut batch = Vec::new();
         let attempted = handle_face_result(
-            &pool,
+            pool,
             image_id,
             Some((qid, 0)),
             "buffalo_s_recognition",
@@ -1221,7 +1300,7 @@ mod tests {
         let (attempts, err): (i32, String) =
             sqlx::query_as("SELECT attempts, last_error FROM embedding_queue WHERE id = ?")
                 .bind(qid)
-                .fetch_one(&pool)
+                .fetch_one(pool)
                 .await
                 .unwrap();
         assert_eq!(attempts, 1);
@@ -1230,15 +1309,16 @@ mod tests {
 
     #[tokio::test]
     async fn handle_face_result_recv_dropped_records_queue_failure() {
-        let pool = init_test_pool().await;
-        let image_id = seed_image(&pool).await;
-        let qid = seed_subject_queue(&pool, image_id).await;
+        let db = TestDb::init().await;
+        let pool = db.pool();
+        let image_id = seed_image(pool).await;
+        let qid = seed_subject_queue(pool, image_id).await;
         let (ftx, frx) =
             tokio::sync::oneshot::channel::<anyhow::Result<Vec<face_actor::FaceResult>>>();
         drop(ftx);
         let mut batch = Vec::new();
         let attempted = handle_face_result(
-            &pool,
+            pool,
             image_id,
             Some((qid, 0)),
             "buffalo_s_recognition",
@@ -1251,7 +1331,7 @@ mod tests {
         let (attempts, err): (i32, String) =
             sqlx::query_as("SELECT attempts, last_error FROM embedding_queue WHERE id = ?")
                 .bind(qid)
-                .fetch_one(&pool)
+                .fetch_one(pool)
                 .await
                 .unwrap();
         assert_eq!(attempts, 1);
