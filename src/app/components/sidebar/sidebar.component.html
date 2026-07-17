@@ -1,97 +1,83 @@
 <aside class="sidebar-container">
-  <!-- Header -->
-  <div class="sidebar-header">
-    <span class="sidebar-title">Library</span>
-  </div>
-
-  <!-- Folder list -->
   <nav class="sidebar-nav">
-    <!-- "All Photos" entry -->
-    <app-sidebar-item
-      [isActive]="photos.selectedFolderId() === null && isGalleryActive()"
-      (click)="selectFolder(null)"
-    >
-      <span class="folder-icon">
-        <lucide-icon name="images" size="14"></lucide-icon>
-      </span>
-      <span class="folder-name">All Photos</span>
-      <span class="folder-count">
-        {{ photos.totalPhotoCount() }}
-      </span>
-    </app-sidebar-item>
-
-    <app-sidebar-item
-      [isActive]="isPeopleActive()"
-      routerLink="/people"
-    >
-      <span class="folder-icon">
-        <lucide-icon name="users" size="14"></lucide-icon>
-      </span>
-      <span class="folder-name">People</span>
-    </app-sidebar-item>
-
-    <app-sidebar-item
-      [isActive]="isTagsActive()"
-      routerLink="/tags"
-    >
-      <span class="folder-icon">
-        <lucide-icon name="tag" size="14"></lucide-icon>
-      </span>
-      <span class="folder-name">Tags</span>
-    </app-sidebar-item>
-
-    <app-sidebar-item
-      [isActive]="isReportsActive()"
-      routerLink="/reports"
-    >
-      <span class="folder-icon">
-        <lucide-icon name="file-bar-chart" size="14"></lucide-icon>
-      </span>
-      <span class="folder-name">Reports</span>
-    </app-sidebar-item>
-
-    <div class="sidebar-divider"></div>
-
-    <span class="sidebar-title sidebar-title--sub">Folders</span>
-
-    <!-- Per-folder entries -->
-    @for (folder of photos.folders(); track folder.id) {
+    <!-- Library section -->
+    <app-sidebar-section title="Library">
       <app-sidebar-item
-        [isActive]="photos.selectedFolderId() === folder.id"
-        (click)="selectFolder(folder.id)"
-        [title]="folder.path"
+        [isActive]="photos.selectedFolderId() === null && isGalleryActive()"
+        (click)="selectFolder(null)"
       >
         <span class="folder-icon">
-          <lucide-icon name="folder" size="14"></lucide-icon>
+          <lucide-icon name="images" size="14"></lucide-icon>
         </span>
-        <span class="folder-name">{{ folderBasename(folder.path) }}</span>
-        <span class="folder-count">{{ folder.photo_count }}</span>
-        <button
-          class="folder-remove"
-          title="Remove folder"
-          (click)="removeFolder(folder.id, folder.path, $event)"
-        >
-          <lucide-icon name="x" size="12"></lucide-icon>
-        </button>
+        <span class="folder-name">All Photos</span>
+        <span class="folder-count">
+          {{ photos.totalPhotoCount() }}
+        </span>
       </app-sidebar-item>
-    }
 
-    @if (photos.folders().length === 0) {
-      <p class="sidebar-empty">No folders yet</p>
-    }
+      <app-sidebar-item [isActive]="isPeopleActive()" routerLink="/people">
+        <span class="folder-icon">
+          <lucide-icon name="users" size="14"></lucide-icon>
+        </span>
+        <span class="folder-name">People</span>
+      </app-sidebar-item>
+
+      <app-sidebar-item [isActive]="isTagsActive()" routerLink="/tags">
+        <span class="folder-icon">
+          <lucide-icon name="tag" size="14"></lucide-icon>
+        </span>
+        <span class="folder-name">Tags</span>
+      </app-sidebar-item>
+
+      <app-sidebar-item [isActive]="isReportsActive()" routerLink="/reports">
+        <span class="folder-icon">
+          <lucide-icon name="file-bar-chart" size="14"></lucide-icon>
+        </span>
+        <span class="folder-name">Reports</span>
+      </app-sidebar-item>
+    </app-sidebar-section>
+
+    <!-- Folders section -->
+    <app-sidebar-section title="Folders" [divider]="true">
+      <button
+        sidebarSectionAction
+        class="sidebar-section-action"
+        title="Add folder"
+        (click)="addFolder()"
+      >
+        <lucide-icon name="plus" size="14"></lucide-icon>
+      </button>
+
+      @for (folder of photos.folders(); track folder.id) {
+        <app-sidebar-item
+          [isActive]="photos.selectedFolderId() === folder.id"
+          (click)="selectFolder(folder.id)"
+          [title]="folder.path"
+        >
+          <span class="folder-icon">
+            <lucide-icon name="folder" size="14"></lucide-icon>
+          </span>
+          <span class="folder-name">{{ folderBasename(folder.path) }}</span>
+          <span class="folder-count">{{ folder.photo_count }}</span>
+          <button
+            class="folder-remove"
+            title="Remove folder"
+            (click)="removeFolder(folder.id, folder.path, $event)"
+          >
+            <lucide-icon name="x" size="12"></lucide-icon>
+          </button>
+        </app-sidebar-item>
+      }
+
+      @if (photos.folders().length === 0) {
+        <p class="sidebar-empty">No folders yet</p>
+      }
+    </app-sidebar-section>
   </nav>
 
-  <!-- Footer: Add folder -->
+  <!-- Footer: Settings -->
   <div class="sidebar-footer">
-    <button class="btn-add-folder" (click)="addFolder()">
-      <lucide-icon name="plus" size="14"></lucide-icon>
-      Add Folder
-    </button>
-
-    <app-sidebar-item
-      routerLink="/settings"
-      [isActive]="isSettingsActive()"
-    >
+    <app-sidebar-item routerLink="/settings" [isActive]="isSettingsActive()">
       <span class="folder-icon">
         <lucide-icon name="settings" size="14"></lucide-icon>
       </span>
