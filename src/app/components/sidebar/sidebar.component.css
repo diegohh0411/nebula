@@ -2,24 +2,17 @@
   @apply flex flex-col h-full w-64 border-r border-border bg-background px-4;
 }
 
-.sidebar-header {
-  @apply flex items-center py-3 border-b border-border flex-shrink-0;
-}
-
-.sidebar-title {
-  @apply text-xs font-semibold uppercase tracking-widest text-muted-foreground;
-}
-
-.sidebar-title--sub {
-  @apply block mt-2 mb-1;
-}
-
 .sidebar-nav {
   @apply flex-1 overflow-y-auto py-2 -mx-4 px-4;
 }
 
 .sidebar-empty {
   @apply text-xs text-muted-foreground py-2;
+}
+
+.sidebar-section-action {
+  @apply flex-shrink-0 p-1 rounded text-muted-foreground hover:text-foreground
+         hover:bg-accent transition-colors border-0 bg-transparent cursor-pointer;
 }
 
 .folder-item {
@@ -61,11 +54,4 @@
 /* Footer */
 .sidebar-footer {
   @apply flex flex-col gap-2 py-3 border-t border-border flex-shrink-0;
-}
-
-.btn-add-folder {
-  @apply flex items-center justify-center gap-2 flex-1 px-3 py-2 text-sm font-medium
-         rounded-md border border-dashed border-border text-muted-foreground
-         hover:border-primary hover:text-foreground hover:bg-accent
-         transition-colors cursor-pointer bg-transparent;
 }
