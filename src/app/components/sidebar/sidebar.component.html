@@ -40,13 +40,14 @@
     <!-- Folders section -->
     <app-sidebar-section title="Folders" [divider]="true">
       <button
+        type="button"
         sidebarSectionAction
         class="sidebar-section-action"
         title="Add folder"
         aria-label="Add folder"
         (click)="addFolder()"
       >
-        <lucide-icon name="plus" size="14"></lucide-icon>
+        <lucide-icon name="plus" size="14" aria-hidden="true"></lucide-icon>
       </button>
 
       @for (folder of photos.folders(); track folder.id) {
