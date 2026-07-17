@@ -1,0 +1,15 @@
+:host {
+  @apply block;
+}
+
+.sidebar-section-divider {
+  @apply border-t border-border mt-3 pt-1;
+}
+
+.sidebar-section-header {
+  @apply flex items-center justify-between mt-2 mb-1;
+}
+
+.sidebar-section-title {
+  @apply text-xs font-semibold uppercase tracking-widest text-muted-foreground;
+}
