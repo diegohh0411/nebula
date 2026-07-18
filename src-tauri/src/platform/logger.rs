@@ -54,11 +54,13 @@ impl log::Log for FileLogger {
 }
 
 /// Default log directive used when `RUST_LOG` is unset: keep our own crate at
-/// DEBUG, surface everything else at INFO, and mute sqlx's per-statement DEBUG
+/// DEBUG, surface everything else at INFO, mute sqlx's per-statement DEBUG
 /// spam (it logs every query under the `sqlx` target) down to WARN so slow-query
-/// warnings still come through. Override with `RUST_LOG`, e.g.
-/// `RUST_LOG=info,sqlx::query=debug` to bring statement logging back.
-const DEFAULT_DIRECTIVES: &str = "info,nebula_lib=debug,sqlx=warn";
+/// warnings still come through, and mute ONNX Runtime (`ort`) session-init
+/// INFO flood (GraphTransformer / Removing initializer / BFCArena) down to
+/// WARN so real warnings still surface. Override with `RUST_LOG`, e.g.
+/// `RUST_LOG=info,sqlx::query=debug,ort=info` to bring either back.
+const DEFAULT_DIRECTIVES: &str = "info,nebula_lib=debug,sqlx=warn,ort=warn";
 
 /// Build the level/target filter from an optional directive string (typically
 /// `RUST_LOG`). When `None`, [`DEFAULT_DIRECTIVES`] is used.
@@ -115,10 +117,44 @@ mod tests {
     }
 
     #[test]
+    fn default_mutes_ort_info_but_keeps_ort_warn() {
+        let f = build_filter(None);
+        // ort session-init spam (GraphTransformer / BFCArena / etc.) is INFO.
+        assert!(
+            !enabled(&f, Level::Info, "ort::logging"),
+            "ort INFO session-init spam must be muted by default"
+        );
+        assert!(
+            !enabled(&f, Level::Info, "ort"),
+            "ort INFO at the crate root must be muted by default"
+        );
+        // Genuine ort warnings/errors still surface.
+        assert!(
+            enabled(&f, Level::Warn, "ort::logging"),
+            "ort WARN must still surface by default"
+        );
+        assert!(
+            enabled(&f, Level::Error, "ort::lifetime"),
+            "ort ERROR must still surface by default"
+        );
+    }
+
+    #[test]
     fn explicit_directive_overrides_default() {
         // `RUST_LOG=trace` brings everything back, including sqlx statements.
         let f = build_filter(Some("trace"));
         assert!(enabled(&f, Level::Debug, "sqlx::query"));
         assert!(enabled(&f, Level::Trace, "anything::at::all"));
+        assert!(enabled(&f, Level::Info, "ort::logging"));
+    }
+
+    #[test]
+    fn rust_log_can_restore_ort_info() {
+        // Explicit override restores ORT session-init logs on demand.
+        let f = build_filter(Some("info,ort=info"));
+        assert!(
+            enabled(&f, Level::Info, "ort::logging"),
+            "RUST_LOG=info,ort=info must restore ort INFO"
+        );
     }
 }
