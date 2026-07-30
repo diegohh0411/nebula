@@ -17,13 +17,28 @@
         </div>
 
         <div class="field-group">
-          <label>Target Folder</label>
-          <select [ngModel]="newFolderId()" (ngModelChange)="newFolderId.set($event)">
-            <option [ngValue]="null">Select Folder...</option>
-            @for (f of photos.folders(); track f.id) {
-              <option [ngValue]="f.id">{{ getFolderName(f.id) }}</option>
+          <label>Source Folders</label>
+          <div class="multi-select-container">
+            <button type="button" class="multi-select-trigger" (click)="toggleFolderDropdown($event)">
+              <span class="trigger-text">{{ getSelectedFoldersText() }}</span>
+              <lucide-icon name="chevron-down" size="14"></lucide-icon>
+            </button>
+
+            @if (isFolderDropdownOpen()) {
+              <div class="multi-select-dropdown">
+                <div class="dropdown-options">
+                  @for (f of photos.folders(); track f.id) {
+                    <label class="dropdown-option" (click)="$event.stopPropagation()">
+                      <input type="checkbox" [checked]="isFolderSelected(f.id)" (change)="toggleFolder(f.id)">
+                      <span class="option-name">{{ getFolderName(f.id) }}</span>
+                    </label>
+                  } @empty {
+                    <div class="no-options">No folders found</div>
+                  }
+                </div>
+              </div>
             }
-          </select>
+          </div>
         </div>
 
         <div class="field-group">
@@ -63,7 +78,7 @@
       </div>
 
       <div class="form-actions">
-        <button class="btn-primary" (click)="createReport()" [disabled]="!newFolderId() || selectedTagIds().length === 0 || !newName().trim() || isSubmitting()">
+        <button class="btn-primary" (click)="createReport()" [disabled]="selectedFolderIds().length === 0 || selectedTagIds().length === 0 || !newName().trim() || isSubmitting()">
           {{ isSubmitting() ? 'Saving...' : 'Save & Run' }}
         </button>
         <button class="btn-secondary" (click)="cancelCreation()">Cancel</button>
@@ -81,7 +96,7 @@
           </button>
         </div>
         <div class="card-body">
-          <p><strong>Folder:</strong> {{ getFolderName(rep.folder_id) }}</p>
+          <p><strong>{{ rep.folder_ids.length === 1 ? 'Folder' : 'Folders' }}:</strong> {{ getFoldersDesc(rep.folder_ids) }}</p>
           <p><strong>Tags:</strong> {{ getTagsDesc(rep.tag_ids) }}</p>
         </div>
       </div>

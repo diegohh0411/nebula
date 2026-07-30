@@ -21,6 +21,7 @@ import {
   FaceBBox,
   CoverageReport,
   SavedReport,
+  ProcessingProgress,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -473,11 +474,20 @@ export class PhotoService {
     return await invoke<SubjectMatch[]>('get_tag_subjects', { tagId });
   }
 
-  async getFolderCoverage(folderId: number, tagIds: number[]): Promise<CoverageReport> {
-    return await invoke<CoverageReport>('get_folder_coverage', { folderId, tagIds });
+  async getFolderCoverage(folderIds: number[], tagIds: number[]): Promise<CoverageReport> {
+    return await invoke<CoverageReport>('get_folder_coverage', { folderIds, tagIds });
   }
-  async createSavedReport(name: string, folderId: number, tagIds: number[]): Promise<SavedReport> {
-    return await invoke<SavedReport>('create_saved_report', { name, folderId, tagIds });
+  async createSavedReport(name: string, folderIds: number[], tagIds: number[]): Promise<SavedReport> {
+    return await invoke<SavedReport>('create_saved_report', { name, folderIds, tagIds });
+  }
+  /** Bump the report's source folders to the front of the inference queue.
+   *  Resolves to the number of queue entries moved. */
+  async prioritizeReportProcessing(reportId: number): Promise<number> {
+    return await invoke<number>('prioritize_report_processing', { reportId });
+  }
+  /** Fully-processed image counts across the report's source folders. */
+  async getReportProcessingProgress(reportId: number): Promise<ProcessingProgress> {
+    return await invoke<ProcessingProgress>('get_report_processing_progress', { reportId });
   }
   async listSavedReports(): Promise<SavedReport[]> {
     return await invoke<SavedReport[]>('list_saved_reports');

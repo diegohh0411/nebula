@@ -1,3 +1,4 @@
+pub mod cadence;
 pub mod decoded_image;
 pub mod embed_actor;
 pub mod face_actor;
@@ -480,6 +481,205 @@ enum DecodeFailure {
     Other(String),
 }
 
+/// Stage 0+1: pull due work from both queues and decode it with bounded
+/// parallelism. Returns `None` when both queues are empty (the loop should
+/// idle). Decode failures are recorded/dead-lettered here, so the returned
+/// batch contains only successfully decoded images.
+///
+/// `exclude_qids` lets the prefetcher run this while the previous batch is
+/// still in flight: in-flight entries stay in `embedding_queue` until their
+/// results are persisted, so without the exclusion the lookahead pull would
+/// return the same rows again.
+async fn pull_and_decode_batch(
+    pool: &sqlx::SqlitePool,
+    batch_size: i64,
+    load_depth: usize,
+    exclude_qids: &[i64],
+) -> Option<Vec<(i64, WorkSlot, WorkSlot, DecodedImage)>> {
+    let sem_batch =
+        match crate::pipeline::queue::get_queue_batch(pool, "semantic", batch_size, exclude_qids)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                error!("[pipeline] semantic queue fetch error: {e}");
+                vec![]
+            }
+        };
+    let sub_batch =
+        match crate::pipeline::queue::get_queue_batch(pool, "subject", batch_size, exclude_qids)
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                error!("[pipeline] subject queue fetch error: {e}");
+                vec![]
+            }
+        };
+
+    if sem_batch.is_empty() && sub_batch.is_empty() {
+        return None;
+    }
+
+    debug!(
+        "[pipeline] Found {} semantic pending, {} subject pending",
+        sem_batch.len(),
+        sub_batch.len()
+    );
+
+    // Merge by image_id, tracking separate queue_ids for each operation
+    let mut image_work: std::collections::HashMap<i64, (WorkSlot, WorkSlot)> =
+        std::collections::HashMap::new();
+    for (qid, image_id, attempts) in sem_batch {
+        image_work.entry(image_id).or_default().0 = Some((qid, attempts));
+    }
+    for (qid, image_id, attempts) in sub_batch {
+        image_work.entry(image_id).or_default().1 = Some((qid, attempts));
+    }
+    let batch: Vec<(i64, WorkSlot, WorkSlot)> = image_work
+        .into_iter()
+        .map(|(image_id, (sem, sub))| (image_id, sem, sub))
+        .collect();
+
+    let batch_size = batch.len();
+    info!("[pipeline] Pulled batch of {batch_size} distinct images");
+
+    // Bounded-parallel decode
+    let sem = Arc::new(tokio::sync::Semaphore::new(load_depth));
+    let mut handles = Vec::new();
+    for (image_id, sem_entry, sub_entry) in batch {
+        let pool_c = pool.clone();
+        let permit = sem
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("local semaphore closed unexpectedly");
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            let image = match crate::library::repo::get_image_by_id(&pool_c, image_id).await {
+                Ok(Some(i)) => i,
+                Ok(None) => return Err((image_id, sem_entry, sub_entry, DecodeFailure::ImageGone)),
+                Err(e) => {
+                    return Err((
+                        image_id,
+                        sem_entry,
+                        sub_entry,
+                        DecodeFailure::Other(e.to_string()),
+                    ))
+                }
+            };
+            let path = image.path.clone();
+            match tokio::task::spawn_blocking(move || {
+                // Classify inside the blocking context: a file moved or
+                // deleted after indexing can never be decoded, so the caller
+                // drops it immediately instead of retrying forever. The
+                // existence check is filesystem IO, so it belongs here rather
+                // than on the async runtime thread. Use the alternate
+                // formatter (`{:#}`) to keep the full cause chain;
+                // `to_string()` would only show the outer context.
+                match decoded_image::load_decoded(image_id, std::path::Path::new(&path)) {
+                    Ok(d) => Ok(d),
+                    Err(_) if !std::path::Path::new(&path).exists() => {
+                        Err(DecodeFailure::Missing(path))
+                    }
+                    Err(e) => Err(DecodeFailure::Other(format!("{e:#}"))),
+                }
+            })
+            .await
+            {
+                Ok(Ok(d)) => Ok((image_id, sem_entry, sub_entry, d)),
+                Ok(Err(failure)) => Err((image_id, sem_entry, sub_entry, failure)),
+                Err(e) => Err((
+                    image_id,
+                    sem_entry,
+                    sub_entry,
+                    DecodeFailure::Other(format!("decode task failed: {e}")),
+                )),
+            }
+        }));
+    }
+    let mut decoded = Vec::new();
+    for h in handles {
+        match h.await {
+            Ok(Ok(x)) => {
+                decoded.push(x);
+            }
+            Ok(Err((image_id, _sem_entry, _sub_entry, DecodeFailure::ImageGone))) => {
+                debug!(
+                    "[pipeline] image {image_id} not found (deleted mid-pipeline), skipping decode"
+                );
+            }
+            Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Missing(path)))) => {
+                // File is gone from disk — permanent. Drop both queue
+                // entries now so they stop dominating every batch.
+                warn!(
+                    "[pipeline] image {image_id} file missing on disk, dropping from queue: {path}"
+                );
+                if let Some((sem_qid, _)) = sem_entry {
+                    if let Err(e) = crate::pipeline::queue::dead_letter(pool, sem_qid).await {
+                        error!("[pipeline] failed to drop semantic entry for missing image {image_id}: {e:#}");
+                    }
+                }
+                if let Some((sub_qid, _)) = sub_entry {
+                    if let Err(e) = crate::pipeline::queue::dead_letter(pool, sub_qid).await {
+                        error!("[pipeline] failed to drop subject entry for missing image {image_id}: {e:#}");
+                    }
+                }
+            }
+            Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
+                error!("[pipeline] decode failed for image {image_id}: {err_msg}");
+                if let Some((sem_qid, sem_attempts)) = sem_entry {
+                    record_queue_failure(
+                        pool,
+                        "semantic",
+                        image_id,
+                        sem_qid,
+                        sem_attempts,
+                        &err_msg,
+                    )
+                    .await;
+                }
+                if let Some((sub_qid, sub_attempts)) = sub_entry {
+                    record_queue_failure(
+                        pool,
+                        "subject",
+                        image_id,
+                        sub_qid,
+                        sub_attempts,
+                        &err_msg,
+                    )
+                    .await;
+                }
+            }
+            Err(e) => error!("[pipeline] decode task panicked: {e}"),
+        }
+    }
+
+    debug!(
+        "[pipeline] Decoded {}/{} images for inference",
+        decoded.len(),
+        batch_size
+    );
+    Some(decoded)
+}
+
+/// Persist the vector-index snapshot off the async runtime.
+async fn save_index_snapshot(
+    index: &crate::search::vector_index::IndexStore,
+    data_dir: &std::path::Path,
+) {
+    let snap_path = data_dir.join("nebula.idx");
+    let index_snap = Arc::clone(index);
+    tokio::task::spawn_blocking(move || {
+        let guard = index_snap.read().unwrap();
+        if let Err(e) = guard.save(&snap_path) {
+            error!("[pipeline] failed to save index snapshot: {e}");
+        }
+    })
+    .await
+    .ok();
+}
+
 /// A batch image whose applicable embed/face requests were dispatched in
 /// Phase A. Phase B awaits `erx`/`frx` and persists the results. Receivers are
 /// `None` when that image had no corresponding queue slot, or the actor's
@@ -683,6 +883,16 @@ pub async fn run_pipeline(
         .unwrap_or(false);
     info!("[pipeline] clustering state recovered: dirty={clustering_dirty}");
 
+    // Deferred side work runs on a cadence instead of every batch: the index
+    // snapshot write and the whole-graph relabel were the two largest
+    // non-inference costs on the loop's critical path. Both flush on idle.
+    let clock = std::time::Instant::now();
+    let mut snapshot_cadence = cadence::Cadence::new(usize::MAX, 60.0, 0.0);
+    let mut relabel_cadence = cadence::Cadence::new(5, 30.0, 0.0);
+
+    // Batch decoded ahead by the prefetcher during the previous iteration.
+    let mut prefetched: Option<Vec<(i64, WorkSlot, WorkSlot, DecodedImage)>> = None;
+
     loop {
         // Per-batch preset resolution (§1 wiring fix): a mid-session
         // subject_model change takes effect on the next iteration with no
@@ -708,225 +918,82 @@ pub async fn run_pipeline(
             }
         }
 
-        // Pull both queues
-        let sem_batch = match crate::pipeline::queue::get_queue_batch(
-            &pool,
-            "semantic",
-            config.batch_size as i64,
-        )
-        .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                error!("[pipeline] semantic queue fetch error: {e}");
-                vec![]
-            }
-        };
-        let sub_batch = match crate::pipeline::queue::get_queue_batch(
-            &pool,
-            "subject",
-            config.batch_size as i64,
-        )
-        .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                error!("[pipeline] subject queue fetch error: {e}");
-                vec![]
-            }
-        };
-
-        if sem_batch.is_empty() && sub_batch.is_empty() {
-            // Idle backstop: one authoritative full sweep reconciles any drift
-            // accumulated by the incremental path. Cancellable so new import work
-            // preempts it instead of stalling.
-            if clustering_dirty {
-                info!("[pipeline] Idle: running authoritative full clustering sweep...");
-                // Non-blocking cancellation: a background poller flips the flag when
-                // new inference work lands, and the sweep reads it between faces.
-                let cancel_flag = Arc::new(AtomicBool::new(false));
-                let poll_flag = cancel_flag.clone();
-                let poll_pool = pool.clone();
-                let poller = tauri::async_runtime::spawn(async move {
-                    loop {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                        if crate::pipeline::queue::count_due_inference(&poll_pool)
-                            .await
-                            .unwrap_or(0)
-                            > 0
-                        {
-                            poll_flag.store(true, AtomicOrdering::Relaxed);
-                            break;
-                        }
+        // Consume the batch decoded ahead by the prefetcher, or pull fresh.
+        // `None` from a fresh pull means both queues are empty (idle).
+        let decoded = if let Some(d) = prefetched.take() {
+            d
+        } else {
+            match pull_and_decode_batch(
+                &pool,
+                config.batch_size as i64,
+                config.load_channel_depth,
+                &[],
+            )
+            .await
+            {
+                Some(d) => d,
+                None => {
+                    // Flush deferred side work before idling so nothing waits
+                    // on the next import to be persisted.
+                    if snapshot_cadence.pending() {
+                        snapshot_cadence.mark_fired(clock.elapsed().as_secs_f32());
+                        save_index_snapshot(&index, &data_dir).await;
                     }
-                });
-                let result = crate::people::clustering::cluster_unassigned_faces(
-                    &pool,
-                    subject_preset.embedder.id,
-                    Some(cancel_flag.as_ref()),
-                )
-                .await;
-                poller.abort();
-                match result {
-                    Ok(Some(_)) => {
-                        upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
-                        clustering_dirty = false;
-                        let _ =
-                            crate::settings::repo::set_setting(&pool, "clustering_dirty", "false")
+                    // Idle backstop: one authoritative full sweep reconciles any drift
+                    // accumulated by the incremental path. Cancellable so new import work
+                    // preempts it instead of stalling.
+                    if clustering_dirty {
+                        info!("[pipeline] Idle: running authoritative full clustering sweep...");
+                        // Non-blocking cancellation: a background poller flips the flag when
+                        // new inference work lands, and the sweep reads it between faces.
+                        let cancel_flag = Arc::new(AtomicBool::new(false));
+                        let poll_flag = cancel_flag.clone();
+                        let poll_pool = pool.clone();
+                        let poller = tauri::async_runtime::spawn(async move {
+                            loop {
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                if crate::pipeline::queue::count_due_inference(&poll_pool)
+                                    .await
+                                    .unwrap_or(0)
+                                    > 0
+                                {
+                                    poll_flag.store(true, AtomicOrdering::Relaxed);
+                                    break;
+                                }
+                            }
+                        });
+                        let result = crate::people::clustering::cluster_unassigned_faces(
+                            &pool,
+                            subject_preset.embedder.id,
+                            Some(cancel_flag.as_ref()),
+                        )
+                        .await;
+                        poller.abort();
+                        match result {
+                            Ok(Some(_)) => {
+                                upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
+                                clustering_dirty = false;
+                                // The sweep supersedes any relabel still pending on the cadence.
+                                relabel_cadence.mark_fired(clock.elapsed().as_secs_f32());
+                                let _ = crate::settings::repo::set_setting(
+                                    &pool,
+                                    "clustering_dirty",
+                                    "false",
+                                )
                                 .await;
-                        info!("[pipeline] Idle full sweep complete.");
+                                info!("[pipeline] Idle full sweep complete.");
+                            }
+                            Ok(None) => {
+                                info!("[pipeline] Idle full sweep cancelled — new work arrived.");
+                            }
+                            Err(e) => error!("[pipeline] idle full sweep failed: {e}"),
+                        }
                     }
-                    Ok(None) => {
-                        info!("[pipeline] Idle full sweep cancelled — new work arrived.");
-                    }
-                    Err(e) => error!("[pipeline] idle full sweep failed: {e}"),
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
                 }
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            continue;
-        }
-
-        debug!(
-            "[pipeline] Loop waking up. Found {} semantic pending, {} subject pending",
-            sem_batch.len(),
-            sub_batch.len()
-        );
-
-        // Merge by image_id, tracking separate queue_ids for each operation
-        let mut image_work: std::collections::HashMap<i64, (WorkSlot, WorkSlot)> =
-            std::collections::HashMap::new();
-        for (qid, image_id, attempts) in sem_batch {
-            image_work.entry(image_id).or_default().0 = Some((qid, attempts));
-        }
-        for (qid, image_id, attempts) in sub_batch {
-            image_work.entry(image_id).or_default().1 = Some((qid, attempts));
-        }
-        let batch: Vec<(i64, WorkSlot, WorkSlot)> = image_work
-            .into_iter()
-            .map(|(image_id, (sem, sub))| (image_id, sem, sub))
-            .collect();
-
-        let batch_size = batch.len();
-        info!("[pipeline] Processing batch of {batch_size} distinct images");
-
-        // Stage 1: bounded-parallel decode
-        let sem = Arc::new(tokio::sync::Semaphore::new(config.load_channel_depth));
-        let mut handles = Vec::new();
-        for (image_id, sem_entry, sub_entry) in batch {
-            let pool_c = pool.clone();
-            let permit = sem
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("local semaphore closed unexpectedly");
-            handles.push(tokio::spawn(async move {
-                let _permit = permit;
-                let image = match crate::library::repo::get_image_by_id(&pool_c, image_id).await {
-                    Ok(Some(i)) => i,
-                    Ok(None) => {
-                        return Err((image_id, sem_entry, sub_entry, DecodeFailure::ImageGone))
-                    }
-                    Err(e) => {
-                        return Err((
-                            image_id,
-                            sem_entry,
-                            sub_entry,
-                            DecodeFailure::Other(e.to_string()),
-                        ))
-                    }
-                };
-                let path = image.path.clone();
-                match tokio::task::spawn_blocking(move || {
-                    // Classify inside the blocking context: a file moved or
-                    // deleted after indexing can never be decoded, so the caller
-                    // drops it immediately instead of retrying forever. The
-                    // existence check is filesystem IO, so it belongs here rather
-                    // than on the async runtime thread. Use the alternate
-                    // formatter (`{:#}`) to keep the full cause chain;
-                    // `to_string()` would only show the outer context.
-                    match decoded_image::load_decoded(image_id, std::path::Path::new(&path)) {
-                        Ok(d) => Ok(d),
-                        Err(_) if !std::path::Path::new(&path).exists() => {
-                            Err(DecodeFailure::Missing(path))
-                        }
-                        Err(e) => Err(DecodeFailure::Other(format!("{e:#}"))),
-                    }
-                })
-                .await
-                {
-                    Ok(Ok(d)) => Ok((image_id, sem_entry, sub_entry, d)),
-                    Ok(Err(failure)) => Err((image_id, sem_entry, sub_entry, failure)),
-                    Err(e) => Err((
-                        image_id,
-                        sem_entry,
-                        sub_entry,
-                        DecodeFailure::Other(format!("decode task failed: {e}")),
-                    )),
-                }
-            }));
-        }
-        let mut decoded = Vec::new();
-        for h in handles {
-            match h.await {
-                Ok(Ok(x)) => {
-                    decoded.push(x);
-                }
-                Ok(Err((image_id, _sem_entry, _sub_entry, DecodeFailure::ImageGone))) => {
-                    debug!(
-                        "[pipeline] image {image_id} not found (deleted mid-pipeline), skipping decode"
-                    );
-                }
-                Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Missing(path)))) => {
-                    // File is gone from disk — permanent. Drop both queue
-                    // entries now so they stop dominating every batch.
-                    warn!(
-                        "[pipeline] image {image_id} file missing on disk, dropping from queue: {path}"
-                    );
-                    if let Some((sem_qid, _)) = sem_entry {
-                        if let Err(e) = crate::pipeline::queue::dead_letter(&pool, sem_qid).await {
-                            error!("[pipeline] failed to drop semantic entry for missing image {image_id}: {e:#}");
-                        }
-                    }
-                    if let Some((sub_qid, _)) = sub_entry {
-                        if let Err(e) = crate::pipeline::queue::dead_letter(&pool, sub_qid).await {
-                            error!("[pipeline] failed to drop subject entry for missing image {image_id}: {e:#}");
-                        }
-                    }
-                }
-                Ok(Err((image_id, sem_entry, sub_entry, DecodeFailure::Other(err_msg)))) => {
-                    error!("[pipeline] decode failed for image {image_id}: {err_msg}");
-                    if let Some((sem_qid, sem_attempts)) = sem_entry {
-                        record_queue_failure(
-                            &pool,
-                            "semantic",
-                            image_id,
-                            sem_qid,
-                            sem_attempts,
-                            &err_msg,
-                        )
-                        .await;
-                    }
-                    if let Some((sub_qid, sub_attempts)) = sub_entry {
-                        record_queue_failure(
-                            &pool,
-                            "subject",
-                            image_id,
-                            sub_qid,
-                            sub_attempts,
-                            &err_msg,
-                        )
-                        .await;
-                    }
-                }
-                Err(e) => error!("[pipeline] decode task panicked: {e}"),
-            }
-        }
-
-        let images_processed_this_iter = decoded.len();
-        debug!(
-            "[pipeline] Decoded {}/{} images for inference",
-            images_processed_this_iter, batch_size
-        );
+        };
 
         // Stage 2: dispatch embed + face, write results.
         // SubjectWorkBatch owns both the processed flag and face IDs so
@@ -939,6 +1006,23 @@ pub async fn run_pipeline(
         // single face worker never idles waiting for Phase B to hand it the next
         // image. See dispatch_batch for the channel-depth invariant.
         let pending = dispatch_batch(&pool, decoded, &embed_tx, &face_tx).await;
+
+        // Prefetch the next batch while Phase B awaits inference, so decode
+        // overlaps inference instead of serializing after it. The in-flight
+        // queue ids are excluded — they stay in the table until persisted.
+        let in_flight: Vec<i64> = pending
+            .iter()
+            .flat_map(|p| [p.sem_entry.map(|(q, _)| q), p.sub_entry.map(|(q, _)| q)])
+            .flatten()
+            .collect();
+        let prefetch = {
+            let pool_c = pool.clone();
+            let batch_size = config.batch_size as i64;
+            let load_depth = config.load_channel_depth;
+            tokio::spawn(async move {
+                pull_and_decode_batch(&pool_c, batch_size, load_depth, &in_flight).await
+            })
+        };
 
         // Phase B — await both replies per image and persist results. Dispatch
         // already happened in Phase A (dispatch_batch), so this loop no longer
@@ -959,24 +1043,19 @@ pub async fn run_pipeline(
 
         crate::search::math::emit_progress(&pool, &app).await;
 
-        // Persist index snapshot
-        let snap_path = data_dir.join("nebula.idx");
-        let index_snap = Arc::clone(&index);
-        tokio::task::spawn_blocking(move || {
-            let guard = index_snap.read().unwrap();
-            if let Err(e) = guard.save(&snap_path) {
-                error!("[pipeline] failed to save index snapshot: {e}");
-            }
-        })
-        .await
-        .ok();
+        // Persist index snapshot on a cadence, not per batch — the write cost
+        // scales with the whole index, and the load path self-heals any
+        // entries a crash leaves missing (vector_index::load_or_rebuild).
+        if snapshot_cadence.record(clock.elapsed().as_secs_f32()) {
+            save_index_snapshot(&index, &data_dir).await;
+        }
 
-        // Incremental clustering on the critical path: only edges for newly
-        // vectorized faces, then an in-memory relabel. Both are cheap, so the loop
-        // immediately pulls the next batch. The authoritative full sweep is
-        // deferred to the idle branch.
+        // Incremental clustering: edge updates for newly vectorized faces run
+        // every batch (bounded by the batch's face count), but the
+        // whole-graph relabel + thumbnail upgrade amortize on a cadence. The
+        // authoritative full sweep still runs in the idle branch.
         if subject_batch.processed {
-            let incremental_result: anyhow::Result<()> = async {
+            let edges_result: anyhow::Result<()> = async {
                 if !subject_batch.face_ids.is_empty() {
                     crate::people::clustering::update_edges_incremental(
                         &pool,
@@ -985,24 +1064,42 @@ pub async fn run_pipeline(
                     )
                     .await?;
                 }
-                // Constraints/assignments may have changed even with no new
-                // vectors, so always relabel.
-                crate::people::clustering::relabel_from_edges(&pool, subject_preset.embedder.id)
-                    .await?;
                 Ok(())
             }
             .await;
 
-            match incremental_result {
+            match edges_result {
                 Ok(()) => {
-                    upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await;
                     clustering_dirty = true;
                     let _ =
                         crate::settings::repo::set_setting(&pool, "clustering_dirty", "true").await;
+                    if relabel_cadence.record(clock.elapsed().as_secs_f32()) {
+                        // Constraints/assignments may have changed even with no
+                        // new vectors, so relabel whenever the cadence fires.
+                        match crate::people::clustering::relabel_from_edges(
+                            &pool,
+                            subject_preset.embedder.id,
+                        )
+                        .await
+                        {
+                            Ok(_) => upgrade_thumbnails_and_emit(&pool, &data_dir, &app).await,
+                            Err(e) => error!("[pipeline] incremental relabel failed: {e}"),
+                        }
+                    }
                 }
                 Err(e) => error!("[pipeline] incremental clustering failed: {e}"),
             }
         }
+
+        // Collect the batch decoded during Phase B for the next iteration.
+        prefetched = match prefetch.await {
+            Ok(Some(d)) if !d.is_empty() => Some(d),
+            Ok(_) => None,
+            Err(e) => {
+                error!("[pipeline] prefetch task failed: {e}");
+                None
+            }
+        };
     }
 }
 

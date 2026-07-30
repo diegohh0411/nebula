@@ -22,8 +22,9 @@ export class ReportsComponent implements OnInit {
   protected isCreating = signal(false);
   protected isSubmitting = signal(false);
   protected newName = signal('');
-  protected newFolderId = signal<number | null>(null);
-  
+  protected selectedFolderIds = signal<number[]>([]);
+  protected isFolderDropdownOpen = signal(false);
+
   protected isDropdownOpen = signal(false);
   protected tagSearchQuery = signal('');
   protected selectedTagIds = signal<number[]>([]);
@@ -51,11 +52,40 @@ export class ReportsComponent implements OnInit {
   @HostListener('document:click')
   protected closeDropdown() {
     this.isDropdownOpen.set(false);
+    this.isFolderDropdownOpen.set(false);
   }
 
   protected toggleDropdown(event: Event) {
     event.stopPropagation();
     this.isDropdownOpen.update(open => !open);
+    this.isFolderDropdownOpen.set(false);
+  }
+
+  protected toggleFolderDropdown(event: Event) {
+    event.stopPropagation();
+    this.isFolderDropdownOpen.update(open => !open);
+    this.isDropdownOpen.set(false);
+  }
+
+  protected isFolderSelected(folderId: number): boolean {
+    return this.selectedFolderIds().includes(folderId);
+  }
+
+  protected toggleFolder(folderId: number) {
+    this.selectedFolderIds.update(ids => {
+      if (ids.includes(folderId)) {
+        return ids.filter(id => id !== folderId);
+      } else {
+        return [...ids, folderId];
+      }
+    });
+  }
+
+  protected getSelectedFoldersText(): string {
+    const ids = this.selectedFolderIds();
+    if (ids.length === 0) return 'Select Folders...';
+    if (ids.length === 1) return this.getFolderName(ids[0]);
+    return `${ids.length} folders selected`;
   }
 
   protected isTagSelected(tagId: number): boolean {
@@ -104,21 +134,26 @@ export class ReportsComponent implements OnInit {
     return tagIds.map(id => allTags.find(t => t.id === id)?.name ?? 'Unknown').join(', ');
   }
 
+  protected getFoldersDesc(folderIds: number[]): string {
+    return folderIds.map(id => this.getFolderName(id)).join(', ');
+  }
+
   protected async createReport() {
-    const fId = this.newFolderId();
+    const fIds = this.selectedFolderIds();
     const tIds = this.selectedTagIds();
     const name = this.newName().trim();
-    if (!fId || tIds.length === 0 || !name || this.isSubmitting()) return;
+    if (fIds.length === 0 || tIds.length === 0 || !name || this.isSubmitting()) return;
 
     this.isSubmitting.set(true);
     try {
-      const rep = await this.photos.createSavedReport(name, fId, tIds);
+      const rep = await this.photos.createSavedReport(name, fIds, tIds);
       this.isCreating.set(false);
       this.newName.set('');
-      this.newFolderId.set(null);
+      this.selectedFolderIds.set([]);
       this.selectedTagIds.set([]);
       this.tagSearchQuery.set('');
       this.isDropdownOpen.set(false);
+      this.isFolderDropdownOpen.set(false);
       void this.router.navigate(['/reports', rep.id]);
     } catch (err) {
       console.error('Failed to create report:', err);
@@ -131,9 +166,10 @@ export class ReportsComponent implements OnInit {
   protected cancelCreation() {
     this.isCreating.set(false);
     this.newName.set('');
-    this.newFolderId.set(null);
+    this.selectedFolderIds.set([]);
     this.selectedTagIds.set([]);
     this.tagSearchQuery.set('');
     this.isDropdownOpen.set(false);
+    this.isFolderDropdownOpen.set(false);
   }
 }
