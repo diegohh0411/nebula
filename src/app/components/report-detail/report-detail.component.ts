@@ -70,10 +70,41 @@ export class ReportDetailComponent implements OnInit {
   protected report = signal<SavedReport | null>(null);
   protected coverage = signal<CoverageReport | null>(null);
   protected error = signal<string | null>(null);
-  
+
   protected missingMatches = signal<ReportMatch[]>([]);
   protected presentMatches = signal<ReportMatch[]>([]);
   protected othersMatches = signal<ReportMatch[]>([]);
+
+  protected isPrioritizing = signal(false);
+  protected prioritizedCount = signal<number | null>(null);
+
+  protected getFolderNames(): string {
+    const rep = this.report();
+    if (!rep) return '';
+    const folders = this.photos.folders();
+    return rep.folder_ids
+      .map(id => {
+        const folder = folders.find(f => f.id === id);
+        if (!folder) return 'Unknown Folder';
+        return folder.path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? folder.path;
+      })
+      .join(', ');
+  }
+
+  protected async prioritizeProcessing() {
+    const rep = this.report();
+    if (!rep || this.isPrioritizing()) return;
+    this.isPrioritizing.set(true);
+    try {
+      const count = await this.photos.prioritizeReportProcessing(rep.id);
+      this.prioritizedCount.set(count);
+    } catch (err) {
+      console.error('Failed to prioritize report processing:', err);
+      alert('Failed to prioritize processing');
+    } finally {
+      this.isPrioritizing.set(false);
+    }
+  }
 
   async ngOnInit() {
     try {
@@ -93,7 +124,7 @@ export class ReportDetailComponent implements OnInit {
       }
       this.report.set(rep);
 
-      const cov = await this.photos.getFolderCoverage(rep.folder_id, rep.tag_ids);
+      const cov = await this.photos.getFolderCoverage(rep.folder_ids, rep.tag_ids);
       this.coverage.set(cov);
 
       this.missingMatches.set(this.mapToMatches(cov.missing_targets));

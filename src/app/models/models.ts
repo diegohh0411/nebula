@@ -182,6 +182,6 @@ export interface CoverageReport {
 export interface SavedReport {
   id: number;
   name: string;
-  folder_id: number;
+  folder_ids: number[];
   tag_ids: number[];
 }

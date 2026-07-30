@@ -30,6 +30,15 @@
   } @else if (coverage(); as cov) {
     <div class="summary">
       <strong>Coverage Summary:</strong> {{ cov.summary.present_targets }} of {{ cov.summary.total_targets }} target subjects present.
+      <div class="source-folders">
+        <strong>{{ report()!.folder_ids.length === 1 ? 'Folder' : 'Folders' }}:</strong> {{ getFolderNames() }}
+        <button class="btn" (click)="prioritizeProcessing()" [disabled]="isPrioritizing()">
+          {{ isPrioritizing() ? 'Prioritizing…' : 'Prioritize processing' }}
+        </button>
+        @if (prioritizedCount() !== null) {
+          <span class="prioritized-note">Moved {{ prioritizedCount() }} images to the front of the queue.</span>
+        }
+      </div>
     </div>
 
     <div class="sections">
