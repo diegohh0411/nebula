@@ -1,6 +1,6 @@
 use crate::{
     reports::{
-        models::{CoverageReport, SavedReport},
+        models::{CoverageReport, ProcessingProgress, SavedReport},
         repo,
     },
     AppState,
@@ -45,6 +45,22 @@ pub async fn prioritize_report_processing(
         .map_err(map_err)?
         .ok_or_else(|| "Report not found".to_string())?;
     crate::pipeline::queue::prioritize_folders(&state.pool, &report.folder_ids)
+        .await
+        .map_err(map_err)
+}
+
+/// How many of the report's source-folder images are fully processed by the
+/// pipeline. Drives the progress bar on the report detail page.
+#[tauri::command]
+pub async fn get_report_processing_progress(
+    report_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<ProcessingProgress, String> {
+    let report = repo::get_saved_report(&state.pool, report_id)
+        .await
+        .map_err(map_err)?
+        .ok_or_else(|| "Report not found".to_string())?;
+    repo::get_folders_processing_progress(&state.pool, &report.folder_ids)
         .await
         .map_err(map_err)
 }

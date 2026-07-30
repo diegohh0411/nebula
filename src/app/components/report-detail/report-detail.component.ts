@@ -1,8 +1,8 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { PhotoService } from '../../services/photo.service';
-import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch, Tag } from '../../models/models';
+import { SavedReport, CoverageReport, ProcessingProgress, SubjectCoverage, SubjectMatch, Tag } from '../../models/models';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
 import { LucideAngularModule } from 'lucide-angular';
 
@@ -77,6 +77,36 @@ export class ReportDetailComponent implements OnInit {
 
   protected isPrioritizing = signal(false);
   protected prioritizedCount = signal<number | null>(null);
+
+  protected progress = signal<ProcessingProgress | null>(null);
+  protected progressPercent = computed(() => {
+    const p = this.progress();
+    return p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+  });
+  private progressFetchInFlight = false;
+
+  constructor() {
+    // Every pipeline_stats tick re-counts the report's processed images, so
+    // the bar advances live while the queue drains and freezes when the
+    // pipeline goes idle (the stats signal stops changing).
+    effect(() => {
+      this.photos.pipelineStats();
+      const rep = this.report();
+      if (rep) void this.refreshProgress(rep.id);
+    });
+  }
+
+  private async refreshProgress(reportId: number) {
+    if (this.progressFetchInFlight) return;
+    this.progressFetchInFlight = true;
+    try {
+      this.progress.set(await this.photos.getReportProcessingProgress(reportId));
+    } catch (err) {
+      console.error('Failed to load report processing progress:', err);
+    } finally {
+      this.progressFetchInFlight = false;
+    }
+  }
 
   protected getFolderNames(): string {
     const rep = this.report();

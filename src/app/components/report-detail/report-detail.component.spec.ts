@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { importProvidersFrom } from '@angular/core';
+import { importProvidersFrom, signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { LucideAngularModule } from 'lucide-angular';
@@ -33,6 +33,8 @@ describe('ReportDetailComponent — subject cards', () => {
     });
     getSubjectTags = vi.fn().mockResolvedValue([{ id: 1, name: 'Cabaña-21', added_at: 0 }]);
     listTags = vi.fn().mockResolvedValue([]);
+    pipelineStats = signal({ total_pending: 5, images_per_sec: 1 });
+    getReportProcessingProgress = vi.fn().mockResolvedValue({ total: 4, done: 2 });
   }
 
   let stub: ReportPhotoServiceStub;
@@ -64,5 +66,38 @@ describe('ReportDetailComponent — subject cards', () => {
     expect(text).toContain('Maria');
     expect(stub.getSubjectTags).toHaveBeenCalledWith(10);
     expect(text).toContain('Cabaña-21');
+  });
+
+  async function settle(harness: RouterTestingHarness) {
+    for (let i = 0; i < 5; i++) {
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    harness.detectChanges();
+  }
+
+  it('renders the processing progress bar with counts and percentage', async () => {
+    const harness = await RouterTestingHarness.create('/reports/1');
+    await settle(harness);
+
+    const text = harness.routeNativeElement?.textContent ?? '';
+    expect(text).toContain('2 of 4 images processed (50%)');
+    const fill = harness.routeNativeElement?.querySelector('.progress-fill') as HTMLElement;
+    expect(fill.style.width).toBe('50%');
+  });
+
+  it('re-fetches progress when a pipeline stats tick arrives', async () => {
+    const harness = await RouterTestingHarness.create('/reports/1');
+    await settle(harness);
+    const callsAfterInit = stub.getReportProcessingProgress.mock.calls.length;
+
+    stub.getReportProcessingProgress.mockResolvedValue({ total: 4, done: 4 });
+    stub.pipelineStats.set({ total_pending: 1, images_per_sec: 1 });
+    await settle(harness);
+
+    expect(stub.getReportProcessingProgress.mock.calls.length).toBeGreaterThan(callsAfterInit);
+    const text = harness.routeNativeElement?.textContent ?? '';
+    expect(text).toContain('4 of 4 images processed (100%)');
   });
 });

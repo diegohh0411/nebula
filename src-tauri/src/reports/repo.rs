@@ -1,5 +1,7 @@
 //! Reports persistence: folder coverage aggregation, saved report CRUD.
-use crate::reports::models::{CoverageReport, CoverageSummary, SavedReport, SubjectCoverage};
+use crate::reports::models::{
+    CoverageReport, CoverageSummary, ProcessingProgress, SavedReport, SubjectCoverage,
+};
 use anyhow::Result;
 use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, HashSet};
@@ -104,6 +106,34 @@ pub async fn get_folder_coverage(
         missing_targets,
         present_targets,
         others_found,
+    })
+}
+
+/// Fully-processed image counts across the union of the given folders.
+/// "Done" matches the global pipeline predicate: both analysis flags set.
+pub async fn get_folders_processing_progress(
+    pool: &SqlitePool,
+    folder_ids: &[i64],
+) -> Result<ProcessingProgress> {
+    if folder_ids.is_empty() {
+        return Ok(ProcessingProgress { total: 0, done: 0 });
+    }
+
+    let q = format!(
+        "SELECT COUNT(*) as total,
+                COALESCE(SUM(semantic_analysis_done = 1 AND subject_analysis_done = 1), 0) as done
+         FROM images
+         WHERE folder_id IN ({}) AND deleted_at IS NULL",
+        folder_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+    );
+    let mut query = sqlx::query(&q);
+    for id in folder_ids {
+        query = query.bind(id);
+    }
+    let row = query.fetch_one(pool).await?;
+    Ok(ProcessingProgress {
+        total: row.get("total"),
+        done: row.get("done"),
     })
 }
 

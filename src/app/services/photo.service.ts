@@ -21,6 +21,7 @@ import {
   FaceBBox,
   CoverageReport,
   SavedReport,
+  ProcessingProgress,
 } from '../models/models';
 import { TauriEventsService } from './tauri-events.service';
 import { buildJustifiedRows } from '../utils/justified-layout';
@@ -483,6 +484,10 @@ export class PhotoService {
    *  Resolves to the number of queue entries moved. */
   async prioritizeReportProcessing(reportId: number): Promise<number> {
     return await invoke<number>('prioritize_report_processing', { reportId });
+  }
+  /** Fully-processed image counts across the report's source folders. */
+  async getReportProcessingProgress(reportId: number): Promise<ProcessingProgress> {
+    return await invoke<ProcessingProgress>('get_report_processing_progress', { reportId });
   }
   async listSavedReports(): Promise<SavedReport[]> {
     return await invoke<SavedReport[]>('list_saved_reports');

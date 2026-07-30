@@ -39,6 +39,16 @@
           <span class="prioritized-note">Moved {{ prioritizedCount() }} images to the front of the queue.</span>
         }
       </div>
+      @if (progress(); as prog) {
+        @if (prog.total > 0) {
+          <div class="progress-block">
+            <div class="progress-track">
+              <div class="progress-fill" [class.progress-complete]="prog.done === prog.total" [style.width.%]="progressPercent()"></div>
+            </div>
+            <span class="progress-label">{{ prog.done }} of {{ prog.total }} images processed ({{ progressPercent() }}%)</span>
+          </div>
+        }
+      }
     </div>
 
     <div class="sections">

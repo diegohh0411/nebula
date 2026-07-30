@@ -185,3 +185,7 @@ export interface SavedReport {
   folder_ids: number[];
   tag_ids: number[];
 }
+export interface ProcessingProgress {
+  total: number;
+  done: number;
+}

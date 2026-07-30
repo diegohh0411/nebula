@@ -11,6 +11,11 @@ h2 { @apply m-0 text-2xl font-semibold text-foreground; }
 .summary { @apply bg-card border border-border p-4 rounded-lg mb-6 text-foreground text-base; }
 .source-folders { @apply flex items-center flex-wrap gap-2 mt-2 text-sm text-muted-foreground; }
 .prioritized-note { @apply text-sm text-muted-foreground; }
+.progress-block { @apply flex items-center gap-3 mt-3; }
+.progress-track { @apply flex-1 h-2 rounded-full bg-muted overflow-hidden; }
+.progress-fill { @apply h-full rounded-full bg-primary transition-[width] duration-500; }
+.progress-complete { @apply bg-green-600; }
+.progress-label { @apply text-sm text-muted-foreground whitespace-nowrap; }
 .section { @apply mb-8; }
 h3 { @apply text-lg font-medium text-foreground mb-4 pb-2 border-b border-border; }
 .cards-grid { @apply grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4; }
