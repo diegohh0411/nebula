@@ -2,7 +2,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { PhotoService } from '../../services/photo.service';
-import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch } from '../../models/models';
+import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch, Tag } from '../../models/models';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
 import { LucideAngularModule } from 'lucide-angular';
 
@@ -127,16 +127,34 @@ export class ReportDetailComponent implements OnInit {
       const cov = await this.photos.getFolderCoverage(rep.folder_ids, rep.tag_ids);
       this.coverage.set(cov);
 
-      this.missingMatches.set(this.mapToMatches(cov.missing_targets));
-      this.presentMatches.set(this.mapToMatches(cov.present_targets));
-      this.othersMatches.set(this.mapToMatches(cov.others_found));
+      // The cards seed their tag chips from match.tags, so hydrate every
+      // subject's tags up front (a click-through was the only place they
+      // loaded before).
+      const subjectIds = [
+        ...new Set(
+          [...cov.missing_targets, ...cov.present_targets, ...cov.others_found].map(
+            s => s.subject_id,
+          ),
+        ),
+      ];
+      const tagLists = await Promise.all(
+        subjectIds.map(id => this.photos.getSubjectTags(id).catch(() => [] as Tag[])),
+      );
+      const tagsBySubject = new Map(subjectIds.map((id, i) => [id, tagLists[i]]));
+
+      this.missingMatches.set(this.mapToMatches(cov.missing_targets, tagsBySubject));
+      this.presentMatches.set(this.mapToMatches(cov.present_targets, tagsBySubject));
+      this.othersMatches.set(this.mapToMatches(cov.others_found, tagsBySubject));
     } catch (err: any) {
       console.error('Failed to load report detail:', err);
       this.error.set(err.message || 'An error occurred loading the report');
     }
   }
 
-  private mapToMatches(covList: SubjectCoverage[]): ReportMatch[] {
+  private mapToMatches(
+    covList: SubjectCoverage[],
+    tagsBySubject: Map<number, Tag[]>,
+  ): ReportMatch[] {
     const allSubjects = this.photos.subjects();
     return covList.map(item => {
       let subject = allSubjects.find(s => s.id === item.subject_id);
@@ -144,7 +162,10 @@ export class ReportDetailComponent implements OnInit {
         // Fallback for missing subjects not loaded in cache
         subject = { id: item.subject_id, name: item.name, thumbnail_face_id: null, type: 'person', added_at: 0 };
       }
-      return { match: { subject, tags: [] }, frequency: item.frequency };
+      return {
+        match: { subject, tags: tagsBySubject.get(item.subject_id) ?? [] },
+        frequency: item.frequency,
+      };
     });
   }
 }
