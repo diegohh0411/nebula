@@ -713,6 +713,7 @@ pub async fn run_pipeline(
             &pool,
             "semantic",
             config.batch_size as i64,
+            &[],
         )
         .await
         {
@@ -726,6 +727,7 @@ pub async fn run_pipeline(
             &pool,
             "subject",
             config.batch_size as i64,
+            &[],
         )
         .await
         {

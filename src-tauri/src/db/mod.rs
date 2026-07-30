@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS embedding_queue (
     pipeline     TEXT NOT NULL DEFAULT 'semantic',
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
-    scheduled_at INTEGER NOT NULL
+    scheduled_at INTEGER NOT NULL,
+    priority     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_queue_scheduled ON embedding_queue(scheduled_at);
@@ -175,7 +176,6 @@ CREATE TABLE IF NOT EXISTS face_edges (
 CREATE TABLE IF NOT EXISTS saved_reports (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
     name      TEXT NOT NULL,
-    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     added_at  INTEGER NOT NULL
 );
 
@@ -183,6 +183,12 @@ CREATE TABLE IF NOT EXISTS saved_report_tags (
     report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
     tag_id    INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (report_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS saved_report_folders (
+    report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    PRIMARY KEY (report_id, folder_id)
 );
 "#;
 
@@ -219,6 +225,25 @@ const VERSIONED_MIGRATIONS: &[(u32, &str)] = &[
     (
         6,
         "CREATE INDEX IF NOT EXISTS idx_constraints_kind_source ON constraints(kind, source)",
+    ),
+    // Multi-folder reports: move saved_reports.folder_id into a junction table.
+    // The ALTER makes the backfill valid on fresh databases too, where
+    // BASE_SCHEMA already created the folder_id-less shape (the runner
+    // tolerates the resulting "duplicate column name" on legacy databases);
+    // the rebuild then drops the column on both paths.
+    (
+        7,
+        "CREATE TABLE IF NOT EXISTS saved_report_folders (report_id INTEGER NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE, folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE, PRIMARY KEY (report_id, folder_id)); \
+         ALTER TABLE saved_reports ADD COLUMN folder_id INTEGER NOT NULL DEFAULT 0; \
+         INSERT OR IGNORE INTO saved_report_folders (report_id, folder_id) SELECT id, folder_id FROM saved_reports WHERE folder_id != 0; \
+         CREATE TABLE saved_reports_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, added_at INTEGER NOT NULL); \
+         INSERT INTO saved_reports_new (id, name, added_at) SELECT id, name, added_at FROM saved_reports; \
+         DROP TABLE saved_reports; \
+         ALTER TABLE saved_reports_new RENAME TO saved_reports;",
+    ),
+    (
+        8,
+        "ALTER TABLE embedding_queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
     ),
 ];
 

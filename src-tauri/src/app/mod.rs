@@ -153,6 +153,7 @@ pub fn run() {
             crate::reports::commands::get_saved_report,
             crate::reports::commands::delete_saved_report,
             crate::reports::commands::update_saved_report_name,
+            crate::reports::commands::prioritize_report_processing,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

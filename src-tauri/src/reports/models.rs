@@ -25,6 +25,6 @@ pub struct SubjectCoverage {
 pub struct SavedReport {
     pub id: i64,
     pub name: String,
-    pub folder_id: i64,
+    pub folder_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
 }
