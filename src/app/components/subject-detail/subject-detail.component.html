@@ -66,26 +66,59 @@
       </div>
     </div>
 
-    <div class="relative">
-      <button (click)="toggleMenu()" class="p-2 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground">
-        <lucide-icon name="ellipsis-vertical" size="20"></lucide-icon>
-      </button>
-
-      @if (isMenuOpen()) {
-        <div class="absolute right-0 mt-2 w-56 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg z-20 animate-in fade-in zoom-in-95 duration-100">
-          <button
-            class="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-            [routerLink]="['/subject', subjectId(), 'face-picker']"
-            (click)="closeMenu()"
-          >
-            <lucide-icon name="star" size="14"></lucide-icon>
-            Choose Representative Face
-          </button>
-        </div>
-        <div class="fixed inset-0 z-10" (click)="closeMenu()"></div>
+    <div class="flex items-center gap-2">
+      @if ((detail()?.photo_count ?? 0) > 0) {
+        <button
+          type="button"
+          (click)="onCopyAll()"
+          [disabled]="exporting()"
+          class="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md border border-border hover:bg-muted transition-colors text-foreground disabled:opacity-50 disabled:pointer-events-none"
+          title="Copy all originals to a folder"
+        >
+          <lucide-icon name="copy" size="16"></lucide-icon>
+          {{ exporting() ? 'Copying…' : 'Copy all…' }}
+        </button>
       }
+
+      <div class="relative">
+        <button (click)="toggleMenu()" class="p-2 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground">
+          <lucide-icon name="ellipsis-vertical" size="20"></lucide-icon>
+        </button>
+
+        @if (isMenuOpen()) {
+          <div class="absolute right-0 mt-2 w-56 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg z-20 animate-in fade-in zoom-in-95 duration-100">
+            <button
+              class="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+              [routerLink]="['/subject', subjectId(), 'face-picker']"
+              (click)="closeMenu()"
+            >
+              <lucide-icon name="star" size="14"></lucide-icon>
+              Choose Representative Face
+            </button>
+          </div>
+          <div class="fixed inset-0 z-10" (click)="closeMenu()"></div>
+        }
+      </div>
     </div>
   </header>
+
+  @if (exporting() && exportProgress(); as prog) {
+    <div class="px-6 py-2 border-b border-border bg-muted/40">
+      <div class="text-xs text-muted-foreground mb-1">
+        Copying {{ prog.current }} of {{ prog.total || '…' }}…
+      </div>
+      <div class="h-1.5 rounded-full bg-border overflow-hidden">
+        <div
+          class="h-full bg-primary transition-all"
+          [style.width.%]="prog.total > 0 ? (prog.current / prog.total) * 100 : 0"
+        ></div>
+      </div>
+    </div>
+  } @else if (exportStatus()) {
+    <div class="px-6 py-2 border-b border-border text-sm text-muted-foreground">
+      {{ exportStatus() }}
+    </div>
+  }
 
   <!-- Photo Grid -->
   <main class="flex-1 overflow-y-auto px-4 py-6 min-h-0">

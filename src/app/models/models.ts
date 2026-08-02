@@ -121,6 +121,18 @@ export interface SubjectDetail {
   face_count: number;
 }
 
+export interface ExportSubjectResult {
+  dest_dir: string;
+  copied: number;
+  skipped_missing: number;
+  skipped_errors: number;
+}
+
+export interface ExportSubjectProgress {
+  current: number;
+  total: number;
+}
+
 export interface MergeSuggestion {
   id: number;
   subject_a: Subject;
