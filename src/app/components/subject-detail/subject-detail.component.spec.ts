@@ -15,6 +15,22 @@ vi.mock('@tauri-apps/api/core', () => ({
   convertFileSrc: vi.fn((p: string) => p),
 }));
 
+const openDialogMock = vi.fn();
+const openPathMock = vi.fn();
+const listenMock = vi.fn().mockResolvedValue(() => {});
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: (...args: unknown[]) => openDialogMock(...args),
+}));
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: (...args: unknown[]) => openPathMock(...args),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (...args: unknown[]) => listenMock(...args),
+}));
+
 const mockTauriEvents = {
   pipelineStats$: new RxSubject(),
   imageAdded$: new RxSubject(),
@@ -79,6 +95,7 @@ class SubjectDetailPhotoServiceStub {
   listTags = vi.fn().mockResolvedValue([]);
   subjects = signal([]);
   getSubjectPhotosWithFaces = vi.fn().mockResolvedValue([]);
+  exportSubjectPhotos = vi.fn();
 }
 
 function subjectDetail(over: Partial<SubjectDetail['subject']> = {}): SubjectDetail {
@@ -298,5 +315,91 @@ describe('SubjectDetailComponent — similar-subjects review flow', () => {
       .filter((row: { type: string }) => row.type === 'row')
       .flatMap((row: { images: { image_id: number }[] }) => row.images.map((img) => img.image_id));
     expect(virtualRowIds).toEqual([2, 3, 1]);
+  });
+});
+
+describe('SubjectDetailComponent — export', () => {
+  let stub: SubjectDetailPhotoServiceStub;
+
+  beforeEach(() => {
+    stub = new SubjectDetailPhotoServiceStub();
+    stub.getSubjectDetail.mockResolvedValue(subjectDetail());
+    openDialogMock.mockReset();
+    openPathMock.mockReset();
+    listenMock.mockReset().mockResolvedValue(() => {});
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([{ path: 'subject/:id', component: SubjectDetailComponent }]),
+        importProvidersFrom(LucideAngularModule.pick(APP_ICONS)),
+        { provide: PhotoService, useValue: stub },
+        { provide: TauriEventsService, useValue: mockTauriEvents },
+      ],
+    });
+  });
+
+  async function mount(detail: SubjectDetail = subjectDetail()) {
+    stub.getSubjectDetail.mockResolvedValue(detail);
+    const harness = await RouterTestingHarness.create('/subject/1');
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    const cmp = harness.routeDebugElement!.componentInstance as SubjectDetailComponent;
+    return { harness, cmp };
+  }
+
+  it('hides Copy all when photo_count is 0', async () => {
+    const { harness } = await mount(subjectDetail());
+    const btn = harness.routeNativeElement!.querySelector(
+      'button[title="Copy all originals to a folder"]',
+    );
+    expect(btn).toBeNull();
+  });
+
+  it('shows Copy all when photo_count > 0', async () => {
+    const { harness } = await mount({ ...subjectDetail(), photo_count: 3 });
+    const btn = harness.routeNativeElement!.querySelector(
+      'button[title="Copy all originals to a folder"]',
+    ) as HTMLButtonElement | null;
+    expect(btn).toBeTruthy();
+    expect(btn!.textContent).toContain('Copy all');
+  });
+
+  it('does not invoke export when dialog is cancelled', async () => {
+    const { cmp } = await mount({ ...subjectDetail(), photo_count: 2 });
+    openDialogMock.mockResolvedValue(null);
+    await cmp.onCopyAll();
+    expect(stub.exportSubjectPhotos).not.toHaveBeenCalled();
+    expect(openPathMock).not.toHaveBeenCalled();
+  });
+
+  it('exports, shows status, and opens destination on success', async () => {
+    const { cmp, harness } = await mount({ ...subjectDetail(), photo_count: 2 });
+    openDialogMock.mockResolvedValue('/tmp/cass-export');
+    stub.exportSubjectPhotos.mockResolvedValue({
+      dest_dir: '/tmp/cass-export',
+      copied: 2,
+      skipped_missing: 0,
+      skipped_errors: 0,
+    });
+    openPathMock.mockResolvedValue(undefined);
+
+    await cmp.onCopyAll();
+    harness.detectChanges();
+
+    expect(stub.exportSubjectPhotos).toHaveBeenCalledWith(1, '/tmp/cass-export');
+    expect(openPathMock).toHaveBeenCalledWith('/tmp/cass-export');
+    expect(cmp.exportStatus()).toContain('Copied 2');
+  });
+
+  it('does not open folder when export fails', async () => {
+    const { cmp, harness } = await mount({ ...subjectDetail(), photo_count: 2 });
+    openDialogMock.mockResolvedValue('/tmp/cass-export');
+    stub.exportSubjectPhotos.mockRejectedValue(new Error('Subject not found'));
+
+    await cmp.onCopyAll();
+    harness.detectChanges();
+
+    expect(openPathMock).not.toHaveBeenCalled();
+    expect(cmp.exportStatus()).toMatch(/Subject not found|Export failed/i);
   });
 });
