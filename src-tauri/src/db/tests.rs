@@ -1973,10 +1973,12 @@ async fn create_saved_report_rejects_empty_folder_list() {
 #[tokio::test]
 async fn folders_processing_progress_counts_fully_done_images() {
     let pool = init_test_pool().await;
-    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'p1', 0), (2, 'p2', 0), (3, 'p3', 0)")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO folders (id, path, added_at) VALUES (1, 'p1', 0), (2, 'p2', 0), (3, 'p3', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     // Folder 1: one fully done, one semantic-only. Folder 2: one fully done,
     // one untouched, one fully done but soft-deleted. Folder 3 (excluded): done.
@@ -1996,7 +1998,10 @@ async fn folders_processing_progress_counts_fully_done_images() {
     let progress = crate::reports::repo::get_folders_processing_progress(&pool, &[1, 2])
         .await
         .unwrap();
-    assert_eq!(progress.total, 4, "deleted and out-of-scope images excluded");
+    assert_eq!(
+        progress.total, 4,
+        "deleted and out-of-scope images excluded"
+    );
     assert_eq!(progress.done, 2, "only both-flags-done images count");
 
     let empty = crate::reports::repo::get_folders_processing_progress(&pool, &[])

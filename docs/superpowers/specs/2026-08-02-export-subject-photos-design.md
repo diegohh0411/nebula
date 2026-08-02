@@ -1,7 +1,7 @@
 # Export subject photos (Copy all) — design
 
 Date: 2026-08-02
-Status: draft (awaiting user review)
+Status: implemented
 
 ## Problem
 
