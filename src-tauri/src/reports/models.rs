@@ -21,10 +21,18 @@ pub struct SubjectCoverage {
     pub frequency: usize,
 }
 
+/// How many of a report's source-folder images the pipeline has fully
+/// processed (both semantic and subject analysis complete).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProcessingProgress {
+    pub total: i64,
+    pub done: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SavedReport {
     pub id: i64,
     pub name: String,
-    pub folder_id: i64,
+    pub folder_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
 }

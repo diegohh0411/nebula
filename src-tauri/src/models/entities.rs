@@ -137,6 +137,20 @@ pub struct SubjectDetail {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExportSubjectResult {
+    pub dest_dir: String,
+    pub copied: u32,
+    pub skipped_missing: u32,
+    pub skipped_errors: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExportSubjectProgress {
+    pub current: u32,
+    pub total: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MergeSuggestion {
     pub id: i64,
     pub subject_a: Subject,

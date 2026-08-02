@@ -1838,7 +1838,7 @@ async fn test_get_folder_coverage_counts_distinct_photos() {
         (5, 2, 4, 0,0,1,1,0)")
         .execute(&pool).await.unwrap();
 
-    let report = crate::reports::repo::get_folder_coverage(&pool, 1, &[1])
+    let report = crate::reports::repo::get_folder_coverage(&pool, &[1], &[1])
         .await
         .unwrap();
 
@@ -1875,6 +1875,202 @@ async fn test_get_folder_coverage_counts_distinct_photos() {
 }
 
 #[tokio::test]
+async fn get_folder_coverage_unions_multiple_folders() {
+    let pool = init_test_pool().await;
+
+    sqlx::query(
+        "INSERT INTO folders (id, path, added_at) VALUES (1, 'p1', 0), (2, 'p2', 0), (3, 'p3', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO subjects (id, name, type, added_at) VALUES (1, 'Alice', 'person', 0), (2, 'Bob', 'person', 0)")
+        .execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO tags (id, name, name_normalized, added_at) VALUES (1, 'Trip', 'trip', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO subject_tags (subject_id, tag_id, added_at) VALUES (1, 1, 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Alice: 2 photos in folder 1, 1 in folder 2, 1 in folder 3 (excluded).
+    // Bob: only in folder 3 (excluded) — must not appear at all.
+    sqlx::query(
+        "INSERT INTO images (id, folder_id, path, file_hash, hash_status, file_size, mtime, semantic_analysis_done, subject_analysis_done, added_at, updated_at) VALUES \
+         (1, 1, 'a', 'h1', 'ok', 0, 0, 0, 0, 0, 0), \
+         (2, 1, 'b', 'h2', 'ok', 0, 0, 0, 0, 0, 0), \
+         (3, 2, 'c', 'h3', 'ok', 0, 0, 0, 0, 0, 0), \
+         (4, 3, 'd', 'h4', 'ok', 0, 0, 0, 0, 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO faces (id, image_id, subject_id, bbox_x, bbox_y, bbox_w, bbox_h, added_at) VALUES \
+         (1, 1, 1, 0,0,1,1,0), (2, 2, 1, 0,0,1,1,0), (3, 3, 1, 0,0,1,1,0), \
+         (4, 4, 1, 0,0,1,1,0), (5, 4, 2, 0,0,1,1,0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let report = crate::reports::repo::get_folder_coverage(&pool, &[1, 2], &[1])
+        .await
+        .unwrap();
+
+    assert_eq!(report.summary.total_targets, 1);
+    assert_eq!(report.summary.present_targets, 1);
+    assert_eq!(report.present_targets.len(), 1);
+    assert_eq!(
+        report.present_targets[0].frequency, 3,
+        "frequency must union distinct photos across the selected folders only"
+    );
+    assert!(
+        report.others_found.is_empty(),
+        "subjects appearing only in unselected folders must not leak in"
+    );
+}
+
+#[tokio::test]
+async fn saved_report_multi_folder_round_trip_dedupes_folder_ids() {
+    let pool = init_test_pool().await;
+    sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'p1', 0), (2, 'p2', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Duplicate folder ids must not violate the (report_id, folder_id) primary key.
+    let created = crate::reports::repo::create_saved_report(&pool, "Multi", &[2, 1, 2], &[])
+        .await
+        .unwrap();
+    assert_eq!(created.folder_ids, vec![2, 1]);
+
+    let fetched = crate::reports::repo::get_saved_report(&pool, created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.folder_ids, vec![2, 1]);
+
+    let listed = crate::reports::repo::list_saved_reports(&pool)
+        .await
+        .unwrap();
+    assert_eq!(listed[0].folder_ids, vec![2, 1]);
+}
+
+#[tokio::test]
+async fn create_saved_report_rejects_empty_folder_list() {
+    let pool = init_test_pool().await;
+    let err = crate::reports::repo::create_saved_report(&pool, "No Folders", &[], &[])
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("folder"));
+}
+
+#[tokio::test]
+async fn folders_processing_progress_counts_fully_done_images() {
+    let pool = init_test_pool().await;
+    sqlx::query(
+        "INSERT INTO folders (id, path, added_at) VALUES (1, 'p1', 0), (2, 'p2', 0), (3, 'p3', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Folder 1: one fully done, one semantic-only. Folder 2: one fully done,
+    // one untouched, one fully done but soft-deleted. Folder 3 (excluded): done.
+    sqlx::query(
+        "INSERT INTO images (id, folder_id, path, file_hash, hash_status, file_size, mtime, semantic_analysis_done, subject_analysis_done, deleted_at, added_at, updated_at) VALUES \
+         (1, 1, 'a', 'h1', 'ok', 0, 0, 1, 1, NULL, 0, 0), \
+         (2, 1, 'b', 'h2', 'ok', 0, 0, 1, 0, NULL, 0, 0), \
+         (3, 2, 'c', 'h3', 'ok', 0, 0, 1, 1, NULL, 0, 0), \
+         (4, 2, 'd', 'h4', 'ok', 0, 0, 0, 0, NULL, 0, 0), \
+         (5, 2, 'e', 'h5', 'ok', 0, 0, 1, 1, 99, 0, 0), \
+         (6, 3, 'f', 'h6', 'ok', 0, 0, 1, 1, NULL, 0, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let progress = crate::reports::repo::get_folders_processing_progress(&pool, &[1, 2])
+        .await
+        .unwrap();
+    assert_eq!(
+        progress.total, 4,
+        "deleted and out-of-scope images excluded"
+    );
+    assert_eq!(progress.done, 2, "only both-flags-done images count");
+
+    let empty = crate::reports::repo::get_folders_processing_progress(&pool, &[])
+        .await
+        .unwrap();
+    assert_eq!((empty.total, empty.done), (0, 0));
+}
+
+#[tokio::test]
+async fn migration_backfills_single_folder_reports_into_junction() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    crate::db::ensure_sqlite_vec_registered();
+    let tmp = std::env::temp_dir().join(format!("nebula_mig_{}_{}", std::process::id(), n));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // Simulate a pre-migration database: old-shape saved_reports with an inline
+    // folder_id, schema already at version 6 so only the new migrations run.
+    {
+        let pool = SqlitePool::connect(&format!(
+            "sqlite://{}?mode=rwc",
+            tmp.join("nebula.db").display()
+        ))
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO schema_version (rowid, version) VALUES (1, 6)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT UNIQUE NOT NULL, added_at INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (7, 'old', 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE saved_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE, added_at INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO saved_reports (id, name, folder_id, added_at) VALUES (1, 'Legacy', 7, 42)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    let pool = init_db(&tmp).await.unwrap();
+    let report = crate::reports::repo::get_saved_report(&pool, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.name, "Legacy");
+    assert_eq!(
+        report.folder_ids,
+        vec![7],
+        "legacy inline folder_id must be backfilled into saved_report_folders"
+    );
+}
+
+#[tokio::test]
 async fn test_saved_report_crud() {
     let pool = init_test_pool().await;
 
@@ -1890,16 +2086,16 @@ async fn test_saved_report_crud() {
         .unwrap();
 
     let report_name = "My Test Report";
-    let folder_id = 1;
+    let folder_ids = vec![1];
     let tag_ids = vec![1, 2];
 
     // 1. Create
     let created =
-        crate::reports::repo::create_saved_report(&pool, report_name, folder_id, &tag_ids)
+        crate::reports::repo::create_saved_report(&pool, report_name, &folder_ids, &tag_ids)
             .await
             .unwrap();
     assert_eq!(created.name, report_name);
-    assert_eq!(created.folder_id, folder_id);
+    assert_eq!(created.folder_ids, folder_ids);
     assert_eq!(created.tag_ids, tag_ids);
 
     // 2. List
@@ -1910,7 +2106,7 @@ async fn test_saved_report_crud() {
     let listed = &reports[0];
     assert_eq!(listed.id, created.id);
     assert_eq!(listed.name, report_name);
-    assert_eq!(listed.folder_id, folder_id);
+    assert_eq!(listed.folder_ids, folder_ids);
     assert_eq!(listed.tag_ids, tag_ids);
 
     // 2b. Get by id
@@ -1958,7 +2154,7 @@ async fn test_create_saved_report_dedupes_tag_ids() {
         .unwrap();
 
     // Duplicate tag ids must not violate the (report_id, tag_id) primary key.
-    let created = crate::reports::repo::create_saved_report(&pool, "Dup Tags", 1, &[1, 1, 2])
+    let created = crate::reports::repo::create_saved_report(&pool, "Dup Tags", &[1], &[1, 1, 2])
         .await
         .unwrap();
     assert_eq!(created.tag_ids, vec![1, 2]);
@@ -1977,12 +2173,12 @@ async fn test_saved_report_name_validation() {
         .await
         .unwrap();
 
-    let err = crate::reports::repo::create_saved_report(&pool, "   ", 1, &[])
+    let err = crate::reports::repo::create_saved_report(&pool, "   ", &[1], &[])
         .await
         .unwrap_err();
     assert!(err.to_string().contains("empty"));
 
-    let created = crate::reports::repo::create_saved_report(&pool, "Valid Name", 1, &[])
+    let created = crate::reports::repo::create_saved_report(&pool, "Valid Name", &[1], &[])
         .await
         .unwrap();
 

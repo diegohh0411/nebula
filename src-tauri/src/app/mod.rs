@@ -127,6 +127,7 @@ pub fn run() {
             crate::people::commands::set_subject_thumbnail,
             crate::people::commands::get_subject_photos,
             crate::people::commands::get_subject_photos_with_faces,
+            crate::people::commands::export_subject_photos,
             crate::people::commands::get_subject_detail,
             crate::people::commands::get_merge_suggestions,
             crate::people::commands::merge_subjects,
@@ -153,6 +154,8 @@ pub fn run() {
             crate::reports::commands::get_saved_report,
             crate::reports::commands::delete_saved_report,
             crate::reports::commands::update_saved_report_name,
+            crate::reports::commands::prioritize_report_processing,
+            crate::reports::commands::get_report_processing_progress,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

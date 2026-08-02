@@ -8,8 +8,17 @@ import {
 } from '@angular/core';
 import { CommonModule, Location } from '@angular/common';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
+import { open } from '@tauri-apps/plugin-dialog';
+import { openPath } from '@tauri-apps/plugin-opener';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { PhotoService } from '../../services/photo.service';
-import { SearchResult, VirtualRow, SubjectDetail, MergeSuggestion } from '../../models/models';
+import {
+  SearchResult,
+  VirtualRow,
+  SubjectDetail,
+  MergeSuggestion,
+  ExportSubjectProgress,
+} from '../../models/models';
 import { LucideAngularModule } from 'lucide-angular';
 import { PhotoGridComponent } from '../photo-grid/photo-grid.component';
 import { buildJustifiedRows } from '../../utils/justified-layout';
@@ -58,6 +67,9 @@ export class SubjectDetailComponent implements OnInit {
   protected faceCropUrl = signal<string | null>(null);
 
   protected isMenuOpen = signal(false);
+  protected exporting = signal(false);
+  protected exportProgress = signal<ExportSubjectProgress | null>(null);
+  protected exportStatus = signal<string | null>(null);
 
   protected similarSubjects = signal<MergeSuggestion[]>([]);
   protected similarCropUrls = signal<Record<number, string>>({});
@@ -197,5 +209,51 @@ export class SubjectDetailComponent implements OnInit {
 
   protected closeMenu() {
     this.isMenuOpen.set(false);
+  }
+
+  protected async onCopyAll(): Promise<void> {
+    if (this.exporting()) return;
+    const id = this.subjectId();
+    if (id === null) return;
+
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || typeof selected !== 'string') return;
+
+    this.exporting.set(true);
+    this.exportProgress.set({ current: 0, total: 0 });
+    this.exportStatus.set(null);
+
+    let unlisten: UnlistenFn | undefined;
+    try {
+      unlisten = await listen<ExportSubjectProgress>('export_subject_progress', (e) => {
+        this.exportProgress.set(e.payload);
+      });
+
+      const result = await this.photos.exportSubjectPhotos(id, selected);
+
+      const parts = [`Copied ${result.copied} photo${result.copied === 1 ? '' : 's'}`];
+      if (result.skipped_missing > 0) {
+        parts.push(`${result.skipped_missing} missing`);
+      }
+      if (result.skipped_errors > 0) {
+        parts.push(`${result.skipped_errors} failed`);
+      }
+      this.exportStatus.set(parts.join(' · '));
+
+      try {
+        await openPath(result.dest_dir);
+      } catch (openErr) {
+        console.error('Failed to open export folder', openErr);
+        this.exportStatus.set(`${parts.join(' · ')} (could not open folder)`);
+      }
+    } catch (e) {
+      console.error('Export failed', e);
+      const msg = e instanceof Error ? e.message : String(e);
+      this.exportStatus.set(msg || 'Export failed');
+    } finally {
+      if (unlisten) unlisten();
+      this.exporting.set(false);
+      this.exportProgress.set(null);
+    }
   }
 }

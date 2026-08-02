@@ -129,7 +129,12 @@ impl FlatIndex {
         if idx_path.exists() {
             let path = idx_path.clone();
             match tokio::task::spawn_blocking(move || Self::load(&path)).await? {
-                Ok(index) => {
+                Ok(mut index) => {
+                    // Snapshot saves are amortized (not per-batch), so a crash
+                    // can leave the file missing recently written embeddings.
+                    // Reconcile against SQLite so those images stay searchable.
+                    let healed = index.absorb_missing_from_db(pool).await?;
+
                     let tomb = index.tombstone_count();
                     let total = index.ids.len();
                     if total > 0 && tomb * 10 > total {
@@ -139,6 +144,12 @@ impl FlatIndex {
                         let path2 = idx_path.clone();
                         tokio::task::spawn_blocking(move || snap.save(&path2)).await??;
                         return Ok(compacted);
+                    }
+                    if healed > 0 {
+                        info!("[vector-index] Healed {healed} entries missing from snapshot");
+                        let snap = index.snapshot();
+                        let path2 = idx_path.clone();
+                        tokio::task::spawn_blocking(move || snap.save(&path2)).await??;
                     }
                     info!("[vector-index] Loaded {} entries from disk", index.len());
                     return Ok(index);
@@ -167,6 +178,35 @@ impl FlatIndex {
 
         info!("[vector-index] Built index with {} entries", index.len());
         Ok(index)
+    }
+
+    /// Add every embedding present in SQLite but absent from this index.
+    /// Returns how many entries were added. Dim-mismatched blobs are skipped
+    /// with a warning rather than corrupting the index.
+    async fn absorb_missing_from_db(&mut self, pool: &sqlx::SqlitePool) -> anyhow::Result<usize> {
+        let known: std::collections::HashSet<i64> =
+            self.ids.iter().copied().filter(|&id| id != -1).collect();
+        let mut added = 0;
+        for (id, blob) in crate::search::repo::get_all_embeddings(pool).await? {
+            if known.contains(&id) {
+                continue;
+            }
+            match crate::search::math::bytes_to_f32_vec(&blob) {
+                Ok(vec) if vec.len() == self.dim => {
+                    self.add(id, &vec);
+                    added += 1;
+                }
+                Ok(vec) => {
+                    log::warn!(
+                        "[vector-index] skipping image {id}: embedding dim {} != index dim {}",
+                        vec.len(),
+                        self.dim
+                    );
+                }
+                Err(e) => log::warn!("[vector-index] skipping image {id}: bad embedding: {e}"),
+            }
+        }
+        Ok(added)
     }
 
     /// Returns a saveable snapshot used for serialization in spawn_blocking.
@@ -369,6 +409,59 @@ mod tests {
         std::fs::write(&tmp, b"BADMAGIC12345").unwrap();
         assert!(FlatIndex::load(&tmp).is_err());
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn load_or_rebuild_absorbs_db_embeddings_missing_from_snapshot() {
+        // With amortized snapshot saves, a crash can leave nebula.idx missing
+        // the most recent embeddings. Loading must reconcile against SQLite so
+        // those images stay searchable.
+        crate::db::ensure_sqlite_vec_registered();
+        let tmp = std::env::temp_dir().join(format!(
+            "nebula_heal_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let pool = crate::db::init_db(&tmp).await.unwrap();
+
+        sqlx::query("INSERT INTO folders (id, path, added_at) VALUES (1, 'p', 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let e1: Vec<u8> = [1.0f32, 0.0, 0.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let e2: Vec<u8> = [0.0f32, 1.0, 0.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        for (id, blob) in [(1i64, e1), (2, e2)] {
+            sqlx::query(
+                "INSERT INTO images (id, folder_id, path, file_hash, mtime, added_at, updated_at, embedding, semantic_analysis_done) \
+                 VALUES (?, 1, ?, 'h', 0, 0, 0, ?, 1)",
+            )
+            .bind(id)
+            .bind(format!("/p/{id}.jpg"))
+            .bind(blob)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Stale snapshot: only image 1 was saved before the "crash".
+        let mut stale = FlatIndex::new(3);
+        stale.add(1, &[1.0, 0.0, 0.0]);
+        stale.save(&tmp.join("nebula.idx")).unwrap();
+
+        let healed = FlatIndex::load_or_rebuild(&tmp, &pool).await.unwrap();
+        assert_eq!(healed.len(), 2, "image 2 must be absorbed from SQLite");
+        let results = healed.search(&[0.0, 1.0, 0.0], 1);
+        assert_eq!(results[0].0, 2);
     }
 
     #[test]

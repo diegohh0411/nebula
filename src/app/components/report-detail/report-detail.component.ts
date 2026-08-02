@@ -1,8 +1,8 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink, Router } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { PhotoService } from '../../services/photo.service';
-import { SavedReport, CoverageReport, SubjectCoverage, SubjectMatch } from '../../models/models';
+import { SavedReport, CoverageReport, ProcessingProgress, SubjectCoverage, SubjectMatch, Tag } from '../../models/models';
 import { SubjectPersonCardComponent } from '../subject-person-card/subject-person-card.component';
 import { LucideAngularModule } from 'lucide-angular';
 
@@ -70,10 +70,71 @@ export class ReportDetailComponent implements OnInit {
   protected report = signal<SavedReport | null>(null);
   protected coverage = signal<CoverageReport | null>(null);
   protected error = signal<string | null>(null);
-  
+
   protected missingMatches = signal<ReportMatch[]>([]);
   protected presentMatches = signal<ReportMatch[]>([]);
   protected othersMatches = signal<ReportMatch[]>([]);
+
+  protected isPrioritizing = signal(false);
+  protected prioritizedCount = signal<number | null>(null);
+
+  protected progress = signal<ProcessingProgress | null>(null);
+  protected progressPercent = computed(() => {
+    const p = this.progress();
+    return p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+  });
+  private progressFetchInFlight = false;
+
+  constructor() {
+    // Every pipeline_stats tick re-counts the report's processed images, so
+    // the bar advances live while the queue drains and freezes when the
+    // pipeline goes idle (the stats signal stops changing).
+    effect(() => {
+      this.photos.pipelineStats();
+      const rep = this.report();
+      if (rep) void this.refreshProgress(rep.id);
+    });
+  }
+
+  private async refreshProgress(reportId: number) {
+    if (this.progressFetchInFlight) return;
+    this.progressFetchInFlight = true;
+    try {
+      this.progress.set(await this.photos.getReportProcessingProgress(reportId));
+    } catch (err) {
+      console.error('Failed to load report processing progress:', err);
+    } finally {
+      this.progressFetchInFlight = false;
+    }
+  }
+
+  protected getFolderNames(): string {
+    const rep = this.report();
+    if (!rep) return '';
+    const folders = this.photos.folders();
+    return rep.folder_ids
+      .map(id => {
+        const folder = folders.find(f => f.id === id);
+        if (!folder) return 'Unknown Folder';
+        return folder.path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? folder.path;
+      })
+      .join(', ');
+  }
+
+  protected async prioritizeProcessing() {
+    const rep = this.report();
+    if (!rep || this.isPrioritizing()) return;
+    this.isPrioritizing.set(true);
+    try {
+      const count = await this.photos.prioritizeReportProcessing(rep.id);
+      this.prioritizedCount.set(count);
+    } catch (err) {
+      console.error('Failed to prioritize report processing:', err);
+      alert('Failed to prioritize processing');
+    } finally {
+      this.isPrioritizing.set(false);
+    }
+  }
 
   async ngOnInit() {
     try {
@@ -93,19 +154,37 @@ export class ReportDetailComponent implements OnInit {
       }
       this.report.set(rep);
 
-      const cov = await this.photos.getFolderCoverage(rep.folder_id, rep.tag_ids);
+      const cov = await this.photos.getFolderCoverage(rep.folder_ids, rep.tag_ids);
       this.coverage.set(cov);
 
-      this.missingMatches.set(this.mapToMatches(cov.missing_targets));
-      this.presentMatches.set(this.mapToMatches(cov.present_targets));
-      this.othersMatches.set(this.mapToMatches(cov.others_found));
+      // The cards seed their tag chips from match.tags, so hydrate every
+      // subject's tags up front (a click-through was the only place they
+      // loaded before).
+      const subjectIds = [
+        ...new Set(
+          [...cov.missing_targets, ...cov.present_targets, ...cov.others_found].map(
+            s => s.subject_id,
+          ),
+        ),
+      ];
+      const tagLists = await Promise.all(
+        subjectIds.map(id => this.photos.getSubjectTags(id).catch(() => [] as Tag[])),
+      );
+      const tagsBySubject = new Map(subjectIds.map((id, i) => [id, tagLists[i]]));
+
+      this.missingMatches.set(this.mapToMatches(cov.missing_targets, tagsBySubject));
+      this.presentMatches.set(this.mapToMatches(cov.present_targets, tagsBySubject));
+      this.othersMatches.set(this.mapToMatches(cov.others_found, tagsBySubject));
     } catch (err: any) {
       console.error('Failed to load report detail:', err);
       this.error.set(err.message || 'An error occurred loading the report');
     }
   }
 
-  private mapToMatches(covList: SubjectCoverage[]): ReportMatch[] {
+  private mapToMatches(
+    covList: SubjectCoverage[],
+    tagsBySubject: Map<number, Tag[]>,
+  ): ReportMatch[] {
     const allSubjects = this.photos.subjects();
     return covList.map(item => {
       let subject = allSubjects.find(s => s.id === item.subject_id);
@@ -113,7 +192,10 @@ export class ReportDetailComponent implements OnInit {
         // Fallback for missing subjects not loaded in cache
         subject = { id: item.subject_id, name: item.name, thumbnail_face_id: null, type: 'person', added_at: 0 };
       }
-      return { match: { subject, tags: [] }, frequency: item.frequency };
+      return {
+        match: { subject, tags: tagsBySubject.get(item.subject_id) ?? [] },
+        frequency: item.frequency,
+      };
     });
   }
 }

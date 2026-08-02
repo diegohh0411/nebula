@@ -26,17 +26,35 @@ pub async fn get_queue_batch(
     pool: &SqlitePool,
     pipeline: &str,
     limit: i64,
+    exclude_queue_ids: &[i64],
 ) -> Result<Vec<(i64, i64, i32)>> {
     let now = chrono::Utc::now().timestamp();
-    let rows = sqlx::query(
+    // `exclude_queue_ids` lets the prefetcher pull the batch after the one
+    // still in flight: in-flight entries stay in the table until their results
+    // are persisted, so without the exclusion a lookahead pull would return
+    // the same rows again.
+    let exclusion = if exclude_queue_ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " AND id NOT IN ({})",
+            exclude_queue_ids
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    let q = format!(
         "SELECT id, image_id, attempts FROM embedding_queue
-         WHERE pipeline = ? AND scheduled_at <= ? ORDER BY scheduled_at ASC LIMIT ?",
-    )
-    .bind(pipeline)
-    .bind(now)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+         WHERE pipeline = ? AND scheduled_at <= ?{exclusion}
+         ORDER BY priority DESC, scheduled_at ASC LIMIT ?"
+    );
+    let mut query = sqlx::query(&q).bind(pipeline).bind(now);
+    for id in exclude_queue_ids {
+        query = query.bind(id);
+    }
+    let rows = query.bind(limit).fetch_all(pool).await?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -47,6 +65,27 @@ pub async fn get_queue_batch(
             )
         })
         .collect())
+}
+
+/// Move every queue entry whose image lives in one of the given folders to the
+/// front of the queue. Uses (current max priority + 1) so the most recent
+/// prioritization outranks earlier ones. Returns the number of entries bumped.
+pub async fn prioritize_folders(pool: &SqlitePool, folder_ids: &[i64]) -> Result<u64> {
+    if folder_ids.is_empty() {
+        return Ok(0);
+    }
+    let q = format!(
+        "UPDATE embedding_queue
+         SET priority = (SELECT COALESCE(MAX(priority), 0) + 1 FROM embedding_queue)
+         WHERE image_id IN (SELECT id FROM images WHERE folder_id IN ({}))",
+        folder_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+    );
+    let mut query = sqlx::query(&q);
+    for id in folder_ids {
+        query = query.bind(id);
+    }
+    let result = query.execute(pool).await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn mark_semantic_analysis_done(
@@ -204,13 +243,22 @@ mod tests {
                  pipeline     TEXT NOT NULL DEFAULT 'semantic',
                  attempts     INTEGER NOT NULL DEFAULT 0,
                  last_error   TEXT,
-                 scheduled_at INTEGER NOT NULL
+                 scheduled_at INTEGER NOT NULL,
+                 priority     INTEGER NOT NULL DEFAULT 0
              )",
         )
         .execute(&pool)
         .await
         .unwrap();
         pool
+    }
+
+    /// Adds the minimal images/folders shape `prioritize_folders` joins against.
+    async fn add_images_table(pool: &SqlitePool) {
+        sqlx::query("CREATE TABLE images (id INTEGER PRIMARY KEY, folder_id INTEGER NOT NULL)")
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     async fn insert_entry(pool: &SqlitePool, attempts: i32) -> i64 {
@@ -322,6 +370,100 @@ mod tests {
         assert_eq!(outcome, FailureOutcome::DeadLettered);
         // Entry removed so it stops being retried and blocking the queue head.
         assert_eq!(row_count(&pool).await, 0);
+    }
+
+    #[tokio::test]
+    async fn get_queue_batch_orders_by_priority_then_scheduled() {
+        let pool = queue_pool().await;
+        // Older entry at default priority, newer entry prioritized.
+        sqlx::query(
+            "INSERT INTO embedding_queue (image_id, scheduled_at, priority) VALUES \
+             (1, 0, 0), (2, 5, 1), (3, 1, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let batch = get_queue_batch(&pool, "semantic", 10, &[]).await.unwrap();
+        let image_ids: Vec<i64> = batch.iter().map(|(_, id, _)| *id).collect();
+        assert_eq!(
+            image_ids,
+            vec![2, 1, 3],
+            "prioritized entry must come first, then scheduled_at order"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_queue_batch_excludes_given_queue_ids() {
+        let pool = queue_pool().await;
+        sqlx::query("INSERT INTO embedding_queue (image_id, scheduled_at) VALUES (1, 0), (2, 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let all = get_queue_batch(&pool, "semantic", 10, &[]).await.unwrap();
+        assert_eq!(all.len(), 2);
+        let in_flight = all[0].0;
+
+        // Prefetch pulls the next batch while the current one is still in the
+        // table; excluding in-flight queue ids must hide only those rows.
+        let rest = get_queue_batch(&pool, "semantic", 10, &[in_flight])
+            .await
+            .unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].1, 2);
+    }
+
+    #[tokio::test]
+    async fn prioritize_folders_bumps_matching_images_to_queue_front() {
+        let pool = queue_pool().await;
+        add_images_table(&pool).await;
+        sqlx::query("INSERT INTO images (id, folder_id) VALUES (1, 10), (2, 20), (3, 10)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Image 2 (folder 20) is oldest and would normally run first.
+        sqlx::query(
+            "INSERT INTO embedding_queue (image_id, scheduled_at) VALUES (2, 0), (1, 1), (3, 2)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bumped = prioritize_folders(&pool, &[10]).await.unwrap();
+        assert_eq!(bumped, 2, "both folder-10 queue entries must be bumped");
+
+        let batch = get_queue_batch(&pool, "semantic", 10, &[]).await.unwrap();
+        let image_ids: Vec<i64> = batch.iter().map(|(_, id, _)| *id).collect();
+        assert_eq!(
+            image_ids,
+            vec![1, 3, 2],
+            "folder-10 images must jump ahead of the older folder-20 entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn prioritize_folders_latest_call_wins() {
+        let pool = queue_pool().await;
+        add_images_table(&pool).await;
+        sqlx::query("INSERT INTO images (id, folder_id) VALUES (1, 10), (2, 20)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO embedding_queue (image_id, scheduled_at) VALUES (1, 0), (2, 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        prioritize_folders(&pool, &[10]).await.unwrap();
+        prioritize_folders(&pool, &[20]).await.unwrap();
+
+        let batch = get_queue_batch(&pool, "semantic", 10, &[]).await.unwrap();
+        let image_ids: Vec<i64> = batch.iter().map(|(_, id, _)| *id).collect();
+        assert_eq!(
+            image_ids,
+            vec![2, 1],
+            "the most recent prioritization must outrank the earlier one"
+        );
     }
 
     #[tokio::test]
