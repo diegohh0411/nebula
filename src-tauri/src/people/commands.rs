@@ -286,3 +286,51 @@ pub async fn search_subjects(
         .await
         .map_err(map_err)
 }
+
+#[tauri::command]
+pub async fn export_subject_photos(
+    subject_id: i64,
+    dest_dir: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::models::ExportSubjectResult, String> {
+    use crate::library::export::{copy_paths_to_dir, CopyFilesResult};
+    use crate::models::ExportSubjectProgress;
+    use std::path::PathBuf;
+    use tauri::Emitter;
+
+    // Validate subject exists (same message as get_subject_detail).
+    let _detail = repo::get_subject_detail_with_counts(&state.pool, subject_id)
+        .await
+        .map_err(map_err)?
+        .ok_or_else(|| "Subject not found".to_string())?;
+
+    let images = repo::list_images_for_subject(&state.pool, subject_id)
+        .await
+        .map_err(map_err)?;
+
+    let sources: Vec<PathBuf> = images
+        .into_iter()
+        .map(|img| PathBuf::from(img.path))
+        .collect();
+    let dest = PathBuf::from(&dest_dir);
+
+    let CopyFilesResult {
+        copied,
+        skipped_missing,
+        skipped_errors,
+    } = copy_paths_to_dir(&sources, &dest, |current, total| {
+        let _ = app.emit(
+            "export_subject_progress",
+            ExportSubjectProgress { current, total },
+        );
+    })
+    .await?;
+
+    Ok(crate::models::ExportSubjectResult {
+        dest_dir,
+        copied,
+        skipped_missing,
+        skipped_errors,
+    })
+}
